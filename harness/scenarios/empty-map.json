@@ -1,0 +1,5 @@
+{
+  "name": "empty-map-smoke",
+  "map": { "id": "test", "name": "Test", "cells": [{ "q": 0, "r": 0 }] },
+  "notes": "Use with vitest when gameplay scenarios are implemented"
+}

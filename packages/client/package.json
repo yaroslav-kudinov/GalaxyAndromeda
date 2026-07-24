@@ -1,0 +1,25 @@
+{
+  "name": "@galaxy/client",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "nuxt dev --port 3000",
+    "build": "nuxt build",
+    "preview": "nuxt preview",
+    "typecheck": "nuxi typecheck",
+    "test": "echo \"no tests yet\""
+  },
+  "dependencies": {
+    "@galaxy/rules": "workspace:*",
+    "nuxt": "^3.15.4",
+    "@pinia/nuxt": "^0.10.1",
+    "pinia": "^3.0.1",
+    "vue": "^3.5.13"
+  },
+  "devDependencies": {
+    "@nuxt/devtools": "^2.1.0",
+    "typescript": "^5.7.3",
+    "vue-tsc": "^2.2.0"
+  }
+}

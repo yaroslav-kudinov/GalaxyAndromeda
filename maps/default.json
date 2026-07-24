@@ -1,0 +1,12 @@
+{
+  "id": "default",
+  "name": "Default (TTS stub)",
+  "cells": [
+    { "q": 0, "r": 0, "isPowerCenter": true, "resourceTokens": [{ "type": "credits", "value": 3 }] },
+    { "q": 1, "r": 0, "resourceTokens": [{ "type": "production", "value": 2 }] },
+    { "q": 0, "r": 1 },
+    { "q": -1, "r": 1 },
+    { "q": -1, "r": 0 },
+    { "q": 1, "r": -1 }
+  ]
+}

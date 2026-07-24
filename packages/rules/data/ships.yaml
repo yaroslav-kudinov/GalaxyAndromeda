@@ -1,0 +1,53 @@
+destroyer:
+  move: 3
+  combatDice: 1
+  destroyCost: 3
+  productionRegionSize: [3, 4]
+  cost: { credits: 2, production: 2 }
+
+cruiser:
+  move: 2
+  combatDice: 2
+  supportDice: 1
+  fireRange: 1
+  destroyCost: 6
+  productionRegionSize: [5, 6]
+  cost: { credits: 5, production: 3 }
+
+battleship:
+  move: 1
+  combatDice: 3
+  supportDice: 2
+  fireRange: 2
+  destroyCost: 9
+  productionRegionSize: [7, 8]
+  cost: { credits: 7, production: 6 }
+
+shield:
+  move: 2
+  shieldAbsorb: { self: 4, neighbor: 2 }
+  destroyCost: 4
+  productionRegionSize: [5, 6]
+  cost: { credits: 3, production: 4 }
+
+hyper:
+  move: 1
+  supportDice: 3
+  fireRange: [2, 3]
+  destroyCost: 4
+  productionRegionSize: [9, 999]
+  cost: { credits: 12, production: 12 }
+
+supply:
+  move: 3
+  destroyCost: 4
+  productionRegionSize: [1, 2]
+  cost: { credits: 3, production: 1 }
+
+destructionPriority:
+  - destroyer
+  - hyper
+  - shield
+  - cruiser
+  - battleship
+  - supply

@@ -1,0 +1,18 @@
+{
+  "name": "galaxy-andromeda-tabletop",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "pnpm -r --parallel --filter @galaxy/client --filter @galaxy/server run dev",
+    "build": "pnpm -r run build",
+    "test": "pnpm -r run test",
+    "typecheck": "pnpm -r run typecheck",
+    "smoke": "tsx harness/agent-smoke/run-smoke.ts"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.2"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
