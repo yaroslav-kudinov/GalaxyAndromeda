@@ -51,23 +51,28 @@ export function getGhostSlots(map: MapDefinition): HexCoord[] {
   return ghosts
 }
 
-export function validateMapDefinition(map: MapDefinition): string[] {
-  const errors: string[] = []
-  if (!map.id?.trim()) errors.push('Map id is required')
-  if (!map.name?.trim()) errors.push('Map name is required')
-  const keys = new Set<string>()
-  for (const cell of map.cells) {
-    const key = hexKey(cell.q, cell.r)
-    if (keys.has(key)) errors.push(`Duplicate cell ${key}`)
-    keys.add(key)
-    for (const token of cell.resourceTokens ?? []) {
-      if (token.value < 1 || token.value > 9) {
-        errors.push(`Invalid token value at ${key}`)
-      }
-    }
-  }
-  return errors
-}
+export { validateMapDefinition, normalizeMapDefinition, getCellResourceToken, setCellResourceToken, canAddShipToCell, countCellShips, extractCellContent, applyCellContent } from './map-editor.js'
+export type { MapCellContent } from './map-editor.js'
+export {
+  DEFAULT_SYMMETRY_SETTINGS,
+  SYMMETRY_AXIS_LABELS,
+  SYMMETRY_PLAYER_OPTIONS,
+  getSymmetryOrbit,
+  reflectHex,
+  remapCellContent,
+  remapPlayerSlot,
+  rotateHex,
+  symmetryStepIndex,
+} from './hex-symmetry.js'
+export type { SymmetryAxisKind, SymmetryPlayerCount, SymmetrySettings } from './hex-symmetry.js'
+export {
+  addCellOrbit,
+  expandMapStructure,
+  orbitKeysForCell,
+  removeCellOrbit,
+  syncCellOrbitContent,
+} from './map-symmetry.js'
+export { MAX_SHIPS_PER_CELL, MAX_SHIPS_PER_CELL_PER_PLAYER, PLAYER_COLORS, PLAYER_LABELS, SHIP_ABBREV, SHIP_LABELS, SHIP_TYPES } from './constants.js'
 
 export function createEmptyMap(id = 'new', name = 'New Map'): MapDefinition {
   return { id, name, cells: [{ q: 0, r: 0 }] }

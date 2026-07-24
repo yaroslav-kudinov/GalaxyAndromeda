@@ -132,19 +132,40 @@ export function buildSpatialSummary(state: GameState): SpatialSummary {
 }
 
 export function renderAsciiMapFromDefinition(map: MapDefinition): string {
+  const usedPlayers = new Set<number>()
+  for (const c of map.cells) {
+    if (c.startPlayer != null) usedPlayers.add(c.startPlayer)
+    for (const s of c.startingShips ?? []) usedPlayers.add(s.player)
+  }
+  const slotCount = Math.max(usedPlayers.size, 1)
+  const players = Array.from({ length: slotCount }, (_, i) => ({
+    id: `player-${i + 1}`,
+    name: ['Blue', 'Green', 'Red', 'Purple', 'Amber', 'Cyan'][i] ?? `P${i + 1}`,
+    color: '#888',
+    isAi: false,
+    eliminated: false,
+  }))
+
   const state: GameState = {
     mapId: map.id,
     phase: 'planning',
     turnNumber: 0,
     activePlayerId: null,
-    players: [],
-    cells: map.cells.map((c) => ({
-      coord: { q: c.q, r: c.r },
-      isPowerCenter: c.isPowerCenter ?? false,
-      controlOwnerId: c.startPlayer != null ? `player-${c.startPlayer}` : null,
-      resourceTokens: c.resourceTokens ?? [],
-      ships: [],
-    })),
+    players,
+    cells: map.cells.map((c) => {
+      const token = c.resourceToken ?? c.resourceTokens?.[0]
+      return {
+        coord: { q: c.q, r: c.r },
+        isPowerCenter: c.isPowerCenter ?? false,
+        controlOwnerId: c.startPlayer != null ? `player-${c.startPlayer}` : null,
+        resourceTokens: token ? [{ ...token, faceUp: token.faceUp ?? true }] : [],
+        ships: (c.startingShips ?? []).map((s, idx) => ({
+          id: `start-${c.q}-${c.r}-${idx}`,
+          type: s.type,
+          ownerId: `player-${s.player}`,
+        })),
+      }
+    }),
     eventLog: [],
   }
   return renderAsciiMap(state)

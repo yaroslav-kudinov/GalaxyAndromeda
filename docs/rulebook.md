@@ -39,7 +39,16 @@ Round: priority skip → dice → winner → destruction by priority tiers.
 
 ## Production
 
-Region size gates ship types. Tokens flipped after use.
+Region size sets **minimum** cell count per ship class (see `ships.yaml` → `productionRegionSize[0]`; larger regions are fine). Face-up tokens in the marker's controlled region pay for builds; spent tokens flip face-down (server auto-allocates).
+
+When the region has **both** face-up and face-down **production** tokens, resolving the marker is either **Recharge** (flip face-down production tokens face-up) **or** **Build** (batch ship production) — not both in the same marker turn.
+
+Batch build: choose how many ships of each class, place each ship on any hex in the region (capacity limits apply), one marker per turn.
+
+### Planning markers
+
+- **Action markers:** up to 6 per player, 1 per hex; used in Actions phase.
+- **Production markers:** **1 per controlled region** (place on any hex of that region); marks where you will build in Production phase. Region size determines ship class limits.
 
 ## Turn order
 

@@ -12,12 +12,25 @@ export interface ResourceTokenDef {
   faceUp?: boolean
 }
 
+/** Starting ship on map setup (editor / MapDefinition) */
+export interface StartingShipDef {
+  type: ShipType
+  /** Player slot 1–6 */
+  player: number
+}
+
 export interface MapCellDefinition {
   q: number
   r: number
   isPowerCenter?: boolean
+  /** One token per cell: credits OR production, value 1–9 */
+  resourceToken?: ResourceTokenDef
+  /** @deprecated use resourceToken — normalized on load */
   resourceTokens?: ResourceTokenDef[]
+  /** Player slot 1–6 controls this cell at game start */
   startPlayer?: number | null
+  /** Starting ships on this cell (max 4 per player, 8 total) */
+  startingShips?: StartingShipDef[]
 }
 
 export interface MapDefinition {
