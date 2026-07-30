@@ -8,6 +8,7 @@ import {
   type GameSnapshot,
   type ProductionMarker,
 } from './save-file.js'
+import { MIN_VALID_PRODUCTION_REGION_SIZE } from './regions.js'
 import type { HexCoord, MapDefinition, Phase } from './types.js'
 import { hexKey } from './types.js'
 
@@ -17,11 +18,17 @@ export const ACTION_MARKER_ALREADY_RESOLVED_MSG =
 export const ACTION_MARKER_REMOVE_BLOCKED_MSG =
   'После исполнения маркера действия в этом ходу нельзя снимать другие маркеры'
 
+export const ACTION_MARKER_MUST_RESOLVE_BEFORE_ADVANCE_MSG =
+  'Используйте маркер действия или снимите его с карты'
+
 export const PRODUCTION_MARKER_ALREADY_RESOLVED_MSG =
   'За этот ход в фазе «Производство» можно построить только по одному маркеру'
 
 export const PRODUCTION_MARKER_REMOVE_BLOCKED_MSG =
   'После постройки по маркеру в этом ходу нельзя снимать другие маркеры производства'
+
+export const PRODUCTION_MARKER_MUST_RESOLVE_BEFORE_ADVANCE_MSG =
+  'Используйте маркер производства, перезарядите ресурсы или снимите его с карты'
 
 export function hasResolvedActionMarkerThisTurn(game: GameSnapshot): boolean {
   return !!game.actionMarkerResolvedThisTurn
@@ -39,6 +46,26 @@ export function canRemoveActionMarkerThisTurn(game: GameSnapshot, ownerId: strin
   if (game.activePlayerId !== ownerId) return false
   if (game.actionMarkerResolvedThisTurn) return false
   return true
+}
+
+export function countActionMarkersForPlayer(game: GameSnapshot, ownerId: string): number {
+  return game.actionMarkers.filter((m) => m.ownerId === ownerId).length
+}
+
+/** Активный игрок в «Действиях» с маркерами, но без исполнения/снятия — не может передать ход. */
+export function mustResolveActionMarkerBeforeAdvance(game: GameSnapshot, ownerId: string): boolean {
+  if (game.phase !== 'actions') return false
+  if (game.activePlayerId !== ownerId) return false
+  if (countActionMarkersForPlayer(game, ownerId) === 0) return false
+  return !game.actionMarkerResolvedThisTurn
+}
+
+export function validateActionMarkerBeforeAdvance(game: GameSnapshot): string[] {
+  if (!game.activePlayerId) return []
+  if (mustResolveActionMarkerBeforeAdvance(game, game.activePlayerId)) {
+    return [ACTION_MARKER_MUST_RESOLVE_BEFORE_ADVANCE_MSG]
+  }
+  return []
 }
 
 export function markActionMarkerResolvedThisTurn(game: GameSnapshot): void {
@@ -77,6 +104,25 @@ export function canRemoveProductionMarkerThisTurn(game: GameSnapshot, ownerId: s
   return true
 }
 
+/** Активный игрок в «Производстве» с маркерами обязан исполнить или снять один из них. */
+export function mustResolveProductionMarkerBeforeAdvance(
+  game: GameSnapshot,
+  ownerId: string,
+): boolean {
+  if (game.phase !== 'production') return false
+  if (game.activePlayerId !== ownerId) return false
+  if (countProductionMarkersForPlayer(game, ownerId) === 0) return false
+  return !game.productionMarkerResolvedThisTurn
+}
+
+export function validateProductionMarkerBeforeAdvance(game: GameSnapshot): string[] {
+  if (!game.activePlayerId) return []
+  if (mustResolveProductionMarkerBeforeAdvance(game, game.activePlayerId)) {
+    return [PRODUCTION_MARKER_MUST_RESOLVE_BEFORE_ADVANCE_MSG]
+  }
+  return []
+}
+
 export function markProductionMarkerResolvedThisTurn(game: GameSnapshot): void {
   game.productionMarkerResolvedThisTurn = true
 }
@@ -109,8 +155,8 @@ export function addActionMarker(
   ownerId: string,
   coord: HexCoord,
 ): string[] {
-  if (game.phase !== 'planning' && game.phase !== 'actions') {
-    return ['Маркеры действий только в фазах планирования и действий']
+  if (game.phase !== 'planning') {
+    return ['Маркеры действий ставятся только в фазе планирования']
   }
   if (game.activePlayerId !== ownerId) {
     return ['Сейчас ход другого игрока']
@@ -119,9 +165,6 @@ export function addActionMarker(
   const cell = cellAt(game, coord)
   const key = hexKey(coord.q, coord.r)
   if (!cell) return [`Клетка ${key} не найдена`]
-  if (cell.controlOwnerId !== ownerId) {
-    return ['Маркер можно ставить только на своей клетке']
-  }
   if (!cell.ships.some((s) => s.ownerId === ownerId)) {
     return ['Маркер действия ставится только на клетку с вашим кораблём']
   }
@@ -137,7 +180,7 @@ export function addActionMarker(
     id,
     ownerId,
     coord: { q: coord.q, r: coord.r },
-    placedInPhase: game.phase === 'actions' ? 'actions' : 'planning',
+    placedInPhase: 'planning',
   }
   game.actionMarkers.push(marker)
   cell.actionMarkerId = id
@@ -165,8 +208,8 @@ export function addProductionMarker(
   coord: HexCoord,
   map: MapDefinition,
 ): string[] {
-  if (game.phase !== 'planning' && game.phase !== 'production') {
-    return ['Маркеры производства — в планировании и фазе производства']
+  if (game.phase !== 'planning') {
+    return ['Маркеры производства ставятся только в фазе планирования']
   }
   if (game.activePlayerId !== ownerId) {
     return ['Сейчас ход другого игрока']
@@ -182,11 +225,18 @@ export function addProductionMarker(
 
   const state = gameStateFromSnapshot(game, map.id)
   const regionId = resolveRegionIdForCell(state, coord, ownerId)
-  if (!regionId) return ['Клетка не входит в ваш регион']
+  if (!regionId) {
+    return [
+      `Маркер производства ставится только в контролируемом регионе (от ${MIN_VALID_PRODUCTION_REGION_SIZE} клетки)`,
+    ]
+  }
 
-  const regionTaken = game.productionMarkers.some(
-    (m) => m.ownerId === ownerId && m.targetRegionId === regionId,
-  )
+  const regionTaken = game.productionMarkers.some((m) => {
+    if (m.ownerId !== ownerId) return false
+    if (m.targetRegionId === regionId) return true
+    const existingRegionId = resolveRegionIdForCell(state, m.coord, ownerId)
+    return existingRegionId === regionId
+  })
   if (regionTaken) {
     return ['В этом регионе уже стоит маркер производства']
   }
@@ -237,19 +287,19 @@ export function toggleMarkerAtCell(
   if (!cell) return ['Клетка не найдена']
 
   if (kind === 'action') {
-    if (game.phase !== 'planning' && game.phase !== 'actions') {
-      return ['Маркеры действий — в планировании и действиях']
-    }
     if (cell.actionMarkerId) {
+      if (game.phase !== 'planning' && game.phase !== 'actions') {
+        return ['Маркеры действий снимаются в планировании и фазе действий']
+      }
       return removeActionMarker(game, cell.actionMarkerId, ownerId)
     }
     return addActionMarker(game, ownerId, coord)
   }
 
-  if (game.phase !== 'planning' && game.phase !== 'production') {
-    return ['Маркеры производства — в планировании и фазе производства']
-  }
   if (cell.productionMarkerId) {
+    if (game.phase !== 'planning' && game.phase !== 'production') {
+      return ['Маркеры производства снимаются в планировании и фазе производства']
+    }
     return removeProductionMarker(game, cell.productionMarkerId, ownerId)
   }
   return addProductionMarker(game, ownerId, coord, map)
@@ -260,24 +310,62 @@ export function togglePhaseMarkerAtCell(
   game: GameSnapshot,
   ownerId: string,
   coord: HexCoord,
-  map: MapDefinition,
+  _map: MapDefinition,
 ): string[] {
   const cell = cellAt(game, coord)
   if (!cell) return ['Клетка не найдена']
 
-  if (game.phase === 'planning' || game.phase === 'actions') {
-    if (cell.actionMarkerId) {
-      return removeActionMarker(game, cell.actionMarkerId, ownerId)
+  if (cell.actionMarkerId) {
+    if (game.phase !== 'planning' && game.phase !== 'actions') {
+      return ['Маркеры действий снимаются в планировании и фазе действий']
     }
-    return addActionMarker(game, ownerId, coord)
+    return removeActionMarker(game, cell.actionMarkerId, ownerId)
   }
 
-  if (game.phase === 'production') {
-    if (cell.productionMarkerId) {
-      return removeProductionMarker(game, cell.productionMarkerId, ownerId)
+  if (cell.productionMarkerId) {
+    if (game.phase !== 'planning' && game.phase !== 'production') {
+      return ['Маркеры производства снимаются в планировании и фазе производства']
     }
-    return addProductionMarker(game, ownerId, coord, map)
+    return removeProductionMarker(game, cell.productionMarkerId, ownerId)
   }
 
-  return ['В этой фазе маркеры не ставятся']
+  if (game.phase !== 'planning') {
+    return ['Маркеры ставятся только в фазе планирования']
+  }
+
+  return addActionMarker(game, ownerId, coord)
+}
+
+export function hasUnplacedActionMarkerCapacity(game: GameSnapshot, ownerId: string): boolean {
+  const count = game.actionMarkers.filter((m) => m.ownerId === ownerId).length
+  if (count >= MAX_ACTION_MARKERS_PER_PLAYER) return false
+  return game.cells.some((cell) => {
+    if (!cell.ships.some((s) => s.ownerId === ownerId)) return false
+    if (!cell.actionMarkerId) return true
+    const marker = game.actionMarkers.find((m) => m.id === cell.actionMarkerId)
+    return marker?.ownerId !== ownerId
+  })
+}
+
+export function hasUnplacedProductionMarkerCapacity(
+  game: GameSnapshot,
+  map: MapDefinition,
+  ownerId: string,
+): boolean {
+  const state = gameStateFromSnapshot(game, map.id)
+  const limit = maxProductionMarkersForPlayer(state, ownerId)
+  const count = countProductionMarkersForPlayer(game, ownerId)
+  return count < limit
+}
+
+export function shouldConfirmPlanningPhaseAdvance(
+  game: GameSnapshot,
+  map: MapDefinition,
+  ownerId: string,
+): boolean {
+  if (game.phase !== 'planning' || game.activePlayerId !== ownerId) return false
+  return (
+    hasUnplacedActionMarkerCapacity(game, ownerId)
+    || hasUnplacedProductionMarkerCapacity(game, map, ownerId)
+  )
 }

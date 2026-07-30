@@ -45,8 +45,11 @@ const showTokenChoice = computed(() =>
     : false,
 )
 
-const canRechargeProduction = computed(
-  () => (regionSummary.value?.faceDownProductionCount ?? 0) > 0,
+const canRechargeResources = computed(
+  () =>
+    (regionSummary.value?.faceDownCreditsCount ?? 0)
+    + (regionSummary.value?.faceDownProductionCount ?? 0)
+    > 0,
 )
 
 const shipOptions = computed(() =>
@@ -58,7 +61,7 @@ const canBuildAny = computed(() =>
 )
 
 const showRechargeOnly = computed(
-  () => canRechargeProduction.value && !canBuildAny.value && !showTokenChoice.value,
+  () => canRechargeResources.value && !canBuildAny.value && !showTokenChoice.value,
 )
 
 const placementCapacity = computed(() => {
@@ -121,6 +124,8 @@ function setCount(type: ShipType, value: number) {
 
 function canAddShip(opt: BuildableShipOption): boolean {
   if (!marker.value || !regionSummary.value || !resourceBalance.value) return false
+  if (opt.disabledReason && getCount(opt.type) < 1) return false
+  if (getCount(opt.type) >= opt.maxCount) return false
 
   const region = getRegionForMarker(props.snapshot, props.map.id, marker.value)
   if (!region || !canBuildShipInRegionSize(opt.type, region.size)) return false
@@ -208,11 +213,12 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
       <div v-if="step === 0 && showTokenChoice" class="modal-body">
         <p class="lead">
           В регионе есть и лицевые, и перевёрнутые фишки производства. За этот маркер можно
-          либо перезарядить производство, либо построить корабли — не оба сразу.
+          либо перезарядить фишки ресурсов в цепочке снабжения, либо построить корабли — не оба
+          сразу.
         </p>
         <div class="choice-actions">
           <button type="button" class="btn-primary" @click="onRecharge">
-            Перезарядить (перевёрнутые фишки)
+            Перезарядить фишки
           </button>
           <button type="button" class="btn-secondary" @click="chooseBuild">
             Построить корабли
@@ -223,11 +229,11 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
       <div v-else-if="step === 0 && showRechargeOnly" class="modal-body">
         <p class="lead">
           Лицевых фишек производства не осталось — построить корабли нельзя. Можно перезарядить
-          перевёрнутые фишки производства в регионе.
+          перевёрнутые фишки ресурсов в цепочке снабжения.
         </p>
         <div class="choice-actions">
           <button type="button" class="btn-primary" @click="onRecharge">
-            Перезарядить производство
+            Перезарядить фишки
           </button>
         </div>
       </div>
@@ -235,7 +241,9 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
       <div v-else-if="step === 1" class="modal-body">
         <div v-if="resourceBalance" class="resource-bar">
           <div class="resource-row">
-            <span class="resource-chip resource-chip--credits">Кредиты</span>
+            <span class="resource-chip resource-chip--credits">
+              <span class="resource-symbol" aria-hidden="true">₡</span> Кредиты
+            </span>
             <span class="resource-values">
               <span class="resource-total">{{ resourceBalance.creditsTotal }}</span>
               <span class="resource-arrow">→</span>
@@ -251,7 +259,9 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
             </span>
           </div>
           <div class="resource-row">
-            <span class="resource-chip resource-chip--production">Производство</span>
+            <span class="resource-chip resource-chip--production">
+              <span class="resource-symbol" aria-hidden="true">⚙</span> Производство
+            </span>
             <span class="resource-values">
               <span class="resource-total">{{ resourceBalance.productionTotal }}</span>
               <span class="resource-arrow">→</span>
@@ -299,7 +309,12 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
               <span class="ship-meta">
                 <strong>{{ SHIP_LABELS[opt.type] }}</strong>
                 <span class="ship-range">
-                  {{ opt.cost.credits }} кр. · {{ opt.cost.production }} пр.
+                  <span class="cost-credits">₡ {{ opt.cost.credits }}</span>
+                  · <span class="cost-production">⚙ {{ opt.cost.production }}</span>
+                  · флот {{ opt.fleetCount }}/{{ opt.fleetMax }}
+                  <template v-if="opt.fleetRemaining > 0">
+                    (осталось {{ opt.fleetRemaining }})
+                  </template>
                 </span>
                 <span v-if="opt.disabledReason && getCount(opt.type) < 1" class="ship-disabled">
                   {{ opt.disabledReason }}
@@ -460,6 +475,10 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
   color: #fdba74;
   border: 1px solid rgba(249, 115, 22, 0.35);
 }
+.resource-symbol {
+  font-size: 0.9rem;
+  font-weight: 800;
+}
 .resource-values {
   display: flex;
   align-items: center;
@@ -548,6 +567,14 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
 .ship-range {
   color: #94a3b8;
   font-size: 0.76rem;
+}
+.cost-credits {
+  color: #fde047;
+  font-weight: 700;
+}
+.cost-production {
+  color: #fb923c;
+  font-weight: 700;
 }
 .ship-disabled {
   color: #f87171;

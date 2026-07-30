@@ -1,12 +1,10 @@
 import type { ShipType } from '@galaxy/rules'
 
-const TRIANGLE = 'M0,-10 L9,8 L-9,8 Z'
-
 export interface ShipGlyphDef {
+  /** Main silhouette; use evenodd subpaths for slits, windows, and notches */
   body: string
-  detail?: string
-  circle?: { cx: number; cy: number; r: number }
-  detailStrokeOnly?: boolean
+  /** Optional stroke-only accent (antenna, ring highlight) */
+  accent?: string
 }
 
 export interface BoardShip {
@@ -14,30 +12,67 @@ export interface BoardShip {
   player: number
 }
 
-/** SVG shapes in ~24×24 viewBox, centered at origin */
+/**
+ * SVG shapes in ~24×24 viewBox, centered at origin.
+ * Each type has a distinct silhouette readable at board scale (~0.5).
+ */
 export const SHIP_GLYPHS: Record<ShipType, ShipGlyphDef> = {
-  supply: {
-    body: 'M-8,-8 h16 v16 h-16 z',
-    detail: 'M-4,-4 h8 v8 h-8 z',
-    detailStrokeOnly: true,
-  },
+  /** Narrow wedge — smallest hull, side engine slits */
   destroyer: {
-    body: TRIANGLE,
+    body: [
+      'M0,-11 L5.5,8 L-5.5,8 Z',
+      'M-3.5,3 L-1.5,6.5 L-0.5,3 L-2.5,0.5 Z',
+      'M3.5,3 L1.5,6.5 L0.5,3 L2.5,0.5 Z',
+    ].join(' '),
   },
+
+  /** Medium hull — bridge block + deck slit */
   cruiser: {
-    body: TRIANGLE,
-    detail: 'M-6,0.5 h12 v2 h-12 z',
+    body: [
+      'M0,-10.5 L8.5,8 L-8.5,8 Z',
+      'M-2.5,-6 L2.5,-6 L2.5,-3.5 L-2.5,-3.5 Z',
+      'M-4,2 L4,2 L4,4 L-4,4 Z',
+    ].join(' '),
   },
+
+  /** Broad hull — twin turrets + double deck slits */
   battleship: {
-    body: TRIANGLE,
-    detail: 'M-6,-3.5 h12 v2 h-12 z M-6,2.5 h12 v2 h-12 z',
+    body: [
+      'M0,-10 L10,8 L-10,8 Z',
+      'M-7.5,-5.5 L-4.5,-5.5 L-4.5,-2.5 L-7.5,-2.5 Z',
+      'M7.5,-5.5 L4.5,-5.5 L4.5,-2.5 L7.5,-2.5 Z',
+      'M-5.5,1.5 L5.5,1.5 L5.5,3.5 L-5.5,3.5 Z',
+      'M-3.5,5.5 L3.5,5.5 L3.5,7 L-3.5,7 Z',
+    ].join(' '),
   },
+
+  /** Hull with shield-generator ring (evenodd donut) */
   shield: {
-    body: TRIANGLE,
-    circle: { cx: 0, cy: 0, r: 3.5 },
+    body: [
+      'M0,-10 L8,7.5 L-8,7.5 Z',
+      'M0,-5.5 m-4.5,0 a4.5,4.5 0 1,0 9,0 a4.5,4.5 0 1,0 -9,0',
+      'M0,-3.5 m-2.5,0 a2.5,2.5 0 1,0 5,0 a2.5,2.5 0 1,0 -5,0',
+    ].join(' '),
   },
+
+  /** Four-point star — wing notches + central diamond slit */
   hyper: {
-    body: 'M0,-10 L2.5,-3 L10,0 L2.5,3 L0,10 L-2.5,3 L-10,0 L-2.5,-3 Z M0,-4 a4,4 0 1,0 0.01,0',
+    body: [
+      'M0,-10 L3,-2 L10,0 L3,2 L0,10 L-3,2 L-10,0 L-3,-2 Z',
+      'M0,-6 L1.2,-0.5 L0,5 L-1.2,-0.5 Z',
+      'M-6,-1 L-4,0 L-6,1 L-7,0 Z',
+      'M6,-1 L4,0 L6,1 L7,0 Z',
+    ].join(' '),
+  },
+
+  /** Boxy freighter — cargo bays + crane notch (non-triangle silhouette) */
+  supply: {
+    body: [
+      'M-7.5,-6.5 L7.5,-6.5 L7.5,8.5 L-7.5,8.5 Z',
+      'M-1.5,-6.5 L1.5,-6.5 L1.5,-4 L-1.5,-4 Z',
+      'M-4.5,-2.5 L4.5,-2.5 L4.5,1.5 L-4.5,1.5 Z',
+      'M-3,4 L3,4 L3,6.5 L-3,6.5 Z',
+    ].join(' '),
   },
 }
 

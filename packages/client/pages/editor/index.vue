@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { MapCellContent, MapDefinition, ResourceTokenDef, ResourceTokenValue, ShipType } from '@galaxy/rules'
+import type { MapCellContent, MapDefinition, GameSnapshot, ResourceTokenDef, ResourceTokenValue, ShipType } from '@galaxy/rules'
 import {
   MAX_SHIPS_PER_CELL,
   MAX_SHIPS_PER_CELL_PER_PLAYER,
@@ -26,13 +26,16 @@ import {
   removeCellOrbit,
   renderAsciiMapFromDefinition,
   setCellResourceToken,
+  syncCellControlWithShips,
   syncCellOrbitContent,
-  validateMapDefinition,
+  inferMapPlayerCount,
+  MAX_LOBBY_PLAYERS,
   type SymmetrySettings,
+  type GalaxySaveFile,
   galaxySaveFromMap,
   parseGalaxySave,
   serializeGalaxySave,
-  type GalaxySaveFile,
+  validateMapDefinition,
 } from '@galaxy/rules'
 
 definePageMeta({ layout: 'immersive' })
@@ -40,6 +43,7 @@ definePageMeta({ layout: 'immersive' })
 const SYMMETRY_STORAGE_KEY = 'galaxy-editor-symmetry'
 
 const map = ref<MapDefinition>(normalizeMapDefinition(createEmptyMap('draft', 'Черновик')))
+const importedGame = ref<GameSnapshot | null>(null)
 const selectedKey = ref<string | null>(hexKey(0, 0))
 const storageKey = 'galaxy-maps'
 const savedMaps = ref<MapDefinition[]>([])
@@ -64,7 +68,9 @@ function loadSymmetrySettings(): SymmetrySettings {
     return {
       ...DEFAULT_SYMMETRY_SETTINGS,
       ...stored,
-      playerCount: stored.playerCount === 3 || stored.playerCount === 6 ? stored.playerCount : 2,
+      playerCount: stored.playerCount === 3 || stored.playerCount === 4 || stored.playerCount === 6
+        ? stored.playerCount
+        : 2,
       axisKind: stored.axisKind === 'edge' ? 'edge' : 'line',
       axisIndex: stored.axisIndex != null && stored.axisIndex >= 0 && stored.axisIndex <= 2
         ? stored.axisIndex
@@ -139,6 +145,17 @@ const playerShipCount = computed(() =>
   selectedCell.value ? countCellShipsForPlayer(selectedCell.value, newShipPlayer.value) : 0,
 )
 
+const mapPlayerCount = computed({
+  get: () => map.value.playerCount ?? inferMapPlayerCount(map.value),
+  set: (value: number) => {
+    map.value.playerCount = Math.min(MAX_LOBBY_PLAYERS, Math.max(1, value))
+  },
+})
+
+const playerSlots = computed(() =>
+  Array.from({ length: mapPlayerCount.value }, (_, i) => i + 1),
+)
+
 const symmetryHint = computed(
   () => SYMMETRY_PLAYER_OPTIONS.find((opt) => opt.count === symmetry.value.playerCount)?.hint ?? '',
 )
@@ -208,11 +225,12 @@ function refreshSavedMaps() {
 
 function loadSaveToEditor(save: GalaxySaveFile) {
   map.value = normalizeMapDefinition(JSON.parse(JSON.stringify(save.map)) as MapDefinition)
+  importedGame.value = save.game ? (JSON.parse(JSON.stringify(save.game)) as GameSnapshot) : null
   selectedKey.value = hexKey(map.value.cells[0]?.q ?? 0, map.value.cells[0]?.r ?? 0)
   resetHistory()
 }
 
-const { persistNow: persistEditorDraftNow } = useEditorDraft(map, selectedKey, (draft) => {
+const { persistNow: persistEditorDraftNow } = useEditorDraft(map, selectedKey, importedGame, (draft) => {
   loadSaveToEditor(draft.save)
   if (draft.selectedKey) {
     const exists = map.value.cells.some((c) => hexKey(c.q, c.r) === draft.selectedKey)
@@ -266,6 +284,7 @@ function addShip() {
     type: newShipType.value,
     player: newShipPlayer.value,
   })
+  syncCellControlWithShips(selectedCell.value)
   syncSymmetryOrbit()
 }
 
@@ -273,6 +292,11 @@ function removeShip(index: number) {
   if (!selectedCell.value?.startingShips) return
   pushHistory()
   selectedCell.value.startingShips.splice(index, 1)
+  if (!selectedCell.value.startingShips.length) {
+    delete selectedCell.value.startingShips
+  } else {
+    syncCellControlWithShips(selectedCell.value)
+  }
   syncSymmetryOrbit()
 }
 
@@ -362,6 +386,7 @@ function importJson(event: Event) {
     try {
       const save = parseGalaxySave(JSON.parse(String(reader.result)))
       loadSaveToEditor(save)
+      if (save.game) upsertLobbySave(save)
     } catch {
       alert('Не удалось прочитать JSON')
     }
@@ -468,7 +493,7 @@ useMapEditorHotkeys({
                 —
               </button>
               <button
-                v-for="slot in 6"
+                v-for="slot in playerSlots"
                 :key="slot"
                 type="button"
                 class="player-btn"
@@ -509,7 +534,7 @@ useMapEditorHotkeys({
             <div class="ship-add">
               <span class="ship-add-label">Игрок:</span>
               <select v-model.number="newShipPlayer">
-                <option v-for="slot in 6" :key="slot" :value="slot">
+                <option v-for="slot in playerSlots" :key="slot" :value="slot">
                   {{ PLAYER_LABELS[slot] }}
                 </option>
               </select>
@@ -606,6 +631,13 @@ useMapEditorHotkeys({
         <div v-show="panelTab === 'file'" class="panel-body">
         <section class="block io">
           <h3>Карта</h3>
+          <label class="inline-field player-count-field">
+            Игроков на карте
+            <select v-model.number="mapPlayerCount">
+              <option v-for="n in MAX_LOBBY_PLAYERS" :key="n" :value="n">{{ n }}</option>
+            </select>
+          </label>
+          <p class="hint">Независимо от режима симметрии. По умолчанию — по стартовым позициям или 2.</p>
           <div class="io-row">
             <button type="button" @click="newMap">Новая</button>
             <button type="button" class="danger" @click="clearMap">Очистить</button>

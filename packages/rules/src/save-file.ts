@@ -1,7 +1,15 @@
 import { MAX_SHIPS_PER_CELL } from './constants.js'
+import { PLAYER_COLORS } from './constants.js'
 import { gameStateFromMap } from './game.js'
 import { normalizeMapDefinition, validateMapDefinition } from './map-editor.js'
 import { buildSpatialSummary } from './observation/ascii-map.js'
+import {
+  BASE_PRODUCTION_MARKERS_PER_PLAYER,
+  isValidProductionRegionSize,
+  productionMarkerUnlockRegionCountForPlayer,
+  SECOND_PRODUCTION_MARKER_UNLOCK_REGION_COUNT,
+  THIRD_PRODUCTION_MARKER_UNLOCK_REGION_COUNT,
+} from './regions.js'
 import { syncActionMarkerTurnTracking, syncProductionMarkerTurnTracking } from './markers.js'
 import type {
   CellState,
@@ -18,11 +26,20 @@ export const GALAXY_SAVE_FORMAT = 'galaxy-save' as const
 export const GALAXY_SAVE_VERSION = 1 as const
 export const MAX_ACTION_MARKERS_PER_PLAYER = 6
 
-/** Максимум маркеров производства = число контролируемых регионов (1 маркер на регион) */
+/**
+ * Базовый маркер доступен всегда. Второй открывают 3, третий — 5 отдельных
+ * контролируемых регионов от 4 клеток.
+ */
 export function maxProductionMarkersForPlayer(state: GameState, ownerId: string): number {
-  const summary = buildSpatialSummary(state)
-  return summary.regions.filter((r) => r.ownerId === ownerId).length
+  const unlockRegionCount = productionMarkerUnlockRegionCountForPlayer(state, ownerId)
+  return (
+    BASE_PRODUCTION_MARKERS_PER_PLAYER
+    + (unlockRegionCount >= SECOND_PRODUCTION_MARKER_UNLOCK_REGION_COUNT ? 1 : 0)
+    + (unlockRegionCount >= THIRD_PRODUCTION_MARKER_UNLOCK_REGION_COUNT ? 1 : 0)
+  )
 }
+
+export { validProductionRegionsForPlayer } from './regions.js'
 
 export function countProductionMarkersForPlayer(game: GameSnapshot, ownerId: string): number {
   return game.productionMarkers.filter((m) => m.ownerId === ownerId).length
@@ -33,6 +50,38 @@ export interface PendingEvent {
   type: string
   message: string
   resolved?: boolean
+}
+
+import type { CombatOptions, CombatPrepState, PendingCombatRoundState } from './combat.js'
+import type { TurnEventState } from './events.js'
+import type { GameOverState } from './victory.js'
+
+export type { TurnEventState, GameOverState }
+
+export interface PendingCombat {
+  cellKey: string
+  attackerId: string
+  defenderIds: string[]
+  roundNumber: number
+  awaitingContinue: boolean
+  /** Решения продолжать бой; сначала атакующий, затем защитник. */
+  continueDecisions?: Partial<Record<'attacker' | 'defender', boolean>>
+  /** Победитель раунда выбирает корабли для уничтожения */
+  awaitingDestruction?: boolean
+  roundState?: PendingCombatRoundState
+  trigger?: 'movement' | 'stack' | 'bombardment'
+  combatOptions?: CombatOptions
+  /**
+   * Контекст боя, начатого перемещением. Атакующие остаются на исходной клетке
+   * до окончательного исхода боя, чтобы могли выбрать корректное отступление.
+   */
+  continuation?: {
+    movementFrom: HexCoord
+    movementPlans: Array<{ shipId: string; to: HexCoord; declareControl?: boolean }>
+    incomingAttackerShipIds: string[]
+  }
+  /** Ожидание готовности обеих сторон перед первым раундом */
+  prep?: CombatPrepState
 }
 
 export interface ActionMarker {
@@ -68,6 +117,18 @@ export interface GameSnapshot {
   actionMarkerResolvedThisTurn?: boolean
   /** Активный игрок уже построил по маркеру в текущем ходу фазы «Производство» */
   productionMarkerResolvedThisTurn?: boolean
+  /** Кто реально в игре (остальные слоты карты пропускаются в очереди хода) */
+  participatingPlayerIds?: string[]
+  /** Глобальное событие текущего хода (одно на всех игроков) */
+  turnEvent?: TurnEventState
+  /** Игра завершена */
+  gameOver?: GameOverState
+  /** Незавершённый многoroundовый бой */
+  pendingCombat?: PendingCombat
+  /** Регион сверхурочных на игрока (событие «Обязательные сверхурочные») */
+  overtimeRegionByPlayer?: Record<string, string>
+  /** Потраченные фишки производства за ход (событие «Всё для фронта») */
+  productionTokensSpentThisTurn?: Record<string, number>
 }
 
 export interface GalaxySaveFile {
@@ -127,6 +188,43 @@ export function gameSnapshotFromGameState(state: GameState): GameSnapshot {
   }
 }
 
+/** Дополняет список игроков до slotCount (player-1 … player-N) */
+export function ensurePlayerSlots(game: GameSnapshot, slotCount: number): void {
+  while (game.players.length < slotCount) {
+    const n = game.players.length + 1
+    game.players.push({
+      id: `player-${n}`,
+      name: `Игрок ${n}`,
+      color: PLAYER_COLORS[n] ?? '#888',
+      isAi: false,
+      eliminated: false,
+    })
+  }
+}
+
+export function syncParticipatingPlayerIds(game: GameSnapshot, joinedPlayerIds: string[]): void {
+  game.participatingPlayerIds = [...joinedPlayerIds]
+  ensureActivePlayerParticipating(game)
+}
+
+export function ensureActivePlayerParticipating(game: GameSnapshot): void {
+  const ids = game.participatingPlayerIds
+  if (!ids?.length) return
+  if (game.activePlayerId && ids.includes(game.activePlayerId)) return
+  game.activePlayerId = ids[0] ?? null
+}
+
+/** Первые maxPlayers участников из сохранения для online-лобби */
+export function participatingPlayerIdsForLobby(
+  game: GameSnapshot,
+  maxPlayers: number,
+): string[] {
+  const all = game.players.map((p) => p.id)
+  const fromSave = game.participatingPlayerIds?.filter((id) => all.includes(id))
+  const base = fromSave?.length ? fromSave : all
+  return base.slice(0, Math.max(1, Math.min(maxPlayers, all.length)))
+}
+
 export function galaxySaveFromGameState(
   map: MapDefinition,
   state: GameState,
@@ -164,17 +262,18 @@ export function parseGalaxySave(raw: unknown): GalaxySaveFile {
 }
 
 export function normalizeGalaxySave(save: GalaxySaveFile): GalaxySaveFile {
+  const map = normalizeMapDefinition(save.map)
   const normalized: GalaxySaveFile = {
     format: GALAXY_SAVE_FORMAT,
     version: GALAXY_SAVE_VERSION,
     savedAt: save.savedAt || new Date().toISOString(),
-    map: normalizeMapDefinition(save.map),
-    game: save.game ? normalizeGameSnapshot(save.game) : undefined,
+    map,
+    game: save.game ? normalizeGameSnapshot(save.game, map) : undefined,
   }
   return normalized
 }
 
-function normalizeGameSnapshot(game: GameSnapshot): GameSnapshot {
+function normalizeGameSnapshot(game: GameSnapshot, map?: MapDefinition): GameSnapshot {
   const cells: RuntimeCellState[] = game.cells.map((c) => ({
     coord: { q: c.coord.q, r: c.coord.r },
     isPowerCenter: !!c.isPowerCenter,
@@ -190,7 +289,7 @@ function normalizeGameSnapshot(game: GameSnapshot): GameSnapshot {
 
   syncMarkerRefs(cells, actionMarkers, productionMarkers)
 
-  return {
+  const normalized: GameSnapshot = {
     phase: game.phase,
     turnNumber: game.turnNumber,
     activePlayerId: game.activePlayerId ?? null,
@@ -202,6 +301,108 @@ function normalizeGameSnapshot(game: GameSnapshot): GameSnapshot {
     productionMarkers,
     actionMarkerResolvedThisTurn: game.actionMarkerResolvedThisTurn ?? false,
     productionMarkerResolvedThisTurn: game.productionMarkerResolvedThisTurn ?? false,
+    participatingPlayerIds: game.participatingPlayerIds
+      ? [...game.participatingPlayerIds]
+      : undefined,
+    turnEvent: game.turnEvent ? { ...game.turnEvent } : undefined,
+    gameOver: game.gameOver ? { ...game.gameOver } : undefined,
+    pendingCombat: game.pendingCombat
+      ? {
+          ...game.pendingCombat,
+          defenderIds: [...game.pendingCombat.defenderIds],
+          continuation: game.pendingCombat.continuation
+            ? {
+                movementFrom: { ...game.pendingCombat.continuation.movementFrom },
+                movementPlans: game.pendingCombat.continuation.movementPlans.map((m) => ({
+                  ...m,
+                  to: { ...m.to },
+                })),
+                incomingAttackerShipIds: [...game.pendingCombat.continuation.incomingAttackerShipIds],
+              }
+            : undefined,
+          prep: game.pendingCombat.prep
+            ? {
+                ...game.pendingCombat.prep,
+                readyBy: { ...game.pendingCombat.prep.readyBy },
+                combatOptions: {
+                  attacker: game.pendingCombat.prep.combatOptions.attacker
+                    ? { ...game.pendingCombat.prep.combatOptions.attacker }
+                    : undefined,
+                  defender: game.pendingCombat.prep.combatOptions.defender
+                    ? { ...game.pendingCombat.prep.combatOptions.defender }
+                    : undefined,
+                },
+                movementFrom: game.pendingCombat.prep.movementFrom
+                  ? { ...game.pendingCombat.prep.movementFrom }
+                  : undefined,
+                movementPlans: game.pendingCombat.prep.movementPlans?.map((m) => ({
+                  ...m,
+                  to: { ...m.to },
+                })),
+                bombardmentFrom: game.pendingCombat.prep.bombardmentFrom
+                  ? { ...game.pendingCombat.prep.bombardmentFrom }
+                  : undefined,
+                bombardmentPlans: game.pendingCombat.prep.bombardmentPlans?.map((p) => ({
+                  ...p,
+                  target: { ...p.target },
+                })),
+                queuedBombardmentPlans: game.pendingCombat.prep.queuedBombardmentPlans?.map((p) => ({
+                  ...p,
+                  target: { ...p.target },
+                })),
+                incomingAttackerShipIds: game.pendingCombat.prep.incomingAttackerShipIds
+                  ? [...game.pendingCombat.prep.incomingAttackerShipIds]
+                  : undefined,
+              }
+            : undefined,
+          roundState: game.pendingCombat.roundState
+            ? {
+                ...game.pendingCombat.roundState,
+                rounds: game.pendingCombat.roundState.rounds.map((r) => ({
+                  ...r,
+                  shipRolls: r.shipRolls.map((sr) => ({ ...sr })),
+                })),
+                combatOptions: { ...game.pendingCombat.roundState.combatOptions },
+                incomingAttackerShipIds: [...game.pendingCombat.roundState.incomingAttackerShipIds],
+                attackerSkipTypes: [...game.pendingCombat.roundState.attackerSkipTypes],
+                defenderSkipTypes: [...game.pendingCombat.roundState.defenderSkipTypes],
+                movementPlans: game.pendingCombat.roundState.movementPlans?.map((m) => ({ ...m, to: { ...m.to } })),
+                movementFrom: game.pendingCombat.roundState.movementFrom
+                  ? { ...game.pendingCombat.roundState.movementFrom }
+                  : undefined,
+                bombardmentPlans: game.pendingCombat.roundState.bombardmentPlans?.map((p) => ({
+                  ...p,
+                  target: { ...p.target },
+                })),
+                queuedBombardmentPlans: game.pendingCombat.roundState.queuedBombardmentPlans?.map((p) => ({
+                  ...p,
+                  target: { ...p.target },
+                })),
+                bombardmentFrom: game.pendingCombat.roundState.bombardmentFrom
+                  ? { ...game.pendingCombat.roundState.bombardmentFrom }
+                  : undefined,
+              }
+            : undefined,
+        }
+      : undefined,
+    overtimeRegionByPlayer: game.overtimeRegionByPlayer
+      ? { ...game.overtimeRegionByPlayer }
+      : undefined,
+    productionTokensSpentThisTurn: game.productionTokensSpentThisTurn
+      ? { ...game.productionTokensSpentThisTurn }
+      : undefined,
+  }
+
+  if (map) refreshProductionMarkerRegionIds(normalized, map)
+  return normalized
+}
+
+function refreshProductionMarkerRegionIds(game: GameSnapshot, map: MapDefinition): void {
+  if (game.productionMarkers.length === 0) return
+  const state = gameStateFromSnapshot(game, map.id)
+  for (const marker of game.productionMarkers) {
+    const regionId = resolveRegionIdForCell(state, marker.coord, marker.ownerId)
+    if (regionId) marker.targetRegionId = regionId
   }
 }
 
@@ -236,7 +437,8 @@ export function resolveRegionIdForCell(state: GameState, coord: HexCoord, ownerI
   const region = summary.regions.find(
     (r) => r.ownerId === ownerId && r.hexes.includes(key),
   )
-  return region?.id ?? null
+  if (!region || !isValidProductionRegionSize(region.size)) return null
+  return region.id
 }
 
 export function validateGalaxySave(save: GalaxySaveFile): string[] {
@@ -308,7 +510,7 @@ export function validateGameSnapshot(game: GameSnapshot, map: MapDefinition): st
     const count = game.productionMarkers.filter((m) => m.ownerId === player.id).length
     if (count > limit) {
       errors.push(
-        `Player ${player.id}: ${count} production markers exceeds ${limit} controlled regions`,
+        `Player ${player.id}: ${count} production markers exceeds unlocked limit ${limit}`,
       )
     }
   }
@@ -320,6 +522,13 @@ export function validateGameSnapshot(game: GameSnapshot, map: MapDefinition): st
     }
     if (cell.productionMarkerId && !game.productionMarkers.some((m) => m.id === cell.productionMarkerId)) {
       errors.push(`${key}: unknown productionMarkerId ${cell.productionMarkerId}`)
+    }
+    if (cell.ships.length > 0 && cell.controlOwnerId) {
+      const shipOwners = new Set(cell.ships.map((s) => s.ownerId))
+      if (!shipOwners.has(cell.controlOwnerId) && shipOwners.size === 1) {
+        const only = [...shipOwners][0]
+        errors.push(`${key}: controlOwnerId (${cell.controlOwnerId}) не совпадает с владельцем кораблей (${only})`)
+      }
     }
   }
 
@@ -337,7 +546,21 @@ export function gameSnapshotFromMap(map: MapDefinition): GameSnapshot {
   return gameSnapshotFromGameState(gameStateFromMap(map))
 }
 
-/** Sync server observation into snapshot, preserving local markers */
+/**
+ * Если сервер включил поле в mechanics (даже null) — берём его; иначе сохраняем локальное.
+ * null трактуется как «очищено» (undefined в snapshot).
+ */
+export function fromObservationField<T>(
+  mechanics: Record<string, unknown>,
+  key: string,
+  preserve: T | undefined,
+): T | undefined {
+  if (!(key in mechanics)) return preserve
+  const value = mechanics[key] as T | null
+  return value === null ? undefined : value
+}
+
+/** Sync server observation into snapshot; with full server markers replaces local state */
 export function gameSnapshotFromObservation(
   mechanics: {
     phase: Phase
@@ -345,32 +568,66 @@ export function gameSnapshotFromObservation(
     activePlayerId: string | null
     players: PlayerState[]
     cells: CellState[]
+    actionMarkers?: ActionMarker[]
+    productionMarkers?: ProductionMarker[]
+    actionMarkerResolvedThisTurn?: boolean
+    productionMarkerResolvedThisTurn?: boolean
   },
   preserve?: GameSnapshot,
+  map?: MapDefinition,
 ): GameSnapshot {
+  const hasServerMarkers = Array.isArray(mechanics.actionMarkers)
+  const mech = mechanics as Record<string, unknown>
+
   const game = normalizeGameSnapshot({
     phase: mechanics.phase,
     turnNumber: mechanics.turnNumber,
     activePlayerId: mechanics.activePlayerId,
     players: mechanics.players,
-    cells: mechanics.cells.map((c) => ({
-      coord: { q: c.coord.q, r: c.coord.r },
-      isPowerCenter: c.isPowerCenter,
-      controlOwnerId: c.controlOwnerId,
-      resourceTokens: c.resourceTokens ?? [],
-      ships: c.ships ?? [],
-      actionMarkerId: null,
-      productionMarkerId: null,
-    })),
-    eventLog: preserve?.eventLog ?? [],
+    cells: mechanics.cells.map((c) => {
+      const runtime = c as RuntimeCellState
+      return {
+        coord: { q: c.coord.q, r: c.coord.r },
+        isPowerCenter: c.isPowerCenter,
+        controlOwnerId: c.controlOwnerId,
+        resourceTokens: c.resourceTokens ?? [],
+        ships: c.ships ?? [],
+        actionMarkerId: hasServerMarkers ? (runtime.actionMarkerId ?? null) : null,
+        productionMarkerId: hasServerMarkers ? (runtime.productionMarkerId ?? null) : null,
+      }
+    }),
+    eventLog: fromObservationField(mech, 'eventLog', preserve?.eventLog) ?? [],
     pendingEvents: preserve?.pendingEvents ?? [],
-    actionMarkers: preserve?.actionMarkers ?? [],
-    productionMarkers: preserve?.productionMarkers ?? [],
-    actionMarkerResolvedThisTurn: false,
-    productionMarkerResolvedThisTurn: false,
-  })
+    actionMarkers: hasServerMarkers ? (mechanics.actionMarkers ?? []) : (preserve?.actionMarkers ?? []),
+    productionMarkers: hasServerMarkers
+      ? (mechanics.productionMarkers ?? [])
+      : (preserve?.productionMarkers ?? []),
+    actionMarkerResolvedThisTurn: hasServerMarkers
+      ? (mechanics.actionMarkerResolvedThisTurn ?? false)
+      : false,
+    productionMarkerResolvedThisTurn: hasServerMarkers
+      ? (mechanics.productionMarkerResolvedThisTurn ?? false)
+      : false,
+    participatingPlayerIds: hasServerMarkers
+      ? (fromObservationField(mech, 'participatingPlayerIds', preserve?.participatingPlayerIds)
+        ?? preserve?.participatingPlayerIds)
+      : preserve?.participatingPlayerIds,
+    turnEvent: fromObservationField(mech, 'turnEvent', preserve?.turnEvent),
+    productionTokensSpentThisTurn: fromObservationField(
+      mech,
+      'productionTokensSpentThisTurn',
+      preserve?.productionTokensSpentThisTurn,
+    ),
+    overtimeRegionByPlayer: fromObservationField(
+      mech,
+      'overtimeRegionByPlayer',
+      preserve?.overtimeRegionByPlayer,
+    ),
+    pendingCombat: fromObservationField(mech, 'pendingCombat', preserve?.pendingCombat),
+    gameOver: fromObservationField(mech, 'gameOver', preserve?.gameOver),
+  }, map)
 
-  if (!preserve) return game
+  if (hasServerMarkers || !preserve) return game
 
   if (
     preserve.phase === game.phase &&

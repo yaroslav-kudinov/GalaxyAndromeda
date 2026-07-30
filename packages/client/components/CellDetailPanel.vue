@@ -47,7 +47,11 @@ const markers = computed(() => (props.cell ? markerSummary(props.cell) : null))
       <dd>{{ cell.isPowerCenter ? 'Да ♛' : 'Нет' }}</dd>
 
       <dt>Ресурс</dt>
-      <dd>{{ token ? resourceTokenLongLabel(token) : '—' }}</dd>
+      <dd v-if="token" class="resource-summary" :class="`resource-summary--${token.type}`">
+        <span class="resource-symbol" aria-hidden="true">{{ token.type === 'credits' ? '₡' : '⚙' }}</span>
+        {{ resourceTokenLongLabel(token) }}
+      </dd>
+      <dd v-else>—</dd>
 
       <dt>Маркеры</dt>
       <dd>{{ markers ?? '—' }}</dd>
@@ -117,6 +121,22 @@ const markers = computed(() => (props.cell ? markerSummary(props.cell) : null))
 .detail-grid dd {
   margin: 0;
   color: #e2e8f0;
+}
+.resource-summary {
+  font-weight: 600;
+}
+.resource-symbol {
+  display: inline-block;
+  min-width: 1.1rem;
+  font-size: 0.95rem;
+  font-weight: 800;
+  text-align: center;
+}
+.resource-summary--credits .resource-symbol {
+  color: #facc15;
+}
+.resource-summary--production .resource-symbol {
+  color: #fb923c;
 }
 .owner-swatch {
   display: inline-block;

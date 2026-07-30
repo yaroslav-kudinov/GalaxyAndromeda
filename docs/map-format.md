@@ -6,6 +6,7 @@ Axial hex coordinates `(q, r)`, flat-top layout.
 {
   "id": "my-map",
   "name": "My Map",
+  "playerCount": 4,
   "cells": [
     {
       "q": 0,
@@ -21,6 +22,13 @@ Axial hex coordinates `(q, r)`, flat-top layout.
   ]
 }
 ```
+
+| Field | Description |
+|-------|-------------|
+| `id` | Unique map identifier |
+| `name` | Display name |
+| `playerCount` | Optional intended player count **1–6** (`MAX_LOBBY_PLAYERS`). Independent of editor symmetry mode. If omitted, inferred from `startPlayer` / `startingShips` slots (default **2** when none) |
+| `cells` | Hex cell definitions |
 
 ## Fields per cell
 

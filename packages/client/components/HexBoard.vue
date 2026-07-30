@@ -14,6 +14,7 @@ import {
 import { layoutShipPositions, shipBoardScale } from '~/utils/ship-glyphs'
 import { effectiveGlyphScale, overlayContentScale } from '~/utils/board-glyphs'
 import { STRATEGIC_ZOOM_THRESHOLD } from '~/utils/board-overview'
+import type { TerritoryLabelPlayer } from '~/composables/usePlayerTerritoryLabels'
 
 const props = withDefaults(
   defineProps<{
@@ -27,7 +28,12 @@ const props = withDefaults(
     availableProductionMarkerKeys?: string[]
     reachableKeys?: string[]
     destinationKeys?: string[]
+    contestedKeys?: string[]
+    supplyChainKeys?: string[]
+    myTerritoryKeys?: string[]
     movementSourceKey?: string | null
+    previewMoves?: { from: { q: number; r: number }; to: { q: number; r: number }; combat?: boolean }[]
+    territoryLabelPlayers?: TerritoryLabelPlayer[]
     zoomable?: boolean
     orientation?: HexOrientation
     showOrientationToggle?: boolean
@@ -50,7 +56,12 @@ const props = withDefaults(
     availableProductionMarkerKeys: () => [],
     reachableKeys: () => [],
     destinationKeys: () => [],
+    contestedKeys: () => [],
+    supplyChainKeys: () => [],
+    myTerritoryKeys: () => [],
     movementSourceKey: null,
+    previewMoves: () => [],
+    territoryLabelPlayers: () => [],
     toolbarPlacement: 'overlay',
     mode: 'editor',
     fillViewport: true,
@@ -176,16 +187,41 @@ function isDestination(key: string): boolean {
   return props.destinationKeys.includes(key)
 }
 
+function isContested(key: string): boolean {
+  return props.contestedKeys.includes(key)
+}
+
+function isSupplyChain(key: string): boolean {
+  return props.supplyChainKeys.includes(key)
+}
+
+function isMyTerritory(key: string): boolean {
+  return props.mode === 'game' && props.myTerritoryKeys.includes(key)
+}
+
 function isMovementSource(key: string): boolean {
   return props.movementSourceKey != null && props.movementSourceKey === key
 }
+
+const previewArrowPaths = computed(() =>
+  props.previewMoves.map((move, idx) => {
+    const from = center(move.from.q, move.from.r)
+    const to = center(move.to.q, move.to.r)
+    return {
+      key: `preview-${idx}-${hexKey(move.from.q, move.from.r)}-${hexKey(move.to.q, move.to.r)}`,
+      d: `M ${from.x} ${from.y} L ${to.x} ${to.y}`,
+      combat: !!move.combat,
+    }
+  }),
+)
 
 const contentBounds = computed(() => {
   const all = [...props.cells, ...props.ghosts]
   if (!all.length) return { minX: 0, minY: 0, width: 100, height: 100 }
   const xs = all.map((c) => center(c.q, c.r).x)
   const ys = all.map((c) => center(c.q, c.r).y)
-  const pad = size * 2.2
+  // Поле включает наружные подписи игроков (дистанция до 3.5 радиусов + ширина label).
+  const pad = size * 6.25
   const minX = Math.min(...xs) - pad
   const minY = Math.min(...ys) - pad
   const maxX = Math.max(...xs) + pad
@@ -224,9 +260,33 @@ function resetView() {
   pan.value = { x: 0, y: 0 }
 }
 
+/** Stable hex layout — ignores ship/marker updates during polling */
+const cellLayoutKey = computed(() =>
+  props.cells
+    .map((c) => `${c.q},${c.r}`)
+    .sort()
+    .join('|'),
+)
+
+const lastFittedLayoutKey = ref<string | null>(null)
+
+watch(cellLayoutKey, (key) => {
+  if (!key || !autoFitOnMapChange.value) return
+
+  if (props.mode === 'game') {
+    if (lastFittedLayoutKey.value === key) return
+    lastFittedLayoutKey.value = key
+    resetView()
+    return
+  }
+
+  resetView()
+})
+
 watch(
   () => [props.cells.length, props.ghosts.length, orientation.value] as const,
-  () => {
+  (_curr, prev) => {
+    if (prev === undefined || props.mode === 'game') return
     if (autoFitOnMapChange.value) resetView()
   },
 )
@@ -331,6 +391,45 @@ function onPointerUp(e: PointerEvent) {
       @pointercancel="onPointerUp"
       @contextmenu.prevent
     >
+      <defs>
+        <marker
+          id="move-arrow-normal"
+          markerWidth="8"
+          markerHeight="8"
+          refX="6"
+          refY="4"
+          orient="auto"
+        >
+          <path d="M0,0 L8,4 L0,8 Z" fill="rgba(56, 189, 248, 0.95)" />
+        </marker>
+        <marker
+          id="move-arrow-combat"
+          markerWidth="8"
+          markerHeight="8"
+          refX="6"
+          refY="4"
+          orient="auto"
+        >
+          <path d="M0,0 L8,4 L0,8 Z" fill="rgba(248, 113, 113, 0.95)" />
+        </marker>
+      </defs>
+
+      <PlayerTerritoryLabels
+        :cells="cells"
+        :players="territoryLabelPlayers"
+        :hex-size="size"
+        :orientation="orientation"
+      />
+
+      <g v-for="arrow in previewArrowPaths" :key="arrow.key" pointer-events="none">
+        <path
+          :d="arrow.d"
+          class="move-preview-line"
+          :class="{ 'move-preview-line--combat': arrow.combat }"
+          :marker-end="arrow.combat ? 'url(#move-arrow-combat)' : 'url(#move-arrow-normal)'"
+        />
+      </g>
+
       <g v-for="g in ghosts" :key="'g' + hexKey(g.q, g.r)">
         <polygon :points="points(g.q, g.r)" class="ghost" @click="emit('addGhost', g.q, g.r)" />
         <text :x="center(g.q, g.r).x" :y="center(g.q, g.r).y" class="ghost-label">+</text>
@@ -341,6 +440,12 @@ function onPointerUp(e: PointerEvent) {
           v-if="isReachable(hexKey(cell.q, cell.r))"
           :points="points(cell.q, cell.r)"
           class="hex-overlay hex-overlay--reachable"
+          pointer-events="none"
+        />
+        <polygon
+          v-if="isContested(hexKey(cell.q, cell.r))"
+          :points="points(cell.q, cell.r)"
+          class="hex-overlay hex-overlay--contested"
           pointer-events="none"
         />
         <polygon
@@ -355,13 +460,28 @@ function onPointerUp(e: PointerEvent) {
             hex: true,
             selected: selectedKey === hexKey(cell.q, cell.r),
             'movement-source': isMovementSource(hexKey(cell.q, cell.r)),
-            reachable: isReachable(hexKey(cell.q, cell.r)),
+            reachable: isReachable(hexKey(cell.q, cell.r)) && !isContested(hexKey(cell.q, cell.r)),
+            contested: isContested(hexKey(cell.q, cell.r)),
+            'supply-chain': isSupplyChain(hexKey(cell.q, cell.r)),
             destination: isDestination(hexKey(cell.q, cell.r)),
             symmetric: isSymmetricMate(hexKey(cell.q, cell.r)),
             owned: cell.startPlayer != null,
           }"
           :fill="cellFill(cell)"
           @click="emit('select', cell.q, cell.r)"
+        />
+
+        <polygon
+          v-if="isMyTerritory(hexKey(cell.q, cell.r))"
+          :points="insetHexPoints(cell.q, cell.r, 0.9)"
+          class="hex-my-territory-ring hex-my-territory-ring--underlay"
+          pointer-events="none"
+        />
+        <polygon
+          v-if="isMyTerritory(hexKey(cell.q, cell.r))"
+          :points="insetHexPoints(cell.q, cell.r, 0.9)"
+          class="hex-my-territory-ring"
+          pointer-events="none"
         />
 
         <polygon
@@ -561,13 +681,49 @@ function onPointerUp(e: PointerEvent) {
 .hex-overlay--destination {
   fill: rgba(56, 189, 248, 0.28);
 }
+.hex-overlay--contested {
+  fill: rgba(248, 113, 113, 0.32);
+}
 .hex.reachable {
   stroke: rgba(74, 222, 128, 0.85);
+  stroke-width: 2;
+}
+.hex.contested {
+  stroke: rgba(248, 113, 113, 0.95);
+  stroke-width: 2.5;
+}
+.hex.supply-chain {
+  stroke: rgba(52, 211, 153, 0.75);
   stroke-width: 2;
 }
 .hex.destination {
   stroke: rgba(56, 189, 248, 0.95);
   stroke-width: 2.5;
+}
+.move-preview-line {
+  fill: none;
+  stroke: rgba(56, 189, 248, 0.85);
+  stroke-width: 2.5;
+  stroke-dasharray: 6 4;
+  opacity: 0.9;
+}
+.move-preview-line--combat {
+  stroke: rgba(248, 113, 113, 0.9);
+}
+.hex-my-territory-ring {
+  fill: none;
+  pointer-events: none;
+  vector-effect: non-scaling-stroke;
+}
+.hex-my-territory-ring--underlay {
+  stroke: rgba(15, 23, 42, 0.7);
+  stroke-width: 4.5;
+}
+.hex-my-territory-ring:not(.hex-my-territory-ring--underlay) {
+  stroke: rgba(255, 255, 255, 0.72);
+  stroke-width: 2;
+  stroke-dasharray: 5 3;
+  filter: drop-shadow(0 0 2px rgba(255, 255, 255, 0.25));
 }
 .hex-marker-ring {
   fill: none;

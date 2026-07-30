@@ -7,18 +7,39 @@ HTTP base: `http://127.0.0.1:3001` (env `GAME_SERVER_URL` for MCP).
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/health` | Health check |
-| POST | `/rooms` | Body: `{ map, maxPlayers? }` → `{ roomId, code }` |
+| POST | `/rooms` | Body: `{ map, maxPlayers? }` or `{ save, maxPlayers? }` → `{ roomId, code }` |
 | POST | `/rooms/:id/join` | Body: `{ playerName }` → `{ playerId, code }` |
 | GET | `/rooms/:id/state?playerId=` | `GameObservation` |
 | GET | `/rooms/:id/legal-actions?playerId=` | `LegalAction[]` |
 | POST | `/rooms/:id/action` | Body: `{ playerId, action: { actionId, params? } }` |
 | GET | `/rooms/:id/events` | Last 20 `GameEvent` |
 
+### Combat actions
+
+| actionId | params | Description |
+|----------|--------|-------------|
+| `execute-marker-movement` | `{ from, moves, combatOptions? }` | `combatOptions.attacker/defender.prioritySkips`: `{ shipType }[]`; optional `destructionSelection` |
+| `execute-marker-bombardment` | `{ from, bombardments, combatOptions? }` | Same combat options |
+| `continue-combat` | `{ combatOptions? }` | Решение продолжать: сначала attacker, затем defender; после двух подтверждений — следующий раунд |
+| `stop-combat` | `{ retreatTo: { q, r } }` | Текущий решающий участник отступает в соседнюю клетку без вражеских кораблей (сначала attacker, затем defender; кроме «Стоять насмерть!») |
+| `confirm-combat-destruction` | `{ destructionSelection: string[] }` | Winner confirms ship IDs to destroy after round |
+| `update-combat-prep` | `{ ready: boolean, prioritySkips?: { shipType }[], supportSide?: 'attacker' \| 'defender' }` | Участники объявляют skip + ready; неучастник с доступной поддержкой выбирает `supportSide` без ready |
+| `cancel-combat-prep` | — | Attacker cancels prep before battle starts |
+
+Without `combatOptions`, movement/bombardment into combat enters `pendingCombat.prep`. Movement: mutual ready → countdown 3s → auto-resolve. Bombardment: attacker-only ready → countdown; multiple targets queued via `queuedBombardmentPlans`. Sync via `GET /state` polling.
+
+When a combat round leaves partial damage, `pendingCombat.awaitingDestruction` is set until the winner calls `confirm-combat-destruction`.
+
 ## GameObservation
 
 ```typescript
 {
-  mechanics: { phase, turnNumber, activePlayerId, players, cells },
+  mechanics: {
+    phase, turnNumber, activePlayerId, players, cells,
+    pendingCombat?, turnEvent?, gameOver?, lastCombatResult?,
+    observationRevision?, // monotonic; clients ignore stale responses
+    // cleared fields are sent as explicit null, not omitted
+  },
   geometry: {
     asciiMap: string,
     spatialSummary: { regions, powerCenters, supplyChains, distances },
@@ -27,6 +48,8 @@ HTTP base: `http://127.0.0.1:3001` (env `GAME_SERVER_URL` for MCP).
   legalActions: LegalAction[]
 }
 ```
+
+**Sync contract:** server is source of truth. `observationRevision` increments on each state change (actions, combat auto-resolve). `pendingCombat`, `turnEvent`, `gameOver`, `lastCombatResult` use **explicit `null`** when cleared — clients must not preserve local values when server sends `null`. `lastCombatResult` is cached until the next non-prep action so both players can poll the same round result.
 
 ## ASCII legend
 

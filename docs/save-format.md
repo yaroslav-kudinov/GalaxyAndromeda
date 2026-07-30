@@ -9,7 +9,7 @@ Unified save file for map editor and in-progress games.
   "format": "galaxy-save",
   "version": 1,
   "savedAt": "2026-07-24T18:00:00.000Z",
-  "map": { "id": "my-map", "name": "My Map", "cells": [] },
+  "map": { "id": "my-map", "name": "My Map", "playerCount": 4, "cells": [] },
   "game": { }
 }
 ```
@@ -19,7 +19,7 @@ Unified save file for map editor and in-progress games.
 | `format` | Always `"galaxy-save"` |
 | `version` | Schema version (`1`) |
 | `savedAt` | ISO-8601 timestamp |
-| `map` | [MapDefinition](map-format.md) — board layout |
+| `map` | [MapDefinition](map-format.md) — board layout (includes optional `playerCount`) |
 | `game` | Optional runtime snapshot; omitted for map-only saves |
 
 ## Legacy import
@@ -36,7 +36,10 @@ Plain `MapDefinition` JSON (no `format` field) is accepted on import and wrapped
 | `players` | `PlayerState[]` |
 | `cells` | `RuntimeCellState[]` — control, ships, tokens, marker refs |
 | `eventLog` | Resolved/historical `GameEvent[]` |
-| `pendingEvents` | Placeholder queue for Events phase |
+| `pendingEvents` | Legacy placeholder; use `turnEvent` |
+| `turnEvent` | `{ eventId, turnNumber, resolvedAt? }` — global event for current turn |
+| `productionTokensSpentThisTurn` | Per-player production token spend (event «Всё для фронта») |
+| `overtimeRegionByPlayer` | Region id used for overtime production this turn |
 | `actionMarkers` | Planning/Actions markers (max **6 per player**, **1 per cell**) |
 | `productionMarkers` | 1 per **region** per player (1 per hex max); applies to whole region |
 
@@ -94,6 +97,8 @@ Extends `CellState` with optional refs:
 ## Validation limits
 
 - `MAX_ACTION_MARKERS_PER_PLAYER = 6` (may change in future rules revision)
-- Production markers: **at most one per controlled region** per player (same as region count limit)
+- Production markers: **at most one per valid controlled region** per player (region ≥ 3 cells).
+  `maxProductionMarkersForPlayer` gives 1 base marker, 2 with 3 controlled regions of ≥ 4 cells,
+  and 3 with 5 such regions.
 - One action marker and one production marker per hex
 - All game cells must exist on `map`

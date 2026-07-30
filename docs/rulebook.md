@@ -1,57 +1,111 @@
-# Galaxy Andromeda — Rulebook (stub)
+# Galaxy Andromeda — Rulebook
 
-Structured from PDF. Full text to be expanded in `agent/docs-data` worktree.
+Structured reference for `@galaxy/rules` and UI. See also `packages/rules/data/ships.yaml` and [ADR 004](./decisions/004-turn-events-victory-supply-combat.md).
 
 ## TOC
 
-1. [Victory conditions](#victory-conditions)
+1. [Victory and defeat](#victory-and-defeat)
 2. [Map and control](#map-and-control)
-3. [Ships](#ships)
-4. [Combat and bombardment](#combat)
-5. [Production](#production)
-6. [Turn order](#turn-order)
+3. [Supply chains](#supply-chains)
+4. [Ships](#ships)
+5. [Combat and bombardment](#combat-and-bombardment)
+6. [Production](#production)
+7. [Turn order and phases](#turn-order-and-phases)
+8. [Event cards](#event-cards)
 
-## Victory conditions
+## Victory and defeat
 
-1. Control 4 regions of 7+ cells each
-2. Control majority of Power Centers
-3. Last player on map
+**Победа** (любое из условий):
 
-Defeat: lose all Power Center cells.
+1. **4 региона по 7+ клеток** — связные контролируемые территории игрока, каждая размером ≥ 7.
+2. **Большинство Power Center** — контроль более половины всех энергоцентров на карте.
+3. **Последний на карте** — единственный не выбывший игрок с кораблями или контролем.
+
+**Поражение:** игрок теряет **все** клетки Power Center → `eliminated`, исключается из очереди хода.
+
+Проверка выполняется после смены контроля, боя и завершения фазы производства.
 
 ## Map and control
 
-- Hex grid, face-adjacent only
-- Regions = connected controlled cells
-- Resources: Credits (yellow tokens 1–9), Production (orange tokens 1–9)
-- Power Center = small yellow dot marker (separate from credit tokens)
-- Supply chains link regions for production
+- Гексовая сетка, соседство только по граням (face-adjacent).
+- **Регион** = связная компонента контролируемых клеток одного игрока.
+- **Ресурсы:** Credits (жёлтые фишки 1–9), Production (оранжевые 1–9).
+- **Power Center** — отдельный маркер на клетке (не путать с credit-токеном).
+
+## Supply chains
+
+**Цепочка снабжения** — связная компонента face-adjacent **контролируемых** клеток игрока. Несколько регионов в одной компоненте образуют одну цепочку.
+
+При **производстве** фишки оплаты можно брать с **любой** клетки той же цепочки, что и регион маркера (не только из региона маркера). Корабли размещаются только в регионе маркера.
 
 ## Ships
 
-See `packages/rules/data/ships.yaml` for stats.
+See `packages/rules/data/ships.yaml`.
 
 Types: destroyer, cruiser, battleship, shield, hyper, supply.
 
+**Fleet limits (per player):** destroyer 16, supply 10, cruiser 12, battleship 6, shield 4, hyper 2.
+
 ## Combat
 
-Round: priority skip → dice → winner → destruction by priority tiers.
+**Раунд:** priority skip (по **типу** корабля, один skip на тип — все экземпляры на гексе) → кубики (+ support) → победитель раунда → щиты → **ручной выбор уничтожения** победителем (или автоматическое полное уничтожение, если урон покрывает весь флот проигравшего).
+
+**Priority skip:** объявляется до броска, без оплаты фишками. Пропущенный тип уничтожается **дороже на +1** к `destroyCost` (линкор 9→10) и уходит в конец своего tier. Атакующий и защитник могут объявить skip для своих типов.
+
+**Поддержка третьей стороны:** игрок, не являющийся attacker или defender, но имеющий корабли с `supportDice` в `fireRange` от клетки боя, может в подготовке направить все такие корабли атакующему или защитнику. Поддерживающий не объявляет priority skip и не подтверждает готовность; без доступных кораблей он видит только уведомление о предстоящем бое.
+
+**Уничтожение:** победитель раунда выбирает корабли проигравшего в рамках бюджета урона; доступны только цели с соблюдением `destructionPriority` (кроме события «Хаос битвы»). Корабли первого доступного tier подсвечиваются как «сразу уничтожаемые».
+
+**Очки уничтожения:** после бросков сравниваются суммы кубиков сторон; победитель — сторона с большей суммой. Проигравший получает **разницу** между суммами (|атакующий − защитник|), а не полную сумму победителя. Пример: атакующий 15, защитник 7 → **8** очков уничтожения; щит на клетке поглощает 4 → остаётся **4** на уничтожение. Неиспользованные очки сгорают в конце раунда.
+
+**Выбор уничтожения:** победитель раунда вручную выбирает корабли проигравшего в рамках бюджета и приоритета; интерфейс не даёт выбрать корабль, если его цена уже не помещается в оставшийся бюджет. Если бюджет меньше `destroyCost` каждого доступного корабля (включая надбавку priority skip), раунд считается ничьёй без уничтожения и сразу переходит к решению продолжить бой или отступить.
+
+**Мультираундовый бой:** после раунда, если на гексе остаются вражеские корабли, сначала атакующий, затем защитник выбирают **продолжить** или **отступить**; следующий раунд начинается только после двух решений «продолжить». При отступлении игрок выбирает любую соседнюю клетку без вражеских кораблей; отступление запрещено событием «Стоять насмерть!». После захвата клетки атакующим маркер действия защитника на ней снимается. На одном гексе могут быть 3+ игрока — защитники определяются по всем чужим кораблям на клетке.
+
+**Bombardment (обстрел):** крейсер, линкор, Г.О. — атака по гексу в `fireRange` без входа. Г.О.: дальность **2–3** (не соседняя). За один маркер можно обстрелять **несколько** клеток (очередь prep). Подготовка — только атакующий; защитник **не бросает кубики**. Очки уничтожения = **сумма броска обстрела**; щиты работают; клетка **не захватывается**. Движение в contested hex: по-прежнему **одна** клетка боя на маркер.
 
 ## Production
 
-Region size sets **minimum** cell count per ship class (see `ships.yaml` → `productionRegionSize[0]`; larger regions are fine). Face-up tokens in the marker's controlled region pay for builds; spent tokens flip face-down (server auto-allocates).
+- Размер региона задаёт **минимум** клеток для класса корабля (`ships.yaml`).
+- Оплата face-up фишками из цепочки снабжения; потраченные переворачиваются рубашкой вверх.
+- Регион с доступным производством и перевёрнутыми ресурсами в его цепочке снабжения: **Recharge** или **Build** — не оба за один ход маркера. Recharge переворачивает лицом вверх все перевёрнутые фишки ресурсов цепочки: Credits и Production.
+- Batch build: несколько кораблей, размещение на любых гексах региона.
 
-When the region has **both** face-up and face-down **production** tokens, resolving the marker is either **Recharge** (flip face-down production tokens face-up) **or** **Build** (batch ship production) — not both in the same marker turn.
+**Маркеры:** action — до 6, 1 на гекс. Production marker ставится в один valid region
+(≥ 3 клеток, destroyer band), по одному на регион. Первый маркер базовый; второй доступен
+при 3 отдельных контролируемых регионах по ≥ 4 клетки, третий — при 5 таких регионах.
 
-Batch build: choose how many ships of each class, place each ship on any hex in the region (capacity limits apply), one marker per turn.
+## Turn order and phases
 
-### Planning markers
+**Фазы:** Events → Planning → Actions → Production.
 
-- **Action markers:** up to 6 per player, 1 per hex; used in Actions phase.
-- **Production markers:** **1 per controlled region** (place on any hex of that region); marks where you will build in Production phase. Region size determines ship class limits.
+В Actions/Production порядок хода: **меньше регионов — раньше**.
 
-## Turn order
+Игрок без доступного действия в Planning, Actions или Production автоматически пропускается. В
+Actions/Production доступным действием считается использование или снятие собственного маркера;
+в Planning — постановка или снятие маркера. Игрок с неразрешённым маркером производства не может
+передать ход: он обязан построить, перезарядить ресурсы или снять этот маркер.
 
-Phases: Events → Planning → Actions → Production.
+В начале фазы **События** вытягивается одна карта на ход (глобально для всех). Немедленные эффекты применяются сразу; модификаторы действуют до конца хода.
 
-Fewer regions acts first in Actions/Production.
+## Event cards
+
+| ID | Название | Эффект |
+|----|----------|--------|
+| `magnetic-storm` | Магнитная буря | Дальность хода −1 (мин. 1) |
+| `empty-void` | Среди звёзд лишь пустота | Без эффекта |
+| `stand-to-death` | «Стоять насмерть!» | Нельзя отступать из боя |
+| `saboteurs-activation` | Диверсанты | Все фишки в контролируемых регионах — рубашкой вверх |
+| `production-accident` | Авария на производстве | Нельзя строить supply |
+| `ammo-detonation` | Детонация склада | Нельзя строить destroyer/cruiser/battleship |
+| `fair-fight` | Честный бой | Все боевые кубики = 3 |
+| `peoples-donation` | Народное пожертвование | Все фишки лицом вверх |
+| `mandatory-overtime` | Сверхурочные | Любое число production-фишек в одном регионе (≤ клеток региона) |
+| `hyper-gap` | Просвет в гиперпространстве | Ход +1; Г.О. fireRange = 4 |
+| `all-for-front` | «Всё для фронта» | +3 production-фишки на игрока (на пустые контролируемые клетки) |
+| `shadow-economy` | Теневая экономика | Номинал фишки +2 при оплате |
+| `hold-formation` | «Держать строй» | destroyCost +2 |
+| `combat-chaos` | Хаос битвы | Приоритет уничтожения отключён |
+| `local-self-defense` | Местная самооборона | Запрет **входа** на клетки с фишками / Power Center |
+
+Колода из 15 карт; порядок вытягивания детерминирован по номеру хода (для тестов и реплеев).

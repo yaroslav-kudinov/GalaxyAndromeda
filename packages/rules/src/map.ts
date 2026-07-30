@@ -51,7 +51,7 @@ export function getGhostSlots(map: MapDefinition): HexCoord[] {
   return ghosts
 }
 
-export { validateMapDefinition, normalizeMapDefinition, getCellResourceToken, setCellResourceToken, canAddShipToCell, countCellShips, extractCellContent, applyCellContent } from './map-editor.js'
+export { validateMapDefinition, normalizeMapDefinition, getCellResourceToken, setCellResourceToken, canAddShipToCell, countCellShips, extractCellContent, applyCellContent, inferMapPlayerCount, resolveMapPlayerCount, syncCellControlWithShips, inferCellControlFromShips } from './map-editor.js'
 export type { MapCellContent } from './map-editor.js'
 export {
   DEFAULT_SYMMETRY_SETTINGS,

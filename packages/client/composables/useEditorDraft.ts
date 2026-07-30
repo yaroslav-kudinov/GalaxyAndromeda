@@ -1,4 +1,4 @@
-import type { MapDefinition } from '@galaxy/rules'
+import type { MapDefinition, GameSnapshot } from '@galaxy/rules'
 import { galaxySaveFromMap, normalizeMapDefinition, parseGalaxySave, type GalaxySaveFile } from '@galaxy/rules'
 
 const DRAFT_STORAGE_KEY = 'galaxy-editor-draft'
@@ -8,11 +8,17 @@ export interface EditorDraft {
   selectedKey: string | null
 }
 
-export function persistEditorDraft(map: MapDefinition, selectedKey: string | null): void {
+export function persistEditorDraft(
+  map: MapDefinition,
+  selectedKey: string | null,
+  game?: GameSnapshot | null,
+): void {
   if (!import.meta.client) return
   const normalized = normalizeMapDefinition(map)
+  const save = galaxySaveFromMap(normalized)
+  if (game) save.game = JSON.parse(JSON.stringify(game)) as GameSnapshot
   const draft: EditorDraft = {
-    save: galaxySaveFromMap(normalized),
+    save,
     selectedKey,
   }
   localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(draft))
@@ -34,12 +40,13 @@ export function loadEditorDraft(): EditorDraft | null {
 export function useEditorDraft(
   map: Ref<MapDefinition>,
   selectedKey: Ref<string | null>,
+  game: Ref<GameSnapshot | null>,
   onRestore: (draft: EditorDraft) => void,
 ) {
   let debounceTimer: ReturnType<typeof setTimeout> | undefined
 
   function persistNow() {
-    persistEditorDraft(map.value, selectedKey.value)
+    persistEditorDraft(map.value, selectedKey.value, game.value)
   }
 
   function schedulePersist() {

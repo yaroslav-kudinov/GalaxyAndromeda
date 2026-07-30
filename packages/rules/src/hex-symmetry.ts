@@ -2,7 +2,7 @@ import type { HexCoord } from './types.js'
 import { hexKey } from './types.js'
 import type { MapCellContent } from './map-editor.js'
 
-export type SymmetryPlayerCount = 2 | 3 | 6
+export type SymmetryPlayerCount = 2 | 3 | 4 | 6
 export type SymmetryAxisKind = 'line' | 'edge'
 
 export interface SymmetrySettings {
@@ -88,6 +88,16 @@ export function getSymmetryOrbit(coord: HexCoord, settings: Pick<SymmetrySetting
       rotateHex(coord, 4),
     ])
   }
+  if (settings.playerCount === 4) {
+    const axis = reflectionAxisSteps(settings)
+    const rotated = rotateHex(coord, 3)
+    return dedupeCoords([
+      coord,
+      reflectHex(coord, axis),
+      rotated,
+      reflectHex(rotated, axis),
+    ])
+  }
   return dedupeCoords(Array.from({ length: 6 }, (_, i) => rotateHex(coord, i)))
 }
 
@@ -114,6 +124,9 @@ export function remapPlayerSlot(
   }
   if (playerCount === 3) {
     return ((player - 1 + stepIndex) % 3) + 1
+  }
+  if (playerCount === 4) {
+    return ((player - 1 + stepIndex) % 4) + 1
   }
   return ((player - 1 + stepIndex) % 6) + 1
 }
@@ -163,6 +176,11 @@ export const SYMMETRY_PLAYER_OPTIONS: {
     count: 3,
     label: '3 игрока',
     hint: 'Поворот 120° вокруг (0,0): три копии, слоты 1→2→3',
+  },
+  {
+    count: 4,
+    label: '4 игрока',
+    hint: 'Поворот 180° + отражение: четыре копии, слоты 1→2→3→4',
   },
   {
     count: 6,

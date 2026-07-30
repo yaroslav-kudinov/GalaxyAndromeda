@@ -1,17 +1,76 @@
-import type { GameObservation, MapDefinition } from '@galaxy/rules'
+import type { GameObservation, GalaxySaveFile, MapDefinition } from '@galaxy/rules'
+import { debugLog } from './useDebugLog'
 
 const API_BASE = '/api'
 
-async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
-    headers: { 'Content-Type': 'application/json', ...init?.headers },
-    ...init,
-  })
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({}))
-    throw new Error((body as { error?: string }).error ?? `HTTP ${res.status}`)
+export class GameApiError extends Error {
+  availablePlayerIds?: string[]
+  status: number
+
+  constructor(message: string, status: number, availablePlayerIds?: string[]) {
+    super(message)
+    this.name = 'GameApiError'
+    this.status = status
+    this.availablePlayerIds = availablePlayerIds
   }
-  return res.json() as Promise<T>
+}
+
+async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
+  const { body, headers, method: requestedMethod, ...requestInit } = init ?? {}
+  // Тело запроса всегда означает мутацию: не позволяем случайному GET потерять action payload.
+  const method = body != null ? 'POST' : requestedMethod ?? 'GET'
+  const startedAt = performance.now()
+  debugLog('api.request', { method, path })
+  let res: Response
+  try {
+    res = await fetch(`${API_BASE}${path}`, {
+      ...requestInit,
+      body,
+      method,
+      // 301/302/303 могут превратить POST в GET; пусть ошибка прокси останется видимой.
+      redirect: 'error',
+      headers: { 'Content-Type': 'application/json', ...headers },
+    })
+  } catch (error) {
+    debugLog('api.network-error', {
+      method,
+      path,
+      durationMs: Math.round(performance.now() - startedAt),
+      error: error instanceof Error ? error.message : String(error),
+    })
+    throw error
+  }
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({})) as {
+      error?: string
+      message?: string
+      availablePlayerIds?: string[]
+    }
+    debugLog('api.error', {
+      method,
+      path,
+      status: res.status,
+      durationMs: Math.round(performance.now() - startedAt),
+      error: body.message ?? body.error,
+    })
+    throw new GameApiError(
+      body.message ?? body.error ?? `HTTP ${res.status}`,
+      res.status,
+      body.availablePlayerIds,
+    )
+  }
+  const response = await res.json() as T
+  const observation = response as Partial<GameObservation>
+  const observationRevision = (observation.mechanics as unknown as { observationRevision?: number } | undefined)
+    ?.observationRevision
+  debugLog('api.response', {
+    method,
+    path,
+    status: res.status,
+    durationMs: Math.round(performance.now() - startedAt),
+    observationRevision,
+  })
+  return response
 }
 
 export interface RoomCreated {
@@ -25,11 +84,40 @@ export interface RoomBootstrap {
   map: MapDefinition
   maxPlayers: number
   playerCount: number
+  joinedPlayerIds: string[]
+  availablePlayerIds?: string[]
+  players: { id: string; name: string; color: string; joined?: boolean }[]
 }
 
 export interface JoinResult {
   playerId: string
   code: string
+}
+
+export interface LobbyPlayerEntry {
+  id: string
+  name: string
+  color: string
+  joined: boolean
+  active: boolean
+}
+
+export interface LobbyListEntry {
+  roomId: string
+  code: string
+  mapId: string
+  mapName: string
+  maxPlayers: number
+  playerCount: number
+  phase: string
+  turnNumber: number
+  activePlayerId: string
+  players: LobbyPlayerEntry[]
+}
+
+export interface LobbiesResponse {
+  lobbies: LobbyListEntry[]
+  presenceTtlMs: number
 }
 
 export async function checkServerHealth(): Promise<boolean> {
@@ -48,11 +136,49 @@ export async function createRoom(map: MapDefinition, maxPlayers = 6): Promise<Ro
   })
 }
 
-export async function joinRoom(roomId: string, playerName: string): Promise<JoinResult> {
+export async function createRoomFromSave(save: GalaxySaveFile, maxPlayers = 6): Promise<RoomCreated> {
+  return apiFetch<RoomCreated>('/rooms', {
+    method: 'POST',
+    body: JSON.stringify({ save, maxPlayers }),
+  })
+}
+
+export async function joinRoom(
+  roomId: string,
+  playerName: string,
+  preferredPlayerId?: string,
+): Promise<JoinResult> {
   return apiFetch<JoinResult>(`/rooms/${roomId}/join`, {
     method: 'POST',
-    body: JSON.stringify({ playerName }),
+    body: JSON.stringify({ playerName, preferredPlayerId }),
   })
+}
+
+export async function rejoinRoom(
+  roomId: string,
+  playerId: string,
+  playerName?: string,
+  preferredPlayerId?: string,
+): Promise<JoinResult> {
+  return apiFetch<JoinResult>(`/rooms/${roomId}/rejoin`, {
+    method: 'POST',
+    body: JSON.stringify({ playerId, playerName, preferredPlayerId }),
+  })
+}
+
+export async function sendPresence(
+  roomId: string,
+  playerId: string,
+  playerName: string,
+): Promise<void> {
+  await apiFetch<{ ok: boolean }>(`/rooms/${roomId}/presence`, {
+    method: 'POST',
+    body: JSON.stringify({ playerId, playerName }),
+  })
+}
+
+export async function fetchLobbies(): Promise<LobbiesResponse> {
+  return apiFetch<LobbiesResponse>('/lobbies')
 }
 
 export async function fetchRoomBootstrap(roomId: string): Promise<RoomBootstrap> {
@@ -75,4 +201,13 @@ export async function submitGameAction(
     method: 'POST',
     body: JSON.stringify({ playerId, action: { actionId, params } }),
   })
+}
+
+export async function updateCombatPrepAction(
+  roomId: string,
+  playerId: string,
+  ready: boolean,
+  prioritySkips?: { shipType: import('@galaxy/rules').ShipType }[],
+): Promise<GameObservation> {
+  return submitGameAction(roomId, playerId, 'update-combat-prep', { ready, prioritySkips })
 }

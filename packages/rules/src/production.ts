@@ -1,11 +1,24 @@
-import { MAX_SHIPS_PER_CELL, MAX_SHIPS_PER_CELL_PER_PLAYER, SHIP_LABELS } from './constants.js'
+import {
+  MAX_FLEET_SIZE_PER_PLAYER,
+  MAX_SHIPS_PER_CELL,
+  MAX_SHIPS_PER_CELL_PER_PLAYER,
+  SHIP_LABELS,
+} from './constants.js'
 import { trimGameEventLog } from './event-log.js'
+import {
+  getEffectiveTokenValue,
+  isShipTypeBuildBlocked,
+  recordProductionTokensSpent,
+  validateOvertimeProductionSpend,
+  validateProductionTokenSpendLimit,
+} from './events.js'
 import {
   markProductionMarkerResolvedThisTurn,
   PRODUCTION_MARKER_ALREADY_RESOLVED_MSG,
   removeProductionMarker,
 } from './markers.js'
 import { buildSpatialSummary } from './observation/ascii-map.js'
+import { getSupplyChainHexSetForRegion } from './supply-chains.js'
 import type { GameSnapshot, ProductionMarker, RuntimeCellState } from './save-file.js'
 import { gameStateFromSnapshot } from './save-file.js'
 import {
@@ -14,6 +27,7 @@ import {
   getShipProductionRegionMin,
   SHIP_PRODUCTION_COST,
 } from './ships.js'
+import { applyVictoryAndDefeatChecks } from './victory.js'
 import type { HexCoord, ResourceTokenDef, ShipType } from './types.js'
 import { hexKey } from './types.js'
 
@@ -48,11 +62,15 @@ export interface BuildableShipOption {
   cost: { credits: number; production: number }
   maxCount: number
   disabledReason?: string
+  fleetCount: number
+  fleetMax: number
+  fleetRemaining: number
 }
 
 export interface RegionResourceSummary {
   faceUpCredits: number
   faceUpProduction: number
+  faceDownCreditsCount: number
   faceDownProductionCount: number
 }
 
@@ -85,9 +103,14 @@ export function getRegionForMarker(
 ): { id: string; size: number; hexes: string[] } | null {
   const state = gameStateFromSnapshot(game, mapId)
   const summary = buildSpatialSummary(state)
-  const region = summary.regions.find(
-    (r) => r.id === marker.targetRegionId && r.ownerId === marker.ownerId,
-  )
+  const markerKey = hexKey(marker.coord.q, marker.coord.r)
+  const region =
+    summary.regions.find(
+      (r) => r.id === marker.targetRegionId && r.ownerId === marker.ownerId,
+    )
+    ?? summary.regions.find(
+      (r) => r.ownerId === marker.ownerId && r.hexes.includes(markerKey),
+    )
   if (!region) return null
   return { id: region.id, size: region.size, hexes: region.hexes }
 }
@@ -105,16 +128,20 @@ export function parseTokenSpendKey(key: string): { coord: HexCoord; tokenIndex: 
   }
 }
 
-function iterRegionCells(
+function iterSupplyChainCells(
   game: GameSnapshot,
-  region: { hexes: string[] },
-  playerId: string,
+  mapId: string,
+  marker: ProductionMarker,
 ): RuntimeCellState[] {
+  const region = getRegionForMarker(game, mapId, marker)
+  if (!region) return []
+  const chainHexes = getSupplyChainHexSetForRegion(game, mapId, marker.ownerId, region.id)
+  const hexSet = chainHexes ?? new Set(region.hexes)
   const cells: RuntimeCellState[] = []
-  for (const hex of region.hexes) {
+  for (const hex of hexSet) {
     const [q, r] = hex.split(',').map(Number)
     const cell = cellAt(game, { q, r })
-    if (cell && cell.controlOwnerId === playerId) cells.push(cell)
+    if (cell && cell.controlOwnerId === marker.ownerId) cells.push(cell)
   }
   return cells
 }
@@ -126,25 +153,38 @@ export function getRegionResourceSummary(
 ): RegionResourceSummary {
   const region = getRegionForMarker(game, mapId, marker)
   if (!region) {
-    return { faceUpCredits: 0, faceUpProduction: 0, faceDownProductionCount: 0 }
+    return {
+      faceUpCredits: 0,
+      faceUpProduction: 0,
+      faceDownCreditsCount: 0,
+      faceDownProductionCount: 0,
+    }
   }
 
   let faceUpCredits = 0
   let faceUpProduction = 0
+  let faceDownCreditsCount = 0
   let faceDownProductionCount = 0
 
-  for (const cell of iterRegionCells(game, region, marker.ownerId)) {
+  for (const cell of iterSupplyChainCells(game, mapId, marker)) {
     for (const token of cell.resourceTokens) {
-      if (token.type === 'credits' && token.faceUp !== false) {
-        faceUpCredits += token.value
+      const effective = getEffectiveTokenValue(game, token.value)
+      if (token.type === 'credits') {
+        if (token.faceUp === false) faceDownCreditsCount += 1
+        else faceUpCredits += effective
       } else if (token.type === 'production') {
         if (token.faceUp === false) faceDownProductionCount += 1
-        else faceUpProduction += token.value
+        else faceUpProduction += effective
       }
     }
   }
 
-  return { faceUpCredits, faceUpProduction, faceDownProductionCount }
+  return {
+    faceUpCredits,
+    faceUpProduction,
+    faceDownCreditsCount,
+    faceDownProductionCount,
+  }
 }
 
 export function needsProductionTokenChoice(
@@ -153,7 +193,10 @@ export function needsProductionTokenChoice(
   marker: ProductionMarker,
 ): boolean {
   const summary = getRegionResourceSummary(game, mapId, marker)
-  return summary.faceUpProduction > 0 && summary.faceDownProductionCount > 0
+  return (
+    summary.faceUpProduction > 0
+    && (summary.faceDownCreditsCount > 0 || summary.faceDownProductionCount > 0)
+  )
 }
 
 export function getRegionTokensForMarker(
@@ -165,7 +208,7 @@ export function getRegionTokensForMarker(
   if (!region) return []
 
   const options: RegionTokenOption[] = []
-  for (const cell of iterRegionCells(game, region, marker.ownerId)) {
+  for (const cell of iterSupplyChainCells(game, mapId, marker)) {
     cell.resourceTokens.forEach((token, tokenIndex) => {
       if (token.faceUp === false) return
       options.push({
@@ -183,11 +226,47 @@ function countPlayerShipsAt(cell: RuntimeCellState, playerId: string): number {
   return cell.ships.filter((s) => s.ownerId === playerId).length
 }
 
+/** Count player's ships on the map, optionally filtered by ship type */
+export function countShipsForPlayer(
+  game: GameSnapshot,
+  ownerId: string,
+  type?: ShipType,
+): number {
+  let total = 0
+  for (const cell of game.cells) {
+    for (const ship of cell.ships) {
+      if (ship.ownerId !== ownerId) continue
+      if (type != null && ship.type !== type) continue
+      total += 1
+    }
+  }
+  return total
+}
+
+export function getFleetLimitWarnings(game: GameSnapshot): string[] {
+  const warnings: string[] = []
+  const players = new Set(game.players.map((p) => p.id))
+
+  for (const playerId of players) {
+    for (const type of Object.keys(MAX_FLEET_SIZE_PER_PLAYER) as ShipType[]) {
+      const count = countShipsForPlayer(game, playerId, type)
+      const max = MAX_FLEET_SIZE_PER_PLAYER[type]
+      if (count > max) {
+        warnings.push(
+          `Игрок ${playerId}: ${count} ${SHIP_LABELS[type]} на карте (лимит ${max})`,
+        )
+      }
+    }
+  }
+
+  return warnings
+}
+
 function countIncomingPlacements(
   placements: ShipPlacement[],
   destKey: string,
-  playerId: string,
-  game: GameSnapshot,
+  _playerId: string,
+  _game: GameSnapshot,
 ): { player: number; total: number } {
   let player = 0
   let total = 0
@@ -209,7 +288,7 @@ export function regionPlacementCapacity(
   if (!region) return 0
 
   let total = 0
-  for (const cell of iterRegionCells(game, region, marker.ownerId)) {
+  for (const cell of iterSupplyChainCells(game, mapId, marker)) {
     const key = hexKey(cell.coord.q, cell.coord.r)
     const incoming = countIncomingPlacements(pendingPlacements, key, marker.ownerId, game)
     const playerShips = countPlayerShipsAt(cell, marker.ownerId) + incoming.player
@@ -236,11 +315,18 @@ export function getBuildableShipsForMarker(
 
   return (Object.keys(SHIP_PRODUCTION_COST) as ShipType[]).map((type) => {
     const cost = getShipProductionCost(type)
+    const fleetMax = MAX_FLEET_SIZE_PER_PLAYER[type]
+    const fleetCount = countShipsForPlayer(game, playerId, type)
+    const fleetRemaining = Math.max(0, fleetMax - fleetCount)
     let disabledReason: string | undefined
     let maxCount = 0
 
     if (!region) {
       disabledReason = 'Регион маркера не найден'
+    } else if (isShipTypeBuildBlocked(game, type)) {
+      disabledReason = 'Событие хода запрещает постройку этого класса'
+    } else if (fleetRemaining < 1) {
+      disabledReason = `Лимит флота: ${fleetMax} ${SHIP_LABELS[type]} (на карте ${fleetCount})`
     } else if (!canBuildShipInRegionSize(type, region.size)) {
       const min = getShipProductionRegionMin(type)
       disabledReason = `Нужен регион от ${min} клеток (сейчас ${region.size})`
@@ -255,14 +341,14 @@ export function getBuildableShipsForMarker(
     } else {
       const byCredits = Math.floor(summary.faceUpCredits / cost.credits)
       const byProduction = Math.floor(summary.faceUpProduction / cost.production)
-      maxCount = Math.min(byCredits, byProduction, placementCap)
+      maxCount = Math.min(byCredits, byProduction, placementCap, fleetRemaining)
       if (maxCount < 1) {
         disabledReason = 'Недостаточно ресурсов или места для постройки'
         maxCount = 0
       }
     }
 
-    return { type, cost, maxCount, disabledReason }
+    return { type, cost, maxCount, disabledReason, fleetCount, fleetMax, fleetRemaining }
   })
 }
 
@@ -306,10 +392,12 @@ export function validateTokenPayment(
   const region = getRegionForMarker(game, mapId, marker)
   if (!region) return ['Регион маркера не найден']
 
-  const regionHexSet = new Set(region.hexes)
+  const chainHexSet =
+    getSupplyChainHexSetForRegion(game, mapId, playerId, region.id) ?? new Set(region.hexes)
   const seen = new Set<string>()
   let credits = 0
   let production = 0
+  let productionTokenCount = 0
 
   for (const ref of spentTokens) {
     const key = tokenSpendKey(ref.coord, ref.tokenIndex)
@@ -320,8 +408,8 @@ export function validateTokenPayment(
     seen.add(key)
 
     const hex = hexKey(ref.coord.q, ref.coord.r)
-    if (!regionHexSet.has(hex)) {
-      errors.push(`Фишка вне региона маркера (${ref.coord.q}, ${ref.coord.r})`)
+    if (!chainHexSet.has(hex)) {
+      errors.push(`Фишка вне цепочки снабжения (${ref.coord.q}, ${ref.coord.r})`)
       continue
     }
 
@@ -337,9 +425,25 @@ export function validateTokenPayment(
       continue
     }
 
-    if (token.type === 'credits') credits += token.value
-    else production += token.value
+    if (token.type === 'credits') credits += getEffectiveTokenValue(game, token.value)
+    else {
+      production += getEffectiveTokenValue(game, token.value)
+      productionTokenCount += 1
+    }
   }
+
+  errors.push(
+    ...validateProductionTokenSpendLimit(game, playerId, productionTokenCount),
+  )
+  errors.push(
+    ...validateOvertimeProductionSpend(
+      game,
+      playerId,
+      region.id,
+      region.size,
+      productionTokenCount,
+    ),
+  )
 
   if (credits < creditsNeeded) {
     errors.push(`Не хватает кредитов: ${credits}/${creditsNeeded}`)
@@ -384,12 +488,12 @@ export function autoAllocateTokens(
   for (const t of creditTokens) {
     if (credits >= creditsNeeded) break
     selected.push({ coord: t.coord, tokenIndex: t.tokenIndex })
-    credits += t.token.value
+    credits += getEffectiveTokenValue(game, t.token.value)
   }
   for (const t of productionTokens) {
     if (production >= productionNeeded) break
     selected.push({ coord: t.coord, tokenIndex: t.tokenIndex })
-    production += t.token.value
+    production += getEffectiveTokenValue(game, t.token.value)
   }
 
   if (credits < creditsNeeded || production < productionNeeded) return null
@@ -406,7 +510,8 @@ export function validateShipPlacements(
   const region = getRegionForMarker(game, mapId, marker)
   if (!region) return ['Регион маркера не найден']
 
-  const regionHexSet = new Set(region.hexes)
+  const chainHexSet =
+    getSupplyChainHexSetForRegion(game, mapId, marker.ownerId, region.id) ?? new Set(region.hexes)
   const buildable = getBuildableShipsForMarker(game, mapId, marker.ownerId, marker.id)
   const countsByType = new Map<ShipType, number>()
 
@@ -418,6 +523,14 @@ export function validateShipPlacements(
     const option = buildable.find((o) => o.type === type)
     if (!option) {
       errors.push(`Неизвестный тип корабля: ${type}`)
+      continue
+    }
+    const fleetMax = MAX_FLEET_SIZE_PER_PLAYER[type]
+    const fleetCount = countShipsForPlayer(game, marker.ownerId, type)
+    if (fleetCount + count > fleetMax) {
+      errors.push(
+        `${SHIP_LABELS[type]}: лимит флота ${fleetMax} (на карте ${fleetCount}, в заявке ${count})`,
+      )
       continue
     }
     if (option.disabledReason) {
@@ -436,7 +549,7 @@ export function validateShipPlacements(
   const prior: ShipPlacement[] = []
   for (const ship of ships) {
     const hex = hexKey(ship.coord.q, ship.coord.r)
-    if (!regionHexSet.has(hex)) {
+    if (!chainHexSet.has(hex)) {
       errors.push(`Клетка (${ship.coord.q}, ${ship.coord.r}) вне региона маркера`)
       continue
     }
@@ -530,6 +643,13 @@ export function executeProductionBatch(
     if (token) token.faceUp = false
   }
 
+  const productionSpent = tokens.filter((ref) => {
+    const token = tokenAt(game, ref)
+    return token?.type === 'production'
+  }).length
+  const region = getRegionForMarker(game, mapId, marker)
+  recordProductionTokensSpent(game, playerId, productionSpent, region?.id)
+
   const labels: string[] = []
   for (const ship of plan.ships) {
     const destCell = cellAt(game, ship.coord)!
@@ -553,6 +673,7 @@ export function executeProductionBatch(
     timestamp: Date.now(),
   })
   trimGameEventLog(game)
+  applyVictoryAndDefeatChecks(game, mapId)
 
   return []
 }
@@ -571,8 +692,8 @@ export function validateProductionRecharge(
   if (!region) return ['Регион маркера не найден']
 
   const summary = getRegionResourceSummary(game, mapId, marker)
-  if (summary.faceDownProductionCount < 1) {
-    return ['В регионе нет перевёрнутых фишек производства']
+  if (summary.faceDownCreditsCount + summary.faceDownProductionCount < 1) {
+    return ['В цепочке снабжения нет перевёрнутых фишек']
   }
 
   return []
@@ -591,14 +712,15 @@ export function executeProductionRecharge(
   if (Array.isArray(pre)) return pre
   const { marker } = pre
 
-  const region = getRegionForMarker(game, mapId, marker)!
-  let flipped = 0
+  let flippedCredits = 0
+  let flippedProduction = 0
 
-  for (const cell of iterRegionCells(game, region, marker.ownerId)) {
+  for (const cell of iterSupplyChainCells(game, mapId, marker)) {
     for (const token of cell.resourceTokens) {
-      if (token.type === 'production' && token.faceUp === false) {
+      if (token.faceUp === false) {
         token.faceUp = true
-        flipped += 1
+        if (token.type === 'credits') flippedCredits += 1
+        else flippedProduction += 1
       }
     }
   }
@@ -611,7 +733,7 @@ export function executeProductionRecharge(
     turn: game.turnNumber,
     phase: game.phase,
     type: 'production',
-    message: `Перезарядка производства: ${flipped} фишек в регионе`,
+    message: `Перезарядка ресурсов: кредиты ${flippedCredits}, производство ${flippedProduction}`,
     timestamp: Date.now(),
   })
   trimGameEventLog(game)

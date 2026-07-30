@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import type { GalaxySaveFile, GameSnapshot, HexCoord, LegalAction, MapDefinition, ShipMovePlan } from '@galaxy/rules'
+import type { GalaxySaveFile, GameSnapshot, HexCoord, LegalAction, MapDefinition, ShipMovePlan, BombardmentPlan, CombatOptions, CombatResolutionResult } from '@galaxy/rules'
 import {
   createEmptyMap,
+  executeMarkerBombardment,
   executeMarkerMovement,
   executeProductionBatch,
   executeProductionRecharge,
@@ -9,6 +10,7 @@ import {
   gameSnapshotFromMap,
   gameSnapshotFromObservation,
   gameStateFromSnapshot,
+  resolveRegionIdForCell,
   hexKey,
   maxProductionMarkersForPlayer,
   normalizeMapDefinition,
@@ -20,36 +22,78 @@ import {
   canExecuteActionMarkerThisTurn,
   hasResolvedActionMarkerThisTurn,
   ACTION_MARKER_ALREADY_RESOLVED_MSG,
+  ACTION_MARKER_MUST_RESOLVE_BEFORE_ADVANCE_MSG,
   ACTION_MARKER_REMOVE_BLOCKED_MSG,
+  mustResolveActionMarkerBeforeAdvance,
   getLegalActionsForSnapshot,
+  applyGameActionOnSnapshot,
+  buildSpatialSummary,
+  getActiveEventObservation,
+  getTurnEventHistory,
   removeActionMarker,
   canRemoveActionMarkerThisTurn,
   canExecuteProductionMarkerThisTurn,
   canRemoveProductionMarkerThisTurn,
   hasResolvedProductionMarkerThisTurn,
+  mustResolveProductionMarkerBeforeAdvance,
   PRODUCTION_MARKER_ALREADY_RESOLVED_MSG,
+  PRODUCTION_MARKER_MUST_RESOLVE_BEFORE_ADVANCE_MSG,
   PRODUCTION_MARKER_REMOVE_BLOCKED_MSG,
   removeProductionMarker,
+  syncParticipatingPlayerIds,
+  ensureActivePlayerParticipating,
+  shouldConfirmPlanningPhaseAdvance,
+  hasUnplacedActionMarkerCapacity,
+  MAX_LOBBY_PLAYERS,
+  MAX_ACTION_MARKERS_PER_PLAYER,
+  buildCombatPreviewFromPending,
+  combatResolutionFingerprint,
+  getCombatRetreatDestinations,
 } from '@galaxy/rules'
-import { fetchObservation, fetchRoomBootstrap, submitGameAction } from '~/composables/useGameApi'
-import { gameSaveStorageKey, loadGameSession } from '~/composables/useGameSession'
-import { useMarkerMapPick } from '~/composables/useMarkerMapPick'
+import { fetchObservation, fetchRoomBootstrap, GameApiError, joinRoom, rejoinRoom, submitGameAction, updateCombatPrepAction } from '~/composables/useGameApi'
+import { gameSaveStorageKey, loadGameSessionForRoom, saveGameSession } from '~/composables/useGameSession'
+import { loadPlayerClaim, savePlayerClaim } from '~/composables/usePlayerClaim'
+import { bootstrapToLobbySlots, defaultSlotForRoom, roomHasFreeSlot } from '~/utils/lobby-slot'
+import { useGamePresence } from '~/composables/useGamePresence'
+import { usePlayerProfile } from '~/composables/usePlayerProfile'
+import { useObservationSync } from '~/composables/useObservationSync'
+import type { LobbyPlayerSlot } from '~/components/LobbyPlayerList.vue'
+import { useMarkerMapPick, type MarkerOrderConfirmResult } from '~/composables/useMarkerMapPick'
 import { useProductionShipPick } from '~/composables/useProductionShipPick'
 import { snapshotToBoardCells } from '~/utils/board-adapter'
 import {
   gameHelpForPhase,
-  markerKindForPhase,
-  markerKindLabel,
+  phaseGuidanceForTurn,
   type MarkerKind,
+  type PlanningSubStep,
 } from '~/utils/game-help'
 
 definePageMeta({ layout: 'immersive' })
 
-const session = loadGameSession()
-const playerId = ref(session?.playerId ?? 'player-1')
-
 const route = useRoute()
 const roomId = computed(() => route.params.roomId as string)
+
+const session = loadGameSessionForRoom(roomId.value)
+const playerId = ref(session?.playerId ?? 'player-1')
+const { nickname, hasNickname } = usePlayerProfile()
+
+const needsJoin = ref(false)
+const joinError = ref<string | null>(null)
+const joinBusy = ref(false)
+const selectedJoinSlot = ref<string | null>(null)
+const roomBootstrap = ref<Awaited<ReturnType<typeof fetchRoomBootstrap>> | null>(null)
+const inviteCopied = ref(false)
+
+let pollTimer: ReturnType<typeof setTimeout> | null = null
+let joinLobbyTimer: ReturnType<typeof setInterval> | null = null
+let pollingGeneration = 0
+/** Отменяет устаревшие ответы polling, если игрок уже применил своё действие */
+let observationEpoch = 0
+
+function bumpObservationEpoch(): void {
+  observationEpoch++
+  observationSync.expectNextRevision()
+}
 
 const saveFile = ref<GalaxySaveFile | null>(null)
 const selectedKey = ref<string | null>(null)
@@ -57,17 +101,57 @@ const panelCollapsed = ref(false)
 const legalActions = ref<LegalAction[]>([])
 const serverStatus = ref<'idle' | 'loading' | 'online' | 'offline'>('idle')
 const loadError = ref<string | null>(null)
+const participationHint = ref<string | null>(null)
+
+const observationSync = useObservationSync({
+  enabled: () =>
+    serverStatus.value === 'online'
+    && !needsJoin.value
+    && !roomId.value.startsWith('local-'),
+  fetchAndApply: async () => {
+    const epoch = observationEpoch
+    const obs = await fetchObservation(roomId.value, playerId.value)
+    if (epoch !== observationEpoch) return false
+    const applied = applyObservation(obs, undefined, 'resync')
+    if (applied) persistLocal()
+    return applied
+  },
+})
+const {
+  warningVisible: syncWarningVisible,
+  warningReason: syncWarningReason,
+  resyncing: syncResyncing,
+} = observationSync
+
+function reloadPage() {
+  if (import.meta.client) window.location.reload()
+}
+
+function actionErrorMessage(error: unknown, fallback: string): string {
+  if (error instanceof GameApiError && error.status === 400) {
+    void observationSync.resync('Сервер отклонил действие. Получаем актуальное состояние.')
+  }
+  return error instanceof Error ? error.message : fallback
+}
+
+const LOBBY_MAX_PLAYERS = MAX_LOBBY_PLAYERS
 const exportFileName = ref('')
 const markerHint = ref<string | null>(null)
 const phaseHint = ref<string | null>(null)
 const advancingPhase = ref(false)
-const markerMode = ref<MarkerKind>('action')
-const interactionMode = ref<'inspect' | 'markers'>('inspect')
-const showHelp = ref(false)
+const planningActionStepSkipped = ref(false)
+/** Ручной подшаг планирования; приоритет над авто-переходом к производству */
+const planningSubStepOverride = ref<PlanningSubStep | null>(null)
+const showHelp = ref(true)
 const markerActionOpen = ref(false)
 const markerActionSource = ref<HexCoord | null>(null)
 const markerActionHint = ref<string | null>(null)
 const markerActionBusy = ref(false)
+const battleModalOpen = ref(false)
+const battlePreviewSnapshot = ref<import('@galaxy/rules').CombatPreview | null>(null)
+const pendingOrderAfterBattle = ref<MarkerOrderConfirmResult | null>(null)
+const battleResolution = ref<CombatResolutionResult | null>(null)
+const battleResolving = ref(false)
 const productionModalOpen = ref(false)
 const productionMarkerSource = ref<HexCoord | null>(null)
 const productionMarkerId = ref<string | null>(null)
@@ -97,6 +181,12 @@ const markerMapPickActive = markerMapPick.active
 const markerMapPickBannerText = markerMapPick.bannerText
 const markerMapPickError = markerMapPick.error
 const markerMapPickPendingControl = markerMapPick.pendingControlChoice
+const markerMapPickCombatPreview = markerMapPick.combatPreview
+const markerMapPickRoundOneOdds = markerMapPick.roundOneOdds
+const markerMapPickOrderReady = markerMapPick.orderReady
+const markerMapPickHasPendingCombat = markerMapPick.hasPendingCombat
+const markerMapPickConfirmLabel = markerMapPick.confirmButtonLabel
+const markerMapPickPreviewMoves = markerMapPick.previewMoves
 const productionShipPickActive = productionShipPick.active
 const productionShipPickBannerText = productionShipPick.bannerText
 const productionShipPickError = productionShipPick.error
@@ -105,13 +195,44 @@ const boardCells = computed(() =>
 )
 
 const myPlayerName = computed(() => {
+  const fromProfile = nickname.value.trim()
+  if (fromProfile) return fromProfile
   const fromSession = session?.playerName
   if (fromSession) return fromSession
   const fromSnapshot = snapshot.value?.players.find((p) => p.id === playerId.value)?.name
   return fromSnapshot ?? playerId.value
 })
 
-const { toasts: statusToasts } = useGameStatusToasts(snapshot, playerId, myPlayerName)
+const presence = useGamePresence(
+  () => roomId.value,
+  () => playerId.value,
+  () => myPlayerName.value,
+  () => !needsJoin.value && !roomId.value.startsWith('local-') && serverStatus.value === 'online',
+)
+
+const joinLobbySlots = computed((): LobbyPlayerSlot[] => {
+  const bootstrap = roomBootstrap.value
+  if (!bootstrap) return []
+  return bootstrapToLobbySlots(bootstrap)
+})
+
+const joinRoomFull = computed(() => {
+  const bootstrap = roomBootstrap.value
+  if (!bootstrap) return false
+  return !roomHasFreeSlot(bootstrap)
+})
+
+function syncDefaultJoinSlot() {
+  const bootstrap = roomBootstrap.value
+  if (!bootstrap) return
+  selectedJoinSlot.value = defaultSlotForRoom(roomId.value, bootstrap)
+}
+
+watch(roomBootstrap, () => {
+  if (needsJoin.value) syncDefaultJoinSlot()
+})
+
+const { toasts: statusToasts, pushToast: pushStatusToast } = useGameStatusToasts(snapshot, playerId, myPlayerName)
 
 const activePlayerName = computed(() => {
   const id = snapshot.value?.activePlayerId
@@ -125,6 +246,22 @@ const activePlayerColor = computed(() => {
   return snapshot.value.players.find((p) => p.id === id)?.color ?? '#3B82F6'
 })
 
+const playerNameById = computed(() => {
+  const map: Record<string, string> = {}
+  for (const p of snapshot.value?.players ?? []) {
+    map[p.id] = p.name
+  }
+  return map
+})
+
+const territoryLabelPlayers = computed(() =>
+  (snapshot.value?.players ?? []).map((player, index) => ({
+    slot: index + 1,
+    name: player.name,
+    color: player.color,
+  })),
+)
+
 const phaseAdvanceBtnStyle = computed(() => ({
   '--player-color': activePlayerColor.value,
 }))
@@ -136,21 +273,224 @@ const isMyTurn = computed(
   () => snapshot.value?.activePlayerId === playerId.value,
 )
 
+const gameOverState = computed(() => snapshot.value?.gameOver ?? null)
+const gameOverWinnerName = computed(() => {
+  const go = gameOverState.value
+  if (!go) return null
+  return snapshot.value?.players.find((p) => p.id === go.winnerId)?.name ?? go.winnerId
+})
+
+const GAME_OVER_REASON_LABELS: Record<string, string> = {
+  four_regions: 'Контроль 4 регионов от 7 клеток',
+  power_centers: 'Большинство энергоцентров',
+  last_standing: 'Последний игрок на карте',
+}
+
+const gameOverReasonLabel = computed(() => {
+  const r = gameOverState.value?.reason
+  if (!r) return ''
+  return GAME_OVER_REASON_LABELS[r] ?? r
+})
+
+const pendingCombatState = computed(() => snapshot.value?.pendingCombat ?? null)
+const combatPrepState = computed(() => pendingCombatState.value?.prep ?? null)
+
+const combatPrepPreview = computed(() => {
+  if (!snapshot.value) return null
+  return buildCombatPreviewFromPending(snapshot.value)
+})
+
+/** Любая активная фаза pendingCombat (prep, destruction, continue) */
+const hasActivePendingCombat = computed(() => {
+  const p = pendingCombatState.value
+  if (!p) return false
+  return !!(p.prep || p.awaitingDestruction || p.awaitingContinue || p.roundState)
+})
+
+const combatPrepAttackerSkips = computed((): import('@galaxy/rules').ShipType[] => {
+  const skips = combatPrepState.value?.combatOptions?.attacker?.prioritySkips ?? []
+  return skips.map((s) => s.shipType)
+})
+
+const combatPrepDefenderSkips = computed((): import('@galaxy/rules').ShipType[] => {
+  const skips = combatPrepState.value?.combatOptions?.defender?.prioritySkips ?? []
+  return skips.map((s) => s.shipType)
+})
+
+const combatPrepSelfReady = computed(() => {
+  const prep = combatPrepState.value
+  if (!prep) return false
+  return prep.readyBy[playerId.value] === true
+})
+
+const combatPrepAttackerReady = computed(() => {
+  const prep = combatPrepState.value
+  const attId = pendingCombatState.value?.attackerId
+  if (!prep || !attId) return false
+  return prep.readyBy[attId] === true
+})
+
+const combatPrepDefenderReady = computed(() => {
+  const prep = combatPrepState.value
+  if (!prep) return false
+  return prep.readyBy[prep.defenderId] === true
+})
+
+const combatDecisionRole = computed<'attacker' | 'defender' | null>(() => {
+  const pending = pendingCombatState.value
+  if (!pending?.awaitingContinue) return null
+  if (pending.attackerId === playerId.value && pending.continueDecisions?.attacker == null) return 'attacker'
+  if (
+    pending.defenderIds.includes(playerId.value)
+    && pending.continueDecisions?.attacker === true
+    && pending.continueDecisions?.defender == null
+  ) return 'defender'
+  return null
+})
+
+const retreatDestinations = computed(() => {
+  if (!snapshot.value || !combatDecisionRole.value) return [] as HexCoord[]
+  return getCombatRetreatDestinations(snapshot.value, playerId.value)
+})
+
+watch(
+  pendingCombatState,
+  (pending, prev) => {
+    if (!pending) {
+      if (prev?.prep && battleModalOpen.value && !battleResolution.value) {
+        void resyncAfterCombatCountdown()
+      }
+      return
+    }
+
+    const needsModal =
+      pending.prep
+      || pending.awaitingDestruction
+      || (pending.awaitingContinue && pending.attackerId === playerId.value)
+
+    if (!needsModal || !snapshot.value) return
+
+    const preview = buildCombatPreviewFromPending(snapshot.value)
+    if (!preview) return
+
+    battlePreviewSnapshot.value = preview
+    battleModalOpen.value = true
+  },
+  { deep: true },
+)
+
+watch(
+  () => combatPrepState.value?.phase,
+  (phase, prev) => {
+    if (prev === 'countdown' && phase !== 'countdown') {
+      if (!battleResolution.value) {
+        void resyncAfterCombatCountdown()
+      }
+    }
+    if (prev === 'countdown' && phase === 'prep') {
+      battleResolution.value = null
+    }
+  },
+)
+
+const supplyChainHighlightKeys = computed((): string[] => {
+  if (!saveFile.value?.game || !saveFile.value?.map) return []
+  if (snapshot.value?.phase !== 'production') return []
+  const state = gameStateFromSnapshot(saveFile.value.game, saveFile.value.map.id)
+  const summary = buildSpatialSummary(state)
+  return summary.supplyChains
+    .filter((c) => c.playerId === playerId.value)
+    .flatMap((c) => c.path)
+})
+
+const myControlledKeys = computed((): string[] => {
+  if (!snapshot.value) return []
+  return snapshot.value.cells
+    .filter((cell) => cell.controlOwnerId === playerId.value)
+    .map((cell) => hexKey(cell.coord.q, cell.coord.r))
+})
+
+const planningSubStep = computed((): PlanningSubStep => {
+  if (snapshot.value?.phase !== 'planning' || !isMyTurn.value) return 'action-markers'
+  if (planningSubStepOverride.value) return planningSubStepOverride.value
+  if (planningActionStepSkipped.value) return 'production-markers'
+  if (!saveFile.value?.game) return 'action-markers'
+  if (!hasUnplacedActionMarkerCapacity(saveFile.value.game, playerId.value)) {
+    return 'production-markers'
+  }
+  return 'action-markers'
+})
+
 const effectiveMarkerKind = computed((): MarkerKind => {
   const phase = snapshot.value?.phase
   if (phase === 'production') return 'production'
   if (phase === 'actions' || phase === 'events') return 'action'
-  return markerMode.value
+  return planningSubStep.value === 'production-markers' ? 'production' : 'action'
 })
 
-const canPickMarkerKind = computed(() => snapshot.value?.phase === 'planning')
 const canPlaceMarkers = computed(
-  () => isMyTurn.value && snapshot.value?.phase !== 'events',
+  () => isMyTurn.value && snapshot.value?.phase === 'planning',
 )
+
+const showPlanningActionDoneBtn = computed(
+  () =>
+    canPlaceMarkers.value
+    && planningSubStep.value === 'action-markers'
+    && saveFile.value?.game
+    && (
+      hasUnplacedActionMarkerCapacity(saveFile.value.game, playerId.value)
+      || planningSubStepOverride.value === 'action-markers'
+    ),
+)
+
+const showPlanningBackToActionBtn = computed(
+  () =>
+    canPlaceMarkers.value
+    && planningSubStep.value === 'production-markers',
+)
+
+watch(
+  [() => snapshot.value?.phase, () => snapshot.value?.activePlayerId],
+  () => {
+    planningActionStepSkipped.value = false
+    planningSubStepOverride.value = null
+  },
+)
+
+function finishPlanningActionStep() {
+  planningActionStepSkipped.value = true
+  planningSubStepOverride.value = 'production-markers'
+  markerHint.value = null
+}
+
+function backToPlanningActionStep() {
+  planningSubStepOverride.value = 'action-markers'
+  markerHint.value = null
+}
 
 const actionMarkerUsedThisTurn = computed(() =>
   snapshot.value ? hasResolvedActionMarkerThisTurn(snapshot.value) : false,
 )
+
+const mustResolveActionMarker = computed(() =>
+  saveFile.value?.game
+    ? mustResolveActionMarkerBeforeAdvance(saveFile.value.game, playerId.value)
+    : false,
+)
+
+const mustResolveProductionMarker = computed(() =>
+  saveFile.value?.game
+    ? mustResolveProductionMarkerBeforeAdvance(saveFile.value.game, playerId.value)
+    : false,
+)
+
+const phaseAdvanceBlockedReason = computed(() => {
+  if (mustResolveActionMarker.value) return ACTION_MARKER_MUST_RESOLVE_BEFORE_ADVANCE_MSG
+  if (mustResolveProductionMarker.value) return PRODUCTION_MARKER_MUST_RESOLVE_BEFORE_ADVANCE_MSG
+  return null
+})
+
+const canAdvancePhase = computed(() => !phaseAdvanceBlockedReason.value)
 
 /** Хук для модалки перемещения: открывать только если маркер ещё не исполнен */
 const canOpenMovementModal = computed(() => {
@@ -171,6 +511,16 @@ const phaseHelp = computed(() =>
   gameHelpForPhase(snapshot.value?.phase, isMyTurn.value, effectiveMarkerKind.value),
 )
 
+const currentPhase = computed(() => snapshot.value?.phase)
+
+const showActionsControls = computed(
+  () => isMyTurn.value && currentPhase.value === 'actions',
+)
+
+const showProductionControls = computed(
+  () => isMyTurn.value && currentPhase.value === 'production',
+)
+
 const advancePhaseLabel = computed(() => {
   if (!saveFile.value?.game) return 'Далее'
   return phaseAdvanceActionLabelForSnapshot(saveFile.value.game, saveFile.value.map.id)
@@ -179,21 +529,40 @@ const advancePhaseLabel = computed(() => {
 function applyObservation(
   obs: Awaited<ReturnType<typeof fetchObservation>>,
   map?: MapDefinition,
-) {
+  source: 'action' | 'poll' | 'resync' | 'initial' = 'action',
+): boolean {
+  const mechExtra = obs.mechanics as Record<string, unknown>
+  const revision = mechExtra.observationRevision as number | undefined
+  if (!observationSync.observe(revision, source)) return false
+
   legalActions.value = obs.legalActions ?? []
   const preserve = saveFile.value?.game
-  const game = gameSnapshotFromObservation(obs.mechanics, preserve ?? undefined)
+  const game = gameSnapshotFromObservation(
+    obs.mechanics,
+    preserve ?? undefined,
+    map ?? saveFile.value?.map,
+  )
+
+  if ('lastCombatResult' in mechExtra) {
+    const next = (mechExtra.lastCombatResult as CombatResolutionResult | null) ?? null
+    const prevKey = combatResolutionFingerprint(battleResolution.value)
+    const nextKey = combatResolutionFingerprint(next)
+    if (prevKey !== nextKey) {
+      battleResolution.value = next
+    }
+  }
 
   if (saveFile.value) {
     saveFile.value = {
       ...saveFile.value,
       savedAt: new Date().toISOString(),
+      ...(map ? { map: normalizeMapDefinition(map) } : {}),
       game,
     }
-    return
+    return true
   }
 
-  if (!map) return
+  if (!map) return false
   saveFile.value = {
     format: 'galaxy-save',
     version: 1,
@@ -201,14 +570,35 @@ function applyObservation(
     map: normalizeMapDefinition(map),
     game,
   }
+  return true
 }
 
 async function endPhase() {
   if (!saveFile.value?.game || !isMyTurn.value || advancingPhase.value) return
+
+  if (phaseAdvanceBlockedReason.value) {
+    phaseHint.value = phaseAdvanceBlockedReason.value
+    return
+  }
+
+  if (
+    shouldConfirmPlanningPhaseAdvance(
+      saveFile.value.game,
+      saveFile.value.map,
+      playerId.value,
+    )
+    && !confirm(
+      'Вы не расставили все доступные маркеры действия или производства.\n\nЗавершить планирование без них?',
+    )
+  ) {
+    return
+  }
+
   phaseHint.value = null
   advancingPhase.value = true
   try {
     if (serverStatus.value === 'online' && !roomId.value.startsWith('local-')) {
+      bumpObservationEpoch()
       const obs = await submitGameAction(roomId.value, playerId.value, 'advance-phase')
       applyObservation(obs)
       persistLocal()
@@ -223,7 +613,7 @@ async function endPhase() {
     persistLocal()
     refreshLocalLegalActions()
   } catch (e) {
-    phaseHint.value = e instanceof Error ? e.message : 'Не удалось сменить фазу'
+    phaseHint.value = actionErrorMessage(e, 'Не удалось сменить фазу')
   } finally {
     advancingPhase.value = false
   }
@@ -242,6 +632,38 @@ const maxProductionRegions = computed(() => {
   const state = gameStateFromSnapshot(saveFile.value.game, saveFile.value.map.id)
   return maxProductionMarkersForPlayer(state, playerId.value)
 })
+
+const activeEvent = computed((): import('@galaxy/rules').ActiveEventObservation | null => {
+  if (!saveFile.value?.game) return null
+  return getActiveEventObservation(saveFile.value.game)
+})
+
+const turnEventHistory = computed(() => {
+  if (!saveFile.value?.game) return []
+  return getTurnEventHistory(saveFile.value.game)
+})
+
+const currentTurnEventResolvedAt = computed(
+  () => saveFile.value?.game?.turnEvent?.resolvedAt,
+)
+
+const showTurnEventsPanel = computed(
+  () => !!activeEvent.value || turnEventHistory.value.length > 0,
+)
+
+const phaseGuidance = computed(() =>
+  phaseGuidanceForTurn(snapshot.value?.phase, isMyTurn.value, {
+    planningSubStep: planningSubStep.value,
+    actionMarkersPlaced: myActionMarkerCount.value,
+    actionMarkersMax: MAX_ACTION_MARKERS_PER_PLAYER,
+    productionMarkersPlaced: myProductionMarkerCount.value,
+    productionMarkersMax: maxProductionRegions.value,
+    actionMarkerUsedThisTurn: actionMarkerUsedThisTurn.value,
+    actionMarkerUnresolved: mustResolveActionMarker.value,
+    productionMarkerUsedThisTurn: productionMarkerUsedThisTurn.value,
+    eventResolved: activeEvent.value?.resolved ?? false,
+  }),
+)
 
 const selectedCell = computed(() => {
   if (!selectedKey.value) return null
@@ -288,9 +710,16 @@ const availableActionMarkerKeys = computed(() => {
   }
 
   if (
-    interactionMode.value === 'markers'
-    && (phase === 'planning' || phase === 'actions')
-    && effectiveMarkerKind.value === 'action'
+    phase === 'planning'
+    && planningSubStep.value === 'action-markers'
+    && canRemoveActionMarkerThisTurn(game, playerId.value)
+  ) {
+    return keys()
+  }
+
+  if (
+    phase === 'actions'
+    && !canExecuteActionMarkerThisTurn(game, playerId.value)
     && canRemoveActionMarkerThisTurn(game, playerId.value)
   ) {
     return keys()
@@ -310,14 +739,23 @@ const availableProductionMarkerKeys = computed(() => {
   if (
     phase === 'production'
     && canExecuteProductionMarkerThisTurn(snapshot.value, playerId.value)
-    && interactionMode.value === 'inspect'
   ) {
     return keys()
   }
 
-  if (interactionMode.value !== 'markers') return [] as string[]
-  if (effectiveMarkerKind.value !== 'production') return [] as string[]
-  return keys()
+  if (phase === 'planning' && planningSubStep.value === 'production-markers') {
+    return keys()
+  }
+
+  if (
+    phase === 'production'
+    && !canExecuteProductionMarkerThisTurn(snapshot.value, playerId.value)
+    && canRemoveProductionMarkerThisTurn(snapshot.value, playerId.value)
+  ) {
+    return keys()
+  }
+
+  return []
 })
 
 const boardReachableKeys = computed(() => {
@@ -325,9 +763,23 @@ const boardReachableKeys = computed(() => {
   if (productionShipPickActive.value) return productionShipPick.reachableKeys.value
   return []
 })
+const boardContestedKeys = computed(() => {
+  if (markerMapPickActive.value) return markerMapPick.contestedKeys.value
+  return []
+})
 const boardDestinationKeys = computed(() => {
   if (markerMapPickActive.value) return markerMapPick.destinationKeys.value
   if (productionShipPickActive.value) return productionShipPick.destinationKeys.value
+  return []
+})
+const boardPreviewMoves = computed(() => {
+  if (markerMapPickActive.value) {
+    return markerMapPickPreviewMoves.value.map((m) => ({
+      from: m.from,
+      to: m.to,
+      combat: m.combat,
+    }))
+  }
   return []
 })
 const boardMovementSourceKey = computed(() => {
@@ -402,6 +854,7 @@ async function confirmProductionBatch(plan: { markerId: string; ships: import('@
 
   try {
     if (serverStatus.value === 'online' && !roomId.value.startsWith('local-')) {
+      bumpObservationEpoch()
       const obs = await submitGameAction(
         roomId.value,
         playerId.value,
@@ -432,7 +885,7 @@ async function confirmProductionBatch(plan: { markerId: string; ships: import('@
     productionMarkerId.value = null
     productionHint.value = `Построено кораблей: ${plan.ships.length}`
   } catch (e) {
-    productionHint.value = e instanceof Error ? e.message : 'Не удалось выполнить постройку'
+    productionHint.value = actionErrorMessage(e, 'Не удалось выполнить постройку')
   } finally {
     productionBusy.value = false
   }
@@ -446,6 +899,7 @@ async function confirmProductionRecharge(markerId: string) {
 
   try {
     if (serverStatus.value === 'online' && !roomId.value.startsWith('local-')) {
+      bumpObservationEpoch()
       const obs = await submitGameAction(
         roomId.value,
         playerId.value,
@@ -456,7 +910,7 @@ async function confirmProductionRecharge(markerId: string) {
       persistLocal()
       productionMarkerSource.value = null
       productionMarkerId.value = null
-      productionHint.value = 'Производство перезаряжено'
+      productionHint.value = 'Фишки ресурсов перезаряжены'
       return
     }
 
@@ -474,9 +928,9 @@ async function confirmProductionRecharge(markerId: string) {
     refreshLocalLegalActions()
     productionMarkerSource.value = null
     productionMarkerId.value = null
-    productionHint.value = 'Производство перезаряжено'
+    productionHint.value = 'Фишки ресурсов перезаряжены'
   } catch (e) {
-    productionHint.value = e instanceof Error ? e.message : 'Не удалось перезарядить производство'
+    productionHint.value = actionErrorMessage(e, 'Не удалось перезарядить фишки ресурсов')
   } finally {
     productionBusy.value = false
   }
@@ -493,10 +947,10 @@ function closeMarkerActionModal() {
   markerActionSource.value = null
 }
 
-function startMarkerMapPick(shipIds: string[]) {
+function startMarkerMapPick(payload: { shipIds: string[]; mode: 'movement' | 'bombardment' }) {
   if (!markerActionSource.value) return
   markerActionOpen.value = false
-  markerMapPick.start(markerActionSource.value, shipIds)
+  markerMapPick.start(markerActionSource.value, payload.shipIds, payload.mode)
   markerActionHint.value = null
 }
 
@@ -504,20 +958,271 @@ function cancelMarkerMapPick() {
   markerMapPick.cancel()
   markerActionSource.value = null
   markerActionHint.value = null
+  battleModalOpen.value = false
+  battlePreviewSnapshot.value = null
+  pendingOrderAfterBattle.value = null
+  battleResolution.value = null
+  battleResolving.value = false
+}
+
+async function confirmMarkerOrder() {
+  const hadCombat = markerMapPickHasPendingCombat.value
+  const previewSnap = markerMapPickCombatPreview.value
+
+  const result = markerMapPick.tryConfirmOrder()
+  if (!result) return
+
+  if (hadCombat && previewSnap) {
+    if (serverStatus.value === 'online' && !roomId.value.startsWith('local-')) {
+      markerActionBusy.value = true
+      markerActionHint.value = null
+      try {
+        bumpObservationEpoch()
+        const obs =
+          result.kind === 'bombardment'
+            ? await submitGameAction(roomId.value, playerId.value, 'execute-marker-bombardment', {
+                from: result.from,
+                bombardments: result.bombardments,
+              })
+            : await submitGameAction(roomId.value, playerId.value, 'execute-marker-movement', {
+                from: result.from,
+                moves: result.moves,
+              })
+        applyObservation(obs)
+        persistLocal()
+        battlePreviewSnapshot.value = previewSnap
+        battleModalOpen.value = true
+      } catch (e) {
+        markerActionHint.value = actionErrorMessage(e, 'Не удалось начать подготовку к бою')
+      } finally {
+        markerActionBusy.value = false
+      }
+      return
+    }
+
+    battlePreviewSnapshot.value = previewSnap
+    battleModalOpen.value = true
+    pendingOrderAfterBattle.value = result
+    return
+  }
+
+  if (result.kind === 'bombardment') {
+    await confirmMarkerBombardment(result.bombardments, result.from)
+    return
+  }
+
+  await confirmMarkerMovement(result.moves, result.from)
+}
+
+function closeBattleModal() {
+  battleModalOpen.value = false
+  markerMapPick.afterBattleModalClosed()
+  battlePreviewSnapshot.value = null
+  pendingOrderAfterBattle.value = null
+  if (!pendingCombatState.value?.awaitingDestruction) {
+    battleResolution.value = null
+  }
+  battleResolving.value = false
+  markerActionSource.value = null
+}
+
+async function resolveBattleWithOptions(combatOptions: CombatOptions) {
+  if (combatPrepState.value && serverStatus.value === 'online' && !roomId.value.startsWith('local-')) {
+    await submitCombatPrepReady(combatOptions)
+    return
+  }
+
+  const pending = pendingOrderAfterBattle.value
+  if (!pending || battleResolving.value) return
+  battleResolving.value = true
+  markerActionHint.value = null
+
+  try {
+    if (pending.kind === 'bombardment') {
+      await confirmMarkerBombardment(pending.bombardments, pending.from, combatOptions)
+    } else {
+      await confirmMarkerMovement(pending.moves, pending.from, combatOptions)
+    }
+    if (saveFile.value?.game) {
+      const lastEvt = saveFile.value.game.eventLog.at(-1)
+      if (lastEvt && !battleResolution.value?.needsDestructionSelection) {
+        markerActionHint.value = lastEvt.message
+      }
+    }
+    if (battleResolution.value?.needsDestructionSelection) {
+      markerActionHint.value = 'Выберите корабли для уничтожения'
+    } else if (!battleResolution.value?.needsDestructionSelection) {
+      pendingOrderAfterBattle.value = null
+    }
+  } catch (e) {
+    markerActionHint.value = actionErrorMessage(e, 'Не удалось разрешить бой')
+  } finally {
+    battleResolving.value = false
+  }
+}
+
+async function submitCombatPrepReady(combatOptions: CombatOptions) {
+  if (battleResolving.value) return
+  battleResolving.value = true
+  markerActionHint.value = null
+  try {
+    const prep = combatPrepState.value
+    const pending = pendingCombatState.value
+    if (!prep || !pending) return
+
+    const isAttacker = pending.attackerId === playerId.value
+    const sideSkips = isAttacker
+      ? combatOptions.attacker?.prioritySkips
+      : combatOptions.defender?.prioritySkips
+
+    bumpObservationEpoch()
+    const obs = await updateCombatPrepAction(roomId.value, playerId.value, true, sideSkips)
+    applyObservation(obs)
+    persistLocal()
+    markerActionHint.value = 'Готовность отправлена'
+  } catch (e) {
+    const msg = actionErrorMessage(e, 'Не удалось подтвердить готовность')
+    markerActionHint.value = msg
+    pushStatusToast('error', 'Подготовка к бою', msg)
+  } finally {
+    battleResolving.value = false
+  }
+}
+
+async function submitCombatPrepUnready() {
+  if (battleResolving.value) return
+  battleResolving.value = true
+  try {
+    bumpObservationEpoch()
+    const obs = await updateCombatPrepAction(roomId.value, playerId.value, false)
+    applyObservation(obs)
+    persistLocal()
+    markerActionHint.value = 'Готовность снята'
+  } catch (e) {
+    markerActionHint.value = actionErrorMessage(e, 'Не удалось снять готовность')
+  } finally {
+    battleResolving.value = false
+  }
+}
+
+async function submitCombatSupportSide(side: 'attacker' | 'defender') {
+  if (battleResolving.value) return
+  battleResolving.value = true
+  try {
+    bumpObservationEpoch()
+    const obs = await submitGameAction(roomId.value, playerId.value, 'update-combat-prep', {
+      ready: false,
+      supportSide: side,
+    })
+    applyObservation(obs)
+    persistLocal()
+    markerActionHint.value = 'Поддержка выбрана'
+  } catch (e) {
+    markerActionHint.value = actionErrorMessage(e, 'Не удалось выбрать поддержку')
+  } finally {
+    battleResolving.value = false
+  }
+}
+
+async function cancelCombatPrepAction() {
+  if (battleResolving.value) return
+  battleResolving.value = true
+  try {
+    bumpObservationEpoch()
+    const obs = await submitGameAction(roomId.value, playerId.value, 'cancel-combat-prep')
+    applyObservation(obs)
+    persistLocal()
+    closeBattleModal()
+    markerActionHint.value = 'Подготовка к бою отменена'
+  } catch (e) {
+    markerActionHint.value = actionErrorMessage(e, 'Не удалось отменить подготовку')
+  } finally {
+    battleResolving.value = false
+  }
+}
+
+async function confirmBattleDestruction(destructionSelection: string[]) {
+  if (battleResolving.value) return
+  battleResolving.value = true
+  markerActionHint.value = null
+
+  try {
+    if (serverStatus.value === 'online' && !roomId.value.startsWith('local-')) {
+      bumpObservationEpoch()
+      const obs = await submitGameAction(
+        roomId.value,
+        playerId.value,
+        'confirm-combat-destruction',
+        { destructionSelection },
+      )
+      applyObservation(obs)
+      battleResolution.value =
+        (obs.mechanics as { lastCombatResult?: CombatResolutionResult }).lastCombatResult ?? null
+      persistLocal()
+    } else if (saveFile.value?.game && saveFile.value.map) {
+      const result = applyGameActionOnSnapshot(
+        saveFile.value.game,
+        saveFile.value.map,
+        playerId.value,
+        'confirm-combat-destruction',
+        { destructionSelection },
+      )
+      if (result.errors.length) {
+        markerActionHint.value = result.errors[0] ?? null
+        return
+      }
+      battleResolution.value = result.combatResult ?? null
+      persistLocal()
+      refreshLocalLegalActions()
+    }
+
+    pendingOrderAfterBattle.value = null
+    markerActionSource.value = null
+    markerActionHint.value = 'Уничтожение применено'
+  } catch (e) {
+    markerActionHint.value = actionErrorMessage(e, 'Не удалось подтвердить уничтожение')
+  } finally {
+    battleResolving.value = false
+  }
+}
+
+async function continuePendingCombatAction() {
+  if (!pendingCombatState.value || !combatDecisionRole.value) return
+  bumpObservationEpoch()
+  try {
+    const obs = await submitGameAction(roomId.value, playerId.value, 'continue-combat')
+    applyObservation(obs)
+    markerActionHint.value = 'Бой продолжен'
+  } catch (e) {
+    markerActionHint.value = actionErrorMessage(e, 'Не удалось продолжить бой')
+  }
+}
+
+async function stopPendingCombatAction(retreatTo: HexCoord) {
+  if (!pendingCombatState.value || !combatDecisionRole.value) return
+  bumpObservationEpoch()
+  try {
+    const obs = await submitGameAction(roomId.value, playerId.value, 'stop-combat', { retreatTo })
+    applyObservation(obs)
+    markerActionHint.value = 'Бой прекращён'
+  } catch (e) {
+    markerActionHint.value = actionErrorMessage(e, 'Не удалось остановить бой')
+  }
 }
 
 async function resolveMarkerOccupyChoice(occupy: boolean) {
-  const result = markerMapPick.resolveControlChoice(occupy)
-  if (result) {
-    await confirmMarkerMovement(result.moves, result.from)
-  }
+  markerMapPick.resolveControlChoice(occupy)
 }
 
 function cancelMarkerPendingControl() {
   markerMapPick.cancelPendingControlChoice()
 }
 
-async function confirmMarkerMovement(moves: ShipMovePlan[], fromOverride?: HexCoord) {
+async function confirmMarkerBombardment(
+  bombardments: BombardmentPlan[],
+  fromOverride?: HexCoord,
+  combatOptions?: CombatOptions,
+) {
   const from = fromOverride ?? markerActionSource.value
   if (!saveFile.value?.game || !from || markerActionBusy.value) return
   markerActionBusy.value = true
@@ -525,36 +1230,93 @@ async function confirmMarkerMovement(moves: ShipMovePlan[], fromOverride?: HexCo
 
   try {
     if (serverStatus.value === 'online' && !roomId.value.startsWith('local-')) {
+      bumpObservationEpoch()
+      const obs = await submitGameAction(
+        roomId.value,
+        playerId.value,
+        'execute-marker-bombardment',
+        { from, bombardments, combatOptions },
+      )
+      applyObservation(obs)
+      battleResolution.value =
+        (obs.mechanics as { lastCombatResult?: CombatResolutionResult }).lastCombatResult ?? null
+      persistLocal()
+      markerActionSource.value = null
+      markerActionHint.value = 'Обстрел выполнен'
+      return
+    }
+
+    const result = executeMarkerBombardment(
+      saveFile.value.game,
+      saveFile.value.map,
+      playerId.value,
+      from,
+      bombardments,
+      combatOptions,
+    )
+    if (result.errors.length) {
+      markerActionHint.value = result.errors[0] ?? null
+      return
+    }
+    battleResolution.value = result.combatResult ?? null
+    persistLocal()
+    refreshLocalLegalActions()
+    markerActionSource.value = null
+    markerActionHint.value = 'Обстрел выполнен'
+  } catch (e) {
+    markerActionHint.value = actionErrorMessage(e, 'Не удалось выполнить обстрел')
+  } finally {
+    markerActionBusy.value = false
+  }
+}
+
+async function confirmMarkerMovement(
+  moves: ShipMovePlan[],
+  fromOverride?: HexCoord,
+  combatOptions?: CombatOptions,
+) {
+  const from = fromOverride ?? markerActionSource.value
+  if (!saveFile.value?.game || !from || markerActionBusy.value) return
+  markerActionBusy.value = true
+  markerActionHint.value = null
+
+  try {
+    if (serverStatus.value === 'online' && !roomId.value.startsWith('local-')) {
+      bumpObservationEpoch()
       const obs = await submitGameAction(
         roomId.value,
         playerId.value,
         'execute-marker-movement',
-        { from, moves },
+        { from, moves, combatOptions },
       )
       applyObservation(obs)
+      battleResolution.value =
+        (obs.mechanics as { lastCombatResult?: CombatResolutionResult }).lastCombatResult ?? null
       persistLocal()
       markerActionSource.value = null
       markerActionHint.value = 'Движение выполнено'
       return
     }
 
-    const errors = executeMarkerMovement(
+    const result = executeMarkerMovement(
       saveFile.value.game,
       saveFile.value.map,
       playerId.value,
       from,
       moves,
+      combatOptions,
     )
-    if (errors.length) {
-      markerActionHint.value = errors[0] ?? null
+    if (result.errors.length) {
+      markerActionHint.value = result.errors[0] ?? null
       return
     }
+    battleResolution.value = result.combatResult ?? null
     persistLocal()
     refreshLocalLegalActions()
     markerActionSource.value = null
     markerActionHint.value = 'Движение выполнено'
   } catch (e) {
-    markerActionHint.value = e instanceof Error ? e.message : 'Не удалось выполнить движение'
+    markerActionHint.value = actionErrorMessage(e, 'Не удалось выполнить движение')
   } finally {
     markerActionBusy.value = false
   }
@@ -569,6 +1331,7 @@ function onMapPickKeydown(e: KeyboardEvent) {
   }
   if (markerMapPickActive.value) {
     e.preventDefault()
+    if (markerMapPick.undoLastAction()) return
     cancelMarkerMapPick()
     return
   }
@@ -577,13 +1340,6 @@ function onMapPickKeydown(e: KeyboardEvent) {
     cancelProductionShipPick()
   }
 }
-
-watch(
-  () => snapshot.value?.phase,
-  (phase) => {
-    markerMode.value = markerKindForPhase(phase)
-  },
-)
 
 function loadFromLocalRoom() {
   if (!import.meta.client) return false
@@ -628,12 +1384,12 @@ function refreshLocalLegalActions() {
   )
 }
 
-/** Отладка: при передаче хода управление переключается на активного игрока */
+/** Отладка offline: при передаче хода управление переключается на активного игрока */
 watch(
   () => snapshot.value?.activePlayerId,
   (activeId) => {
     if (!activeId) return
-    if (playerId.value !== activeId) {
+    if (roomId.value.startsWith('local-') && playerId.value !== activeId) {
       playerId.value = activeId
     }
     refreshLocalLegalActions()
@@ -645,6 +1401,231 @@ function persistLocal() {
   localStorage.setItem(gameSaveStorageKey(roomId.value), serializeGalaxySave(saveFile.value))
 }
 
+async function ensureJoined(): Promise<boolean> {
+  if (roomId.value.startsWith('local-')) return true
+
+  try {
+    const bootstrap = await fetchRoomBootstrap(roomId.value)
+    roomBootstrap.value = bootstrap
+    const sess = loadGameSessionForRoom(roomId.value)
+    if (sess && bootstrap.joinedPlayerIds.includes(sess.playerId)) {
+      playerId.value = sess.playerId
+      return true
+    }
+    const claim = loadPlayerClaim(roomId.value)
+    if (claim && bootstrap.joinedPlayerIds.includes(claim.playerId)) {
+      try {
+        const name = nickname.value.trim() || claim.playerName
+        const { playerId: id, code } = await rejoinRoom(roomId.value, claim.playerId, name)
+        playerId.value = id
+        saveGameSession({ roomId: roomId.value, playerId: id, playerName: name, code })
+        savePlayerClaim({ roomId: roomId.value, playerId: id, playerName: name })
+        return true
+      } catch {
+        /* показать экран входа */
+      }
+    }
+    needsJoin.value = true
+    syncDefaultJoinSlot()
+    return false
+  } catch {
+    return true
+  }
+}
+
+async function refreshJoinLobby() {
+  if (roomId.value.startsWith('local-') || !needsJoin.value) return
+  try {
+    roomBootstrap.value = await fetchRoomBootstrap(roomId.value)
+    syncDefaultJoinSlot()
+  } catch {
+    /* ignore */
+  }
+}
+
+function startJoinLobbyPolling() {
+  stopJoinLobbyPolling()
+  if (roomId.value.startsWith('local-')) return
+  joinLobbyTimer = setInterval(refreshJoinLobby, 2000)
+}
+
+function stopJoinLobbyPolling() {
+  if (joinLobbyTimer) {
+    clearInterval(joinLobbyTimer)
+    joinLobbyTimer = null
+  }
+}
+
+async function submitJoin() {
+  joinError.value = null
+  if (!hasNickname.value) {
+    joinError.value = 'Сначала выберите никнейм в лобби'
+    return
+  }
+  if (!selectedJoinSlot.value) {
+    joinError.value = joinRoomFull.value ? 'Комната заполнена' : 'Выберите слот'
+    return
+  }
+  joinBusy.value = true
+  try {
+    const name = nickname.value.trim()
+    const slotId = selectedJoinSlot.value
+    const claim = loadPlayerClaim(roomId.value)
+    let id: string
+    let code: string
+
+    if (claim && roomBootstrap.value?.joinedPlayerIds.includes(claim.playerId)) {
+      const result = await rejoinRoom(
+        roomId.value,
+        claim.playerId,
+        name,
+        slotId !== claim.playerId ? slotId : undefined,
+      )
+      id = result.playerId
+      code = result.code
+    } else {
+      const result = await joinRoom(roomId.value, name, slotId)
+      id = result.playerId
+      code = result.code
+    }
+
+    playerId.value = id
+    saveGameSession({ roomId: roomId.value, playerId: id, playerName: name, code })
+    savePlayerClaim({ roomId: roomId.value, playerId: id, playerName: name })
+    needsJoin.value = false
+    stopJoinLobbyPolling()
+    await tryLoadFromServer()
+    startPolling()
+    presence.start()
+  } catch (e) {
+    joinError.value = e instanceof Error ? e.message : 'Не удалось войти'
+    if (e instanceof GameApiError && e.availablePlayerIds?.length) {
+      await refreshJoinLobby()
+    }
+  } finally {
+    joinBusy.value = false
+  }
+}
+
+const inviteLink = computed(() => {
+  if (!import.meta.client) return ''
+  return `${window.location.origin}/game/${roomId.value}`
+})
+
+async function copyInviteLink() {
+  if (!inviteLink.value) return
+  try {
+    await navigator.clipboard.writeText(inviteLink.value)
+    inviteCopied.value = true
+    setTimeout(() => { inviteCopied.value = false }, 2000)
+  } catch {
+    /* ignore */
+  }
+}
+
+async function resyncAfterCombatCountdown() {
+  if (serverStatus.value !== 'online' || roomId.value.startsWith('local-')) return
+  for (let attempt = 0; attempt < 6; attempt++) {
+    try {
+      const obs = await fetchObservation(roomId.value, playerId.value)
+      applyObservation(obs, undefined, 'resync')
+      persistLocal()
+      if (battleResolution.value) return
+      if (combatPrepState.value?.phase !== 'countdown') return
+    } catch {
+      /* ignore transient poll errors */
+    }
+    await new Promise((r) => setTimeout(r, 350))
+  }
+}
+
+function startPolling() {
+  stopPolling()
+  if (roomId.value.startsWith('local-')) return
+  const generation = pollingGeneration
+  const NORMAL_POLL_MS = 750
+  const COMBAT_POLL_MS = 250
+  const interval = () => (hasActivePendingCombat.value ? COMBAT_POLL_MS : NORMAL_POLL_MS)
+  const scheduleNextPoll = (delay = interval()) => {
+    if (
+      generation !== pollingGeneration
+      || serverStatus.value !== 'online'
+      || needsJoin.value
+    ) {
+      return
+    }
+    pollTimer = setTimeout(poll, delay)
+  }
+  const poll = async () => {
+    if (generation !== pollingGeneration) return
+    pollTimer = null
+    try {
+      if (serverStatus.value !== 'online' || needsJoin.value) return
+      // Действие уже вернёт свежий observation; важно всё равно запланировать
+      // следующий poll, иначе один тик во время busy навсегда останавливал sync.
+      if (advancingPhase.value || markerActionBusy.value || productionBusy.value) return
+      const epoch = observationEpoch
+      const obs = await fetchObservation(roomId.value, playerId.value)
+      if (generation !== pollingGeneration || epoch !== observationEpoch) return
+      if (applyObservation(obs, undefined, 'poll')) {
+        observationSync.recordPollSuccess()
+        persistLocal()
+      }
+    } catch (e) {
+      if (e instanceof GameApiError && e.message === 'Room not found') {
+        serverStatus.value = 'offline'
+      } else {
+        observationSync.recordPollFailure(e)
+      }
+    } finally {
+      scheduleNextPoll()
+    }
+  }
+  scheduleNextPoll(0)
+}
+
+function stopPolling() {
+  pollingGeneration++
+  if (pollTimer) {
+    clearTimeout(pollTimer)
+    pollTimer = null
+  }
+}
+
+function repairLobbyParticipation(joinedPlayerIds?: string[]): boolean {
+  if (!saveFile.value?.game || roomId.value.startsWith('local-')) return false
+
+  const game = saveFile.value.game
+  const defaultIds = game.players.slice(0, LOBBY_MAX_PLAYERS).map((p) => p.id)
+  const ids = joinedPlayerIds?.length
+    ? joinedPlayerIds.slice(0, LOBBY_MAX_PLAYERS)
+    : (game.participatingPlayerIds?.length
+      ? game.participatingPlayerIds
+      : defaultIds)
+
+  const prevActive = game.activePlayerId
+  const prevParticipating = game.participatingPlayerIds?.join(',') ?? ''
+
+  syncParticipatingPlayerIds(game, ids)
+
+  const changed =
+    prevActive !== game.activePlayerId
+    || prevParticipating !== (game.participatingPlayerIds?.join(',') ?? '')
+
+  if (changed) {
+    const skippedName = prevActive
+      ? (game.players.find((p) => p.id === prevActive)?.name ?? prevActive)
+      : null
+    participationHint.value =
+      prevActive && !ids.includes(prevActive)
+        ? `${skippedName} не в лобби — ход передан участникам`
+        : null
+    persistLocal()
+  }
+
+  return changed
+}
+
 async function tryLoadFromServer() {
   if (roomId.value.startsWith('local-')) {
     serverStatus.value = 'offline'
@@ -653,15 +1634,18 @@ async function tryLoadFromServer() {
   serverStatus.value = 'loading'
   try {
     const bootstrap = await fetchRoomBootstrap(roomId.value)
+    roomBootstrap.value = bootstrap
     const obs = await fetchObservation(roomId.value, playerId.value)
-    applyObservation(obs, bootstrap.map)
+    applyObservation(obs, bootstrap.map, 'initial')
     if (!selectedKey.value) {
       selectedKey.value = hexKey(bootstrap.map.cells[0]?.q ?? 0, bootstrap.map.cells[0]?.r ?? 0)
     }
     serverStatus.value = 'online'
+    repairLobbyParticipation(bootstrap.joinedPlayerIds)
     persistLocal()
   } catch {
     serverStatus.value = 'offline'
+    repairLobbyParticipation(roomBootstrap.value?.joinedPlayerIds)
   }
 }
 
@@ -676,19 +1660,13 @@ async function selectCell(q: number, r: number) {
   }
 
   if (markerMapPickActive.value) {
-    const result = markerMapPick.handleMapSelect(q, r)
-    if (result) {
-      await confirmMarkerMovement(result.moves, result.from)
-    }
+    markerMapPick.handleMapSelect(q, r)
     return
   }
 
-  if (
-    interactionMode.value === 'inspect'
-    && isMyTurn.value
-    && snapshot.value?.phase === 'actions'
-    && hasMyActionMarkerAt(q, r)
-  ) {
+  const phase = snapshot.value?.phase
+
+  if (isMyTurn.value && phase === 'actions' && hasMyActionMarkerAt(q, r)) {
     if (!canOpenMovementModal.value) {
       markerHint.value = ACTION_MARKER_ALREADY_RESOLVED_MSG
       return
@@ -697,12 +1675,7 @@ async function selectCell(q: number, r: number) {
     return
   }
 
-  if (
-    interactionMode.value === 'inspect'
-    && isMyTurn.value
-    && snapshot.value?.phase === 'production'
-    && hasMyProductionMarkerAt(q, r)
-  ) {
+  if (isMyTurn.value && phase === 'production' && hasMyProductionMarkerAt(q, r)) {
     if (!canOpenProductionModal.value) {
       markerHint.value = PRODUCTION_MARKER_ALREADY_RESOLVED_MSG
       return
@@ -711,25 +1684,63 @@ async function selectCell(q: number, r: number) {
     return
   }
 
-  if (
-    interactionMode.value !== 'markers'
-    || !saveFile.value?.game
-    || !canPlaceMarkers.value
-  ) return
+  if (isMyTurn.value && phase === 'planning' && saveFile.value?.game) {
+    await toggleMarkerOnCell(q, r)
+  }
+}
+
+async function toggleMarkerOnCell(q: number, r: number) {
+  if (!saveFile.value?.game || !canPlaceMarkers.value) return
+
+  const kind = effectiveMarkerKind.value
+  const game = saveFile.value.game
+  const cell = game.cells.find((candidate) => candidate.coord.q === q && candidate.coord.r === r)
+
+  if (kind === 'action' && !cell?.actionMarkerId && !cell?.ships.some((ship) => ship.ownerId === playerId.value)) {
+    markerHint.value = 'Маркер действия ставится только на клетку с вашим кораблём'
+    return
+  }
+
+  if (kind === 'production' && !cell?.productionMarkerId) {
+    if (cell?.controlOwnerId !== playerId.value) {
+      markerHint.value = 'Маркер можно ставить только на своей клетке'
+      return
+    }
+    const state = gameStateFromSnapshot(game, saveFile.value.map.id)
+    if (!resolveRegionIdForCell(state, { q, r }, playerId.value)) {
+      markerHint.value = 'Маркер производства ставится только в контролируемом регионе (от 3 клетки)'
+      return
+    }
+  }
 
   if (
-    effectiveMarkerKind.value === 'action'
-    && wouldRemoveMyActionMarkerAt(saveFile.value.game, q, r)
+    kind === 'action'
+    && wouldRemoveMyActionMarkerAt(game, q, r)
     && !confirmRemoveActionMarker()
   ) {
     return
   }
 
   if (
-    effectiveMarkerKind.value === 'production'
-    && wouldRemoveMyProductionMarkerAt(saveFile.value.game, q, r)
+    kind === 'production'
+    && wouldRemoveMyProductionMarkerAt(game, q, r)
     && !confirmRemoveProductionMarker()
   ) {
+    return
+  }
+
+  if (serverStatus.value === 'online' && !roomId.value.startsWith('local-')) {
+    try {
+      bumpObservationEpoch()
+      const obs = await submitGameAction(roomId.value, playerId.value, 'toggle-marker', {
+        coord: { q, r },
+        kind,
+      })
+      applyObservation(obs)
+      persistLocal()
+    } catch (e) {
+      markerHint.value = actionErrorMessage(e, 'Не удалось поставить маркер')
+    }
     return
   }
 
@@ -738,7 +1749,7 @@ async function selectCell(q: number, r: number) {
     playerId.value,
     { q, r },
     saveFile.value.map,
-    effectiveMarkerKind.value,
+    kind,
   )
   if (errors.length) {
     markerHint.value = errors[0]
@@ -786,6 +1797,23 @@ function removeSelectedActionMarker() {
   )
   if (!cell?.actionMarkerId) return
 
+  if (serverStatus.value === 'online' && !roomId.value.startsWith('local-')) {
+    bumpObservationEpoch()
+    submitGameAction(roomId.value, playerId.value, 'remove-marker', {
+      markerId: cell.actionMarkerId,
+      kind: 'action',
+    })
+      .then((obs) => {
+        applyObservation(obs)
+        persistLocal()
+        markerHint.value = 'Маркер действия снят'
+      })
+      .catch((e) => {
+        markerHint.value = actionErrorMessage(e, 'Не удалось снять маркер')
+      })
+    return
+  }
+
   const errors = removeActionMarker(
     saveFile.value.game,
     cell.actionMarkerId,
@@ -808,6 +1836,23 @@ function removeSelectedProductionMarker() {
     (c) => hexKey(c.coord.q, c.coord.r) === selectedKey.value,
   )
   if (!cell?.productionMarkerId) return
+
+  if (serverStatus.value === 'online' && !roomId.value.startsWith('local-')) {
+    bumpObservationEpoch()
+    submitGameAction(roomId.value, playerId.value, 'remove-marker', {
+      markerId: cell.productionMarkerId,
+      kind: 'production',
+    })
+      .then((obs) => {
+        applyObservation(obs)
+        persistLocal()
+        markerHint.value = 'Маркер производства снят'
+      })
+      .catch((e) => {
+        markerHint.value = actionErrorMessage(e, 'Не удалось снять маркер')
+      })
+    return
+  }
 
   const errors = removeProductionMarker(
     saveFile.value.game,
@@ -880,11 +1925,20 @@ onMounted(async () => {
     loadFallbackMap()
   }
   refreshLocalLegalActions()
-  await tryLoadFromServer()
+  const joined = await ensureJoined()
+  if (joined) {
+    await tryLoadFromServer()
+    startPolling()
+    presence.start()
+  } else {
+    startJoinLobbyPolling()
+  }
 })
 
 onUnmounted(() => {
   window.removeEventListener('keydown', onMapPickKeydown)
+  stopPolling()
+  stopJoinLobbyPolling()
 })
 
 watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
@@ -894,23 +1948,131 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
 
 <template>
   <div class="game-viewport">
+    <div v-if="needsJoin" class="join-overlay">
+      <form class="join-card" @submit.prevent="submitJoin">
+        <h2>Вход в игру</h2>
+        <p v-if="roomBootstrap" class="join-meta">
+          Игроков: {{ roomBootstrap.playerCount }}/{{ roomBootstrap.maxPlayers }}
+          <span v-if="roomBootstrap.code"> · код {{ roomBootstrap.code }}</span>
+        </p>
+
+        <div v-if="joinLobbySlots.length" class="join-players">
+          <h3 class="join-players-title">Выберите слот</h3>
+          <LobbySlotPicker
+            v-model="selectedJoinSlot"
+            :slots="joinLobbySlots"
+            :disabled="joinBusy || joinRoomFull"
+          />
+        </div>
+
+        <p v-if="joinRoomFull" class="join-error">Все слоты заняты — дождитесь освобождения места.</p>
+
+        <p v-if="hasNickname" class="join-as">
+          Вы войдёте как <strong>{{ nickname }}</strong>
+        </p>
+        <p v-else class="join-error">
+          Никнейм не задан —
+          <NuxtLink to="/">выберите в лобби</NuxtLink>
+        </p>
+
+        <p v-if="joinError" class="join-error">{{ joinError }}</p>
+        <button
+          type="submit"
+          class="join-submit"
+          :disabled="joinBusy || !hasNickname || !selectedJoinSlot || joinRoomFull"
+        >
+          {{ joinBusy ? 'Вход…' : `Войти как ${nickname || '…'}` }}
+        </button>
+        <NuxtLink to="/" class="join-back">← В лобби</NuxtLink>
+        <NuxtLink to="/lobbies" class="join-back">Список лобби</NuxtLink>
+      </form>
+    </div>
+
     <section class="board-layer">
       <GameBoard
         v-if="boardCells.length"
         :cells="boardCells"
         mode="game"
+        :show-auto-fit-toggle="false"
         :selected-key="selectedKey"
         :reachable-keys="boardReachableKeys"
+        :contested-keys="boardContestedKeys"
         :destination-keys="boardDestinationKeys"
+        :preview-moves="boardPreviewMoves"
+        :territory-label-players="territoryLabelPlayers"
         :movement-source-key="boardMovementSourceKey"
         :available-action-marker-keys="availableActionMarkerKeys"
         :available-production-marker-keys="availableProductionMarkerKeys"
+        :supply-chain-keys="supplyChainHighlightKeys"
+        :my-territory-keys="myControlledKeys"
         @select="selectCell"
       />
       <p v-else class="empty-hint">Нет данных карты — импортируйте .galaxy.json</p>
+
+      <CombatPreviewPanel
+        v-if="markerMapPickActive && markerMapPickHasPendingCombat && markerMapPickCombatPreview && snapshot"
+        :preview="markerMapPickCombatPreview"
+        :round-one-odds="markerMapPickRoundOneOdds"
+        :player-names="playerNameById"
+      />
     </section>
 
     <GameStatusToast :toasts="statusToasts" />
+
+    <section
+      v-if="syncWarningVisible && !roomId.startsWith('local-')"
+      class="sync-warning"
+      role="alert"
+    >
+      <strong>Состояние могло рассинхронизироваться</strong>
+      <p>{{ syncWarningReason ?? 'Не удалось подтвердить актуальность данных.' }}</p>
+      <div class="sync-warning-actions">
+        <button
+          type="button"
+          :disabled="syncResyncing"
+          @click="observationSync.resync('Игрок запросил синхронизацию.')"
+        >
+          {{ syncResyncing ? 'Синхронизация…' : 'Синхронизировать' }}
+        </button>
+        <button type="button" @click="reloadPage">Обновить страницу</button>
+      </div>
+    </section>
+
+    <div v-if="gameOverState" class="game-over-overlay" role="alert">
+      <div class="game-over-card">
+        <h2>Игра окончена</h2>
+        <p class="game-over-winner">Победитель: {{ gameOverWinnerName }}</p>
+        <p class="game-over-reason">{{ gameOverReasonLabel }}</p>
+      </div>
+    </div>
+
+    <div
+      v-if="pendingCombatState?.awaitingContinue && combatDecisionRole"
+      class="map-pick-banner map-pick-banner--combat"
+      role="status"
+    >
+      <p class="map-pick-text">
+        Бой на {{ pendingCombatState.cellKey }} — раунд {{ pendingCombatState.roundNumber }}.
+        {{ combatDecisionRole === 'attacker' ? 'Атакующий выбирает первым.' : 'Атакующий выбрал продолжение — ваше решение.' }}
+      </p>
+      <div class="map-pick-actions">
+        <button type="button" class="map-pick-primary" @click="continuePendingCombatAction">
+          Продолжить бой
+        </button>
+        <span v-if="!retreatDestinations.length" class="map-pick-error">
+          Нет доступной соседней клетки для отступления.
+        </span>
+        <button
+          v-for="coord in retreatDestinations"
+          :key="hexKey(coord.q, coord.r)"
+          type="button"
+          class="map-pick-secondary"
+          @click="stopPendingCombatAction(coord)"
+        >
+          Отступить в ({{ coord.q }}, {{ coord.r }})
+        </button>
+      </div>
+    </div>
 
     <MarkerActionModal
       v-if="markerActionOpen && snapshot && saveFile && markerActionSource"
@@ -942,6 +2104,31 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
       </button>
     </div>
 
+    <BattleModal
+      v-if="battleModalOpen && (combatPrepPreview ?? battlePreviewSnapshot) && snapshot"
+      :preview="(combatPrepPreview ?? battlePreviewSnapshot)!"
+      :snapshot="snapshot"
+      :player-names="playerNameById"
+      :local-player-id="playerId"
+      :resolution="battleResolution"
+      :resolving="battleResolving"
+      :prep-phase="combatPrepState?.phase ?? null"
+      :self-ready="combatPrepSelfReady"
+      :attacker-ready="combatPrepAttackerReady"
+      :defender-ready="combatPrepDefenderReady"
+      :remote-attacker-skips="combatPrepAttackerSkips"
+      :remote-defender-skips="combatPrepDefenderSkips"
+      :countdown-started-at="combatPrepState?.countdownStartedAt"
+      @close="closeBattleModal"
+      @resolve="resolveBattleWithOptions"
+      @confirm-destruction="confirmBattleDestruction"
+      @prep-ready="resolveBattleWithOptions"
+      @prep-unready="submitCombatPrepUnready"
+      @support-side="submitCombatSupportSide"
+      @cancel-prep="cancelCombatPrepAction"
+      @countdown-complete="resyncAfterCombatCountdown"
+    />
+
     <div v-if="markerMapPickActive" class="map-pick-banner" role="status">
       <p class="map-pick-text">{{ markerMapPickBannerText }}</p>
       <p v-if="markerMapPickError" class="map-pick-error">{{ markerMapPickError }}</p>
@@ -956,38 +2143,101 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
           Назад (Esc)
         </button>
       </div>
-      <button
-        v-else
-        type="button"
-        class="map-pick-cancel"
-        @click.stop="cancelMarkerMapPick"
-      >
-        Отмена (Esc)
-      </button>
+      <div v-else-if="markerMapPickOrderReady" class="map-pick-actions">
+        <button
+          type="button"
+          class="map-pick-primary"
+          :class="{ 'map-pick-primary--combat': markerMapPickHasPendingCombat }"
+          @click.stop="confirmMarkerOrder"
+        >
+          {{ markerMapPickConfirmLabel }}
+        </button>
+        <button type="button" class="map-pick-cancel" @click.stop="cancelMarkerMapPick">
+          Отмена
+        </button>
+      </div>
+      <div v-else class="map-pick-actions">
+        <button type="button" class="map-pick-cancel" @click.stop="cancelMarkerMapPick">
+          Отмена
+        </button>
+        <span v-if="markerMapPick.canUndo()" class="map-pick-undo-hint">Esc — отменить шаг</span>
+      </div>
     </div>
 
     <header class="hud-top">
-      <NuxtLink to="/" class="back-link">← Lobby</NuxtLink>
-      <span class="you-badge" :class="{ 'you-badge--turn': isMyTurn }">
-        Вы: {{ myPlayerName }}
-        <span v-if="snapshot?.activePlayerId" class="you-badge-sub">
-          · ход {{ activePlayerName }}
+      <div class="hud-top-left">
+        <NuxtLink to="/" class="back-link">← Lobby</NuxtLink>
+        <span class="you-badge" :class="{ 'you-badge--turn': isMyTurn }">
+          Вы: {{ myPlayerName }}
+          <span v-if="snapshot?.activePlayerId" class="you-badge-sub">
+            · ход {{ activePlayerName }}
+          </span>
         </span>
-      </span>
-      <div v-if="saveFile" class="hud-title">
-        <strong>{{ saveFile.map.name }}</strong>
-        <span class="hud-id">{{ roomId }}</span>
+        <div v-if="saveFile" class="hud-title">
+          <strong>{{ saveFile.map.name }}</strong>
+          <span class="hud-id">{{ roomId }}</span>
+        </div>
       </div>
-      <PhasePanel
-        v-if="snapshot"
-        :phase="snapshot.phase"
-        :turn-number="snapshot.turnNumber"
-        :active-player-id="snapshot.activePlayerId"
-        :players="snapshot.players"
-      />
-      <span class="server-pill" :class="serverStatus">
-        {{ serverStatus === 'online' ? 'Сервер' : serverStatus === 'offline' ? 'Offline' : '…' }}
-      </span>
+
+      <div v-if="isMyTurn" class="hud-top-center">
+        <button
+          v-if="showPlanningBackToActionBtn"
+          type="button"
+          class="planning-step-btn planning-step-btn--hero planning-step-btn--back"
+          @click="backToPlanningActionStep"
+        >
+          ← К маркерам действия
+        </button>
+        <button
+          v-if="showPlanningActionDoneBtn"
+          type="button"
+          class="planning-step-btn planning-step-btn--hero"
+          @click="finishPlanningActionStep"
+        >
+          Готово с маркерами действия
+        </button>
+        <button
+          type="button"
+          class="phase-advance-btn phase-advance-btn--hero"
+          :style="phaseAdvanceBtnStyle"
+          :disabled="advancingPhase || !canAdvancePhase"
+          :title="phaseAdvanceBlockedReason ?? undefined"
+          @click="endPhase"
+        >
+          {{ advancingPhase ? '…' : advancePhaseLabel }}
+        </button>
+        <p v-if="phaseHint" class="hud-center-hint err">{{ phaseHint }}</p>
+        <p v-else-if="phaseAdvanceBlockedReason" class="hud-center-hint err">
+          {{ phaseAdvanceBlockedReason }}
+        </p>
+      </div>
+      <div v-else class="hud-top-center hud-top-center--idle" aria-hidden="true" />
+
+      <div class="hud-top-right">
+        <PhasePanel
+          v-if="snapshot"
+          variant="hero"
+          :phase="snapshot.phase"
+          :turn-number="snapshot.turnNumber"
+          :active-player-id="snapshot.activePlayerId"
+          :players="snapshot.players"
+          :is-my-turn="isMyTurn"
+          :prompt="phaseGuidance?.prompt"
+          :count-hint="phaseGuidance?.countHint"
+          :guidance-accent="phaseGuidance?.accent"
+        />
+        <span class="server-pill" :class="serverStatus">
+          {{ serverStatus === 'online' ? 'Сервер' : serverStatus === 'offline' ? 'Offline' : '…' }}
+        </span>
+        <button
+          v-if="serverStatus === 'online' && roomBootstrap && roomBootstrap.playerCount < roomBootstrap.maxPlayers"
+          type="button"
+          class="invite-btn"
+          @click="copyInviteLink"
+        >
+          {{ inviteCopied ? 'Ссылка скопирована' : 'Ссылка-приглашение' }}
+        </button>
+      </div>
     </header>
 
     <aside class="hud-right" :class="{ collapsed: panelCollapsed }">
@@ -1006,6 +2256,16 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
             <span class="active-player-dot" aria-hidden="true" />
             Активный: <strong>{{ activePlayerName }}</strong>
           </p>
+        </section>
+
+        <section v-if="showTurnEventsPanel" class="block event-block">
+          <TurnEventsPanel
+            :active-event="activeEvent"
+            :history="turnEventHistory"
+            :current-turn="snapshot?.turnNumber ?? 1"
+            :phase="snapshot?.phase"
+            :resolved-at="currentTurnEventResolvedAt"
+          />
         </section>
 
         <section class="block">
@@ -1043,35 +2303,38 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
           <p v-if="loadError" class="err">{{ loadError }}</p>
         </section>
 
-        <section v-if="isMyTurn" class="block">
+        <section v-if="isMyTurn || participationHint" class="block">
           <h3>Фаза хода</h3>
-          <button
-            type="button"
-            class="phase-advance-btn"
-            :style="phaseAdvanceBtnStyle"
-            :disabled="advancingPhase"
-            @click="endPhase"
-          >
-            {{ advancingPhase ? '…' : advancePhaseLabel }}
-          </button>
-          <p v-if="phaseHint" class="err">{{ phaseHint }}</p>
-          <p v-else-if="snapshot?.phase === 'actions' && remainingActionMarkersCount > 0" class="hint">
+          <p v-if="markerHint" class="err">{{ markerHint }}</p>
+          <p v-if="participationHint" class="hint participation-hint">{{ participationHint }}</p>
+          <p v-else-if="isMyTurn && snapshot?.phase === 'actions' && remainingActionMarkersCount > 0" class="hint">
             Фаза «Действия» продолжается, пока на карте есть маркеры (осталось {{ remainingActionMarkersCount }}).
           </p>
-          <p v-else class="hint">
+          <p v-else-if="isMyTurn" class="hint">
             В каждой фазе ходят все игроки по очереди (1→2→3→…).
             При передаче хода управление переключается на активного игрока.
           </p>
         </section>
 
-        <section v-if="isMyTurn && snapshot?.phase === 'actions'" class="block">
+        <section v-if="showActionsControls" class="block">
           <h3>Маркер действия</h3>
           <p v-if="actionMarkerUsedThisTurn" class="hint action-marker-used">
-            {{ ACTION_MARKER_ALREADY_RESOLVED_MSG }} Передайте ход, когда закончите.
+            {{ ACTION_MARKER_ALREADY_RESOLVED_MSG }}
           </p>
           <p v-else class="hint">
-            За этот ход можно исполнить один маркер действия. Клик по клетке с маркером откроет перемещение.
-            Снять маркер без действия — кнопка в карточке клетки (с подтверждением) или режим «Маркеры», **до** исполнения маркера в этом ходу.
+            Клик по своему маркеру на карте откроет перемещение.
+            Снять маркер без действия — карточка клетки (с подтверждением), до исполнения маркера в этом ходу.
+          </p>
+        </section>
+
+        <section v-if="showProductionControls" class="block">
+          <h3>Маркер производства</h3>
+          <p v-if="productionMarkerUsedThisTurn" class="hint action-marker-used">
+            {{ PRODUCTION_MARKER_ALREADY_RESOLVED_MSG }}
+          </p>
+          <p v-else class="hint">
+            Клик по маркеру на карте — постройка или перезарядка.
+            Снять маркер — карточка клетки (с подтверждением), до постройки в этом ходу.
           </p>
         </section>
 
@@ -1096,76 +2359,6 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
           <ul v-if="showHelp" class="help-list">
             <li v-for="(line, idx) in phaseHelp.lines" :key="idx">{{ line }}</li>
           </ul>
-        </section>
-
-        <section v-if="isMyTurn" class="block">
-          <h3>Режим карты</h3>
-          <div class="mode-row">
-            <button
-              type="button"
-              class="mode-btn"
-              :class="{ active: interactionMode === 'inspect' }"
-              @click="interactionMode = 'inspect'"
-            >
-              Осмотр
-            </button>
-            <button
-              type="button"
-              class="mode-btn mode-btn--action"
-              :class="{ active: interactionMode === 'markers' }"
-              :disabled="!canPlaceMarkers"
-              @click="interactionMode = 'markers'"
-            >
-              Маркеры
-            </button>
-          </div>
-          <p class="hint">
-            {{ interactionMode === 'inspect'
-              ? 'Клик выбирает клетку и показывает подробности.'
-              : 'Клик ставит или снимает выбранный маркер.' }}
-          </p>
-        </section>
-
-        <section v-if="canPickMarkerKind && isMyTurn && interactionMode === 'markers'" class="block">
-          <h3>Тип маркера</h3>
-          <div class="mode-row">
-            <button
-              type="button"
-              class="mode-btn mode-btn--action"
-              :class="{ active: markerMode === 'action' }"
-              @click="markerMode = 'action'"
-            >
-              Действие
-            </button>
-            <button
-              type="button"
-              class="mode-btn mode-btn--production"
-              :class="{ active: markerMode === 'production' }"
-              @click="markerMode = 'production'"
-            >
-              Производство
-            </button>
-          </div>
-          <p class="hint">
-            Сейчас: {{ markerKindLabel(effectiveMarkerKind) }}
-            <span v-if="effectiveMarkerKind === 'action'">
-              · ваши {{ myActionMarkerCount }}/6
-            </span>
-            <span v-else-if="effectiveMarkerKind === 'production'">
-              · ваши {{ myProductionMarkerCount }}/{{ maxProductionRegions }} регионов
-            </span>
-          </p>
-        </section>
-
-        <section v-if="interactionMode === 'markers'" class="block">
-          <h3>Маркеры</h3>
-          <p v-if="markerHint" class="err">{{ markerHint }}</p>
-          <p v-else-if="!isMyTurn" class="hint">Сейчас не ваш ход.</p>
-          <p v-else-if="snapshot?.phase === 'events'" class="hint">В фазе событий маркеры не ставятся.</p>
-          <p v-else class="hint">
-            Клик по <strong>своей</strong> клетке — поставить или снять маркер
-            «{{ markerKindLabel(effectiveMarkerKind).toLowerCase() }}».
-          </p>
         </section>
 
         <details class="block marker-details">
@@ -1194,12 +2387,78 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
 
 <style scoped>
 .game-viewport {
+  --hud-header-height: 3.75rem;
   position: relative;
   width: 100%;
   height: 100%;
   min-height: 0;
   color: #e2e8f0;
   overflow: hidden;
+}
+.game-over-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(2, 6, 23, 0.72);
+  pointer-events: none;
+}
+.game-over-card {
+  padding: 1.5rem 2rem;
+  border-radius: 12px;
+  border: 2px solid rgba(250, 204, 21, 0.55);
+  background: linear-gradient(160deg, rgba(30, 41, 59, 0.98), rgba(15, 23, 42, 0.98));
+  text-align: center;
+  max-width: 420px;
+}
+.game-over-card h2 {
+  margin: 0 0 0.75rem;
+}
+.game-over-winner {
+  margin: 0;
+  font-weight: 700;
+  color: #fde047;
+}
+.game-over-reason {
+  margin: 0.5rem 0 0;
+  font-size: 0.875rem;
+  color: #94a3b8;
+}
+.sync-warning {
+  position: absolute;
+  top: calc(var(--hud-header-height) + 0.5rem);
+  left: 50%;
+  z-index: 80;
+  width: min(92vw, 460px);
+  transform: translateX(-50%);
+  padding: 0.75rem 0.9rem;
+  border: 1px solid rgba(251, 191, 36, 0.8);
+  border-radius: 10px;
+  background: rgba(120, 53, 15, 0.96);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  color: #fef3c7;
+  text-align: center;
+  pointer-events: auto;
+}
+.sync-warning p {
+  margin: 0.35rem 0 0;
+  font-size: 0.8rem;
+  color: #fde68a;
+}
+.sync-warning-actions {
+  display: flex;
+  justify-content: center;
+  gap: 0.5rem;
+  margin-top: 0.65rem;
+}
+.sync-warning-actions button:first-child {
+  border-color: #fbbf24;
+  background: #b45309;
+}
+.map-pick-banner--combat {
+  border-color: rgba(248, 113, 113, 0.6);
 }
 .board-layer {
   position: absolute;
@@ -1219,22 +2478,63 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
   top: 0;
   left: 0;
   right: 0;
-  z-index: 20;
+  z-index: 30;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+  min-height: var(--hud-header-height);
+  padding: 0.5rem 0.75rem;
+  background: linear-gradient(to bottom, rgba(15, 23, 42, 0.95), rgba(15, 23, 42, 0.65), transparent);
+  backdrop-filter: blur(6px);
+  pointer-events: none;
+}
+.hud-top-left,
+.hud-top-center,
+.hud-top-right {
+  pointer-events: auto;
+}
+.hud-top-left {
   display: flex;
   align-items: center;
   gap: 0.75rem;
   flex-wrap: wrap;
-  padding: 0.5rem 0.75rem;
-  background: linear-gradient(to bottom, rgba(15, 23, 42, 0.92), rgba(15, 23, 42, 0.55), transparent);
-  backdrop-filter: blur(4px);
+  justify-self: start;
+  min-width: 0;
+}
+.hud-top-center {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.35rem;
+  justify-self: center;
+  max-width: min(440px, 42vw);
+}
+.hud-top-center--idle {
   pointer-events: none;
 }
-.hud-top > * {
-  pointer-events: auto;
+.hud-top-right {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.65rem;
+  flex-wrap: wrap;
+  justify-self: end;
+  min-width: 0;
+}
+.hud-top-right :deep(.phase-panel--hero) {
+  flex: 0 1 auto;
+  justify-content: flex-end;
+}
+.hud-center-hint {
+  margin: 0;
+  font-size: 0.78rem;
+  text-align: center;
+  max-width: 100%;
 }
 .map-pick-banner {
   position: absolute;
-  top: 3.25rem;
+  top: calc(var(--hud-header-height) + 0.35rem);
   left: 50%;
   transform: translateX(-50%);
   z-index: 50;
@@ -1266,6 +2566,15 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
   font-size: 0.8rem;
   color: #fca5a5;
   text-align: center;
+}
+.map-pick-primary--combat {
+  border-color: #dc2626;
+  background: #991b1b;
+}
+.map-pick-undo-hint {
+  font-size: 0.72rem;
+  color: #bae6fd;
+  opacity: 0.85;
 }
 .map-pick-cancel {
   padding: 0.3rem 0.65rem;
@@ -1333,7 +2642,6 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
   color: #94a3b8;
 }
 .server-pill {
-  margin-left: auto;
   font-size: 0.72rem;
   padding: 0.2rem 0.5rem;
   border-radius: 999px;
@@ -1348,7 +2656,7 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
 }
 .hud-right {
   position: absolute;
-  top: 3.5rem;
+  top: var(--hud-header-height);
   right: 0;
   bottom: 0;
   width: 320px;
@@ -1525,6 +2833,34 @@ button,
   border-color: #fb923c;
   background: #7c2d12;
 }
+.planning-step-btn {
+  display: block;
+  width: 100%;
+  padding: 0.5rem 0.75rem;
+  margin-bottom: 0.5rem;
+  border-radius: 8px;
+  border: 2px solid rgba(56, 189, 248, 0.55);
+  background: rgba(12, 74, 110, 0.85);
+  color: #e0f2fe;
+  font-size: 0.84rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.planning-step-btn--hero {
+  width: auto;
+  margin-bottom: 0;
+  padding: 0.4rem 0.75rem;
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+.planning-step-btn--back {
+  border-color: rgba(251, 191, 36, 0.55);
+  background: rgba(69, 26, 3, 0.85);
+  color: #fef3c7;
+}
+.planning-step-btn:hover {
+  filter: brightness(1.08);
+}
 .phase-advance-btn {
   display: block;
   width: 100%;
@@ -1547,6 +2883,14 @@ button,
   box-shadow:
     0 0 0 0 color-mix(in srgb, var(--player-color, #3b82f6) 45%, transparent),
     0 2px 6px rgba(0, 0, 0, 0.35);
+}
+.phase-advance-btn--hero {
+  width: auto;
+  min-width: 11rem;
+  margin-top: 0;
+  padding: 0.55rem 1.25rem;
+  font-size: 0.92rem;
+  white-space: nowrap;
 }
 .phase-advance-btn:hover:not(:disabled) {
   filter: brightness(1.06);
@@ -1618,6 +2962,124 @@ button,
       0 0 28px 2px color-mix(in srgb, var(--player-color, #3b82f6) 40%, transparent),
       0 2px 8px rgba(0, 0, 0, 0.4);
     filter: brightness(1.1);
+  }
+}
+.join-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(2, 6, 23, 0.82);
+  backdrop-filter: blur(4px);
+}
+.join-card {
+  width: min(360px, 92vw);
+  padding: 1.25rem;
+  border-radius: 12px;
+  border: 1px solid #334155;
+  background: #1e293b;
+}
+.join-card h2 {
+  margin: 0 0 0.5rem;
+  font-size: 1.1rem;
+}
+.join-meta {
+  margin: 0 0 0.75rem;
+  color: #94a3b8;
+  font-size: 0.85rem;
+}
+.join-players {
+  margin-bottom: 0.85rem;
+}
+.join-players-title {
+  margin: 0 0 0.45rem;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #cbd5e1;
+}
+.join-as {
+  margin: 0 0 0.75rem;
+  color: #cbd5e1;
+  font-size: 0.88rem;
+}
+.join-as strong {
+  color: #f8fafc;
+}
+.join-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin-bottom: 0.75rem;
+  font-size: 0.8rem;
+  color: #94a3b8;
+}
+.join-field input {
+  padding: 0.45rem 0.55rem;
+  border-radius: 6px;
+  border: 1px solid #475569;
+  background: #0f172a;
+  color: #f8fafc;
+}
+.join-error {
+  margin: 0 0 0.5rem;
+  color: #f87171;
+  font-size: 0.85rem;
+}
+.join-submit {
+  width: 100%;
+  padding: 0.55rem;
+  border-radius: 8px;
+  border: 1px solid #2563eb;
+  background: #1d4ed8;
+  color: #fff;
+  cursor: pointer;
+}
+.join-back {
+  display: inline-block;
+  margin-top: 0.75rem;
+  color: #93c5fd;
+  font-size: 0.85rem;
+}
+.invite-btn {
+  padding: 0.25rem 0.55rem;
+  border-radius: 6px;
+  border: 1px solid #2563eb;
+  background: #1e3a8a;
+  color: #dbeafe;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+@media (max-width: 900px) {
+  .game-viewport {
+    --hud-header-height: 4.5rem;
+  }
+  .hud-top {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto auto auto;
+    gap: 0.45rem;
+  }
+  .hud-top-left,
+  .hud-top-center,
+  .hud-top-right {
+    justify-self: stretch;
+  }
+  .hud-top-center {
+    max-width: none;
+    order: 2;
+  }
+  .hud-top-right {
+    justify-content: flex-start;
+    order: 3;
+  }
+  .hud-top-right :deep(.phase-panel--hero) {
+    justify-content: flex-start;
+  }
+  .phase-advance-btn--hero {
+    width: 100%;
+    max-width: 360px;
   }
 }
 </style>

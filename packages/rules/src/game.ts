@@ -1,5 +1,8 @@
 import { getCellResourceToken } from './map-editor.js'
+import { resolveMapPlayerCount } from './map-editor.js'
 import type { GameObservation, GameState, LegalAction, MapDefinition } from './types.js'
+import { getActiveEventObservation } from './events.js'
+import type { GameSnapshot } from './save-file.js'
 import { buildSpatialSummary, renderAsciiMap } from './observation/index.js'
 import { PLAYER_COLORS } from './constants.js'
 import { advanceGamePhase, phaseAdvanceActionLabel } from './turn.js'
@@ -16,12 +19,7 @@ export interface BuildObservationOptions {
 }
 
 export function gameStateFromMap(map: MapDefinition, playerNames: string[] = []): GameState {
-  const usedPlayers = new Set<number>()
-  for (const c of map.cells) {
-    if (c.startPlayer != null) usedPlayers.add(c.startPlayer)
-    for (const s of c.startingShips ?? []) usedPlayers.add(s.player)
-  }
-  const slotCount = Math.max(usedPlayers.size, playerNames.length, 2)
+  const slotCount = Math.max(resolveMapPlayerCount(map), playerNames.length)
 
   const players = Array.from({ length: slotCount }, (_, i) => ({
     id: `player-${i + 1}`,
@@ -56,19 +54,62 @@ export function gameStateFromMap(map: MapDefinition, playerNames: string[] = [])
 }
 
 export function buildObservation(
-  state: GameState,
+  state: GameState & {
+    actionMarkers?: unknown[]
+    productionMarkers?: unknown[]
+    actionMarkerResolvedThisTurn?: boolean
+    productionMarkerResolvedThisTurn?: boolean
+  },
   legalActions: LegalAction[] = [],
   options: BuildObservationOptions = {},
 ): GameObservation {
   const includeGeometry = options.geometry !== false
+  const mechanics: GameObservation['mechanics'] & Record<string, unknown> = {
+    phase: state.phase,
+    turnNumber: state.turnNumber,
+    activePlayerId: state.activePlayerId,
+    players: state.players,
+    cells: state.cells,
+  }
+  if (state.actionMarkers) mechanics.actionMarkers = state.actionMarkers
+  if (state.productionMarkers) mechanics.productionMarkers = state.productionMarkers
+  if (state.actionMarkerResolvedThisTurn != null) {
+    mechanics.actionMarkerResolvedThisTurn = state.actionMarkerResolvedThisTurn
+  }
+  if (state.productionMarkerResolvedThisTurn != null) {
+    mechanics.productionMarkerResolvedThisTurn = state.productionMarkerResolvedThisTurn
+  }
+  const stateExtra = state as unknown as Record<string, unknown>
+  const mechanicsExtra = mechanics as Record<string, unknown>
+
+  /** Явная передача полей snapshot — null означает «очищено на сервере» */
+  for (const key of [
+    'participatingPlayerIds',
+    'turnEvent',
+    'gameOver',
+    'pendingCombat',
+    'productionTokensSpentThisTurn',
+    'overtimeRegionByPlayer',
+    'eventLog',
+    'lastCombatResult',
+    'observationRevision',
+  ] as const) {
+    if (key in stateExtra) {
+      mechanicsExtra[key] = stateExtra[key] ?? null
+    }
+  }
+
+  if (Array.isArray(mechanicsExtra.participatingPlayerIds)) {
+    mechanicsExtra.participatingPlayerIds = [...(mechanicsExtra.participatingPlayerIds as string[])]
+  }
+
+  const activeEvent = getActiveEventObservation(state as unknown as GameSnapshot)
+  if (activeEvent) {
+    mechanicsExtra.activeEvent = activeEvent
+  }
+
   return {
-    mechanics: {
-      phase: state.phase,
-      turnNumber: state.turnNumber,
-      activePlayerId: state.activePlayerId,
-      players: state.players,
-      cells: state.cells,
-    },
+    mechanics: mechanics as GameObservation['mechanics'],
     geometry: includeGeometry
       ? {
           asciiMap: renderAsciiMap(state),

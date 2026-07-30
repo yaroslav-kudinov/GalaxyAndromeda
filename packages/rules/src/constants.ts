@@ -1,5 +1,8 @@
 import type { ShipType } from './types.js'
 
+/** Максимум игроков в online-лобби и локальной hot-seat сессии */
+export const MAX_LOBBY_PLAYERS = 6
+
 /** Player slot 1–6 colors (match TTS-style palette) */
 export const PLAYER_COLORS: Record<number, string> = {
   1: '#3B82F6',
@@ -24,6 +27,16 @@ export const MAX_SHIPS_PER_CELL_PER_PLAYER = 4
 
 /** Max ships total in a hex when multiple players present (e.g. battle) */
 export const MAX_SHIPS_PER_CELL = MAX_SHIPS_PER_CELL_PER_PLAYER * 2
+
+/** Max ships of each class per player on the map (fleet cap for production) */
+export const MAX_FLEET_SIZE_PER_PLAYER: Record<ShipType, number> = {
+  destroyer: 16,
+  supply: 10,
+  cruiser: 12,
+  battleship: 6,
+  shield: 4,
+  hyper: 2,
+}
 
 export const SHIP_TYPES: ShipType[] = [
   'supply',

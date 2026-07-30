@@ -1,4 +1,5 @@
 import {
+  MAX_LOBBY_PLAYERS,
   MAX_SHIPS_PER_CELL,
   MAX_SHIPS_PER_CELL_PER_PLAYER,
 } from './constants.js'
@@ -78,6 +79,8 @@ export function applyCellContent(cell: MapCellDefinition, content: MapCellConten
     : undefined
   if (ships?.length) cell.startingShips = ships
   else delete cell.startingShips
+
+  syncCellControlWithShips(cell)
 }
 
 function trimStartingShips(ships: MapCellDefinition['startingShips']): MapCellDefinition['startingShips'] {
@@ -94,8 +97,41 @@ function trimStartingShips(ships: MapCellDefinition['startingShips']): MapCellDe
   return trimmed
 }
 
+/** Владелец клетки по кораблям (один игрок). Битва — несколько владельцев, null. */
+export function inferCellControlFromShips(cell: MapCellDefinition): number | null {
+  const ships = cell.startingShips ?? []
+  if (ships.length === 0) return null
+  const owners = new Set(ships.map((s) => s.player))
+  if (owners.size !== 1) return null
+  return ships[0]!.player
+}
+
+/** Контроль следует за кораблями: startPlayer = единственный владелец на клетке */
+export function syncCellControlWithShips(cell: MapCellDefinition): void {
+  const inferred = inferCellControlFromShips(cell)
+  if (inferred != null) {
+    cell.startPlayer = inferred
+  }
+}
+
+export function inferMapPlayerCount(map: MapDefinition): number {
+  const used = new Set<number>()
+  for (const cell of map.cells) {
+    if (cell.startPlayer != null) used.add(cell.startPlayer)
+    for (const ship of cell.startingShips ?? []) used.add(ship.player)
+  }
+  if (used.size === 0) return 2
+  return Math.max(...used)
+}
+
+/** Задуманное число игроков на карте (1–6), с обратной совместимостью */
+export function resolveMapPlayerCount(map: MapDefinition): number {
+  const raw = map.playerCount ?? inferMapPlayerCount(map)
+  return Math.min(MAX_LOBBY_PLAYERS, Math.max(1, Math.round(raw)))
+}
+
 export function normalizeMapDefinition(map: MapDefinition): MapDefinition {
-  return {
+  const normalized: MapDefinition = {
     ...map,
     cells: map.cells.map((cell) => {
       const normalized = { ...cell }
@@ -105,10 +141,15 @@ export function normalizeMapDefinition(map: MapDefinition): MapDefinition {
       delete normalized.resourceTokens
       if (normalized.startingShips?.length) {
         normalized.startingShips = trimStartingShips(normalized.startingShips)
+        syncCellControlWithShips(normalized)
       }
       return normalized
     }),
   }
+  if (normalized.playerCount != null) {
+    normalized.playerCount = resolveMapPlayerCount(normalized)
+  }
+  return normalized
 }
 
 export function countCellShips(cell: MapCellDefinition): number {
@@ -129,6 +170,9 @@ export function validateMapDefinition(map: MapDefinition): string[] {
   const errors: string[] = []
   if (!map.id?.trim()) errors.push('Укажите id карты')
   if (!map.name?.trim()) errors.push('Укажите название карты')
+  if (map.playerCount != null && (map.playerCount < 1 || map.playerCount > MAX_LOBBY_PLAYERS)) {
+    errors.push(`Число игроков 1–${MAX_LOBBY_PLAYERS}`)
+  }
 
   const keys = new Set<string>()
   for (const cell of map.cells) {
@@ -164,6 +208,17 @@ export function validateMapDefinition(map: MapDefinition): string[] {
       if (count > MAX_SHIPS_PER_CELL_PER_PLAYER) {
         errors.push(`${key}: игрок ${player} — максимум ${MAX_SHIPS_PER_CELL_PER_PLAYER} корабля`)
       }
+    }
+
+    const inferredControl = inferCellControlFromShips(cell)
+    if (
+      inferredControl != null
+      && cell.startPlayer != null
+      && cell.startPlayer !== inferredControl
+    ) {
+      errors.push(
+        `${key}: контроль (игрок ${cell.startPlayer}) не совпадает с владельцем кораблей (игрок ${inferredControl})`,
+      )
     }
   }
   return errors

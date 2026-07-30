@@ -1,6 +1,13 @@
 import type { GameState, MapDefinition, SpatialSummary } from '../types.js'
 import { hexKey } from '../types.js'
 import { hexDistance } from '../map.js'
+import { supplyChainsFromRegions } from '../supply-chains.js'
+
+/** Стабильный id связной компоненты территории игрока (не зависит от порядка обхода клеток). */
+export function stableRegionId(ownerId: string, hexes: string[]): string {
+  const anchor = [...hexes].sort()[0] ?? '0,0'
+  return `region-${ownerId}-${anchor}`
+}
 
 function cellLabel(state: GameState, q: number, r: number): string {
   const cell = state.cells.find((c) => c.coord.q === q && c.coord.r === r)
@@ -101,7 +108,7 @@ export function buildSpatialSummary(state: GameState): SpatialSummary {
 
     if (hexes.length > 0) {
       regions.push({
-        id: `region-${regions.length}`,
+        id: stableRegionId(cell.controlOwnerId, hexes),
         ownerId: cell.controlOwnerId,
         size: hexes.length,
         hexes,
@@ -126,7 +133,7 @@ export function buildSpatialSummary(state: GameState): SpatialSummary {
   return {
     regions,
     powerCenters,
-    supplyChains: [],
+    supplyChains: supplyChainsFromRegions(state, regions),
     distances,
   }
 }

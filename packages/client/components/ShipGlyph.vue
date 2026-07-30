@@ -14,46 +14,48 @@ const props = withDefaults(
 )
 
 const glyph = computed(() => SHIP_GLYPHS[props.type])
-const hullStroke = computed(() => (props.onOwnedCell ? '#f8fafc' : props.playerColor))
-const plateFill = computed(() => (props.onOwnedCell ? '#0f172a' : props.playerColor))
-const plateOpacity = computed(() => (props.onOwnedCell ? 0.55 : 0.22))
+
+const fillOpacity = computed(() => (props.onOwnedCell ? 0.95 : 0.9))
+const offsetX = computed(() => (props.onOwnedCell ? 1.4 : 1))
+const offsetY = computed(() => (props.onOwnedCell ? 1.6 : 1.2))
 </script>
 
 <template>
   <g class="ship-glyph" :class="{ 'on-owned-cell': onOwnedCell }" :transform="`scale(${scale})`">
+    <!-- dark halo on owned cells — separates icon from same-color cell tint -->
     <circle
-      v-if="showPlate"
-      r="10"
-      :fill="plateFill"
-      :opacity="plateOpacity"
-      stroke="#f8fafc"
-      :stroke-width="onOwnedCell ? 1.2 : 0"
+      v-if="showPlate && onOwnedCell"
+      r="11.5"
+      fill="#0f172a"
+      opacity="0.4"
     />
+    <!-- offset player-color fill layer -->
     <path
       :d="glyph.body"
-      fill="#0f172a"
-      :stroke="hullStroke"
-      stroke-width="1.5"
+      :fill="playerColor"
+      :fill-opacity="fillOpacity"
+      fill-rule="evenodd"
+      :transform="`translate(${offsetX}, ${offsetY})`"
+    />
+    <!-- main hull: player fill + crisp black outline -->
+    <path
+      :d="glyph.body"
+      :fill="playerColor"
+      :fill-opacity="fillOpacity"
+      fill-rule="evenodd"
+      stroke="#000"
+      stroke-width="1.75"
       stroke-linejoin="round"
       stroke-linecap="round"
+      paint-order="stroke fill"
     />
     <path
-      v-if="glyph.detail"
-      :d="glyph.detail"
-      :fill="glyph.detailStrokeOnly ? 'none' : '#0f172a'"
-      :stroke="hullStroke"
-      stroke-width="1.5"
-      stroke-linejoin="round"
+      v-if="glyph.accent"
+      :d="glyph.accent"
+      fill="none"
+      stroke="#000"
+      stroke-width="1.25"
       stroke-linecap="round"
-    />
-    <circle
-      v-if="glyph.circle"
-      :cx="glyph.circle.cx"
-      :cy="glyph.circle.cy"
-      :r="glyph.circle.r"
-      fill="#0f172a"
-      :stroke="hullStroke"
-      stroke-width="1.5"
     />
   </g>
 </template>

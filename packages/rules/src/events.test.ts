@@ -1,0 +1,237 @@
+import { describe, expect, it } from 'vitest'
+import {
+  applyEventImmediateEffects,
+  drawRandomEvent,
+  ensureTurnEventForPhase,
+  getEffectiveMoveRange,
+  getEffectiveTokenValue,
+  getTurnModifiers,
+  getTurnEventHistory,
+  isMovementIntoCellBlocked,
+  isTurnEventResolved,
+  resolveTurnEvent,
+  type EventCardId,
+} from './events.js'
+import { rollCombatRound, selectShipsToDestroy, getEffectiveDestroyCost, buildCombatPreview } from './combat.js'
+import { gameSnapshotFromMap, type GameSnapshot } from './save-file.js'
+import { createEmptyMap } from './map.js'
+import type { ShipUnit } from './types.js'
+import { hexKey } from './types.js'
+
+function gameWithEvent(eventId: EventCardId, resolved = true): GameSnapshot {
+  const game = gameSnapshotFromMap(createEmptyMap())
+  game.phase = resolved ? 'planning' : 'events'
+  game.turnNumber = 2
+  game.turnEvent = {
+    eventId,
+    turnNumber: 2,
+    resolvedAt: resolved ? new Date().toISOString() : undefined,
+  }
+  return game
+}
+
+function setPlayerControl(game: GameSnapshot, playerId: string, coords: { q: number; r: number }[]): void {
+  for (const coord of coords) {
+    const cell = game.cells.find((c) => c.coord.q === coord.q && c.coord.r === coord.r)
+    if (cell) cell.controlOwnerId = playerId
+  }
+}
+
+describe('events', () => {
+  it('getTurnEventHistory parses turn-event log entries', () => {
+    const game = gameSnapshotFromMap(createEmptyMap())
+    game.eventLog.push(
+      {
+        id: 'e1',
+        turn: 1,
+        phase: 'events',
+        type: 'turn-event',
+        message: 'Событие хода: «Магнитная буря» — Дальность хода −1 (мин. 1)',
+        timestamp: 1000,
+      },
+      {
+        id: 'e2',
+        turn: 1,
+        phase: 'events',
+        type: 'turn-event',
+        message: 'Применено: «Магнитная буря»',
+        timestamp: 2000,
+      },
+      {
+        id: 'e3',
+        turn: 2,
+        phase: 'events',
+        type: 'turn-event',
+        message: 'Событие хода: «Честный бой» — Все d6 = 3',
+        timestamp: 3000,
+      },
+    )
+    const history = getTurnEventHistory(game)
+    expect(history).toHaveLength(2)
+    expect(history[0]).toMatchObject({
+      turn: 2,
+      eventId: 'fair-fight',
+      applied: false,
+      drawnAt: 3000,
+    })
+    expect(history[1]).toMatchObject({
+      turn: 1,
+      eventId: 'magnetic-storm',
+      applied: true,
+      drawnAt: 1000,
+      appliedAt: 2000,
+    })
+  })
+
+  it('drawRandomEvent is deterministic with fixed rng', () => {
+    expect(drawRandomEvent(() => 0)).toBe('magnetic-storm')
+    expect(drawRandomEvent(() => 0.99)).toBe('local-self-defense')
+  })
+
+  it('ensureTurnEventForPhase draws once per turn', () => {
+    const game = gameSnapshotFromMap(createEmptyMap())
+    game.phase = 'events'
+    game.turnNumber = 3
+    ensureTurnEventForPhase(game, () => 0.5)
+    const first = game.turnEvent?.eventId
+    ensureTurnEventForPhase(game, () => 0)
+    expect(game.turnEvent?.eventId).toBe(first)
+  })
+
+  it('resolveTurnEvent applies saboteurs in controlled regions', () => {
+    const map = createEmptyMap()
+    map.cells.push(
+      { q: 1, r: 0, startPlayer: 1, resourceToken: { type: 'credits', value: 3 } },
+      { q: 2, r: 0, startPlayer: 1, resourceToken: { type: 'production', value: 2 } },
+    )
+    const game = gameSnapshotFromMap(map)
+    game.phase = 'events'
+    game.turnNumber = 1
+    game.turnEvent = { eventId: 'saboteurs-activation', turnNumber: 1 }
+    setPlayerControl(game, 'player-1', [
+      { q: 0, r: 0 },
+      { q: 1, r: 0 },
+      { q: 2, r: 0 },
+    ])
+    resolveTurnEvent(game)
+    expect(isTurnEventResolved(game)).toBe(true)
+    const p1Cell = game.cells.find((c) => c.coord.q === 1)!
+    expect(p1Cell.resourceTokens[0]?.faceUp).toBe(false)
+  })
+
+  it('peoples-donation restores all tokens face-up', () => {
+    const game = gameSnapshotFromMap(createEmptyMap())
+    game.cells[0].resourceTokens = [{ type: 'credits', value: 4, faceUp: false }]
+    applyEventImmediateEffects(game, 'peoples-donation')
+    expect(game.cells[0].resourceTokens[0]?.faceUp).toBe(true)
+  })
+
+  it('magnetic storm: destroyer move 3→2, min 1', () => {
+    const game = gameWithEvent('magnetic-storm')
+    expect(getEffectiveMoveRange(game, 'destroyer')).toBe(2)
+    expect(getEffectiveMoveRange(game, 'battleship')).toBe(1)
+  })
+
+  it('hyper gap: +1 move and hyper fireRange via modifiers', () => {
+    const game = gameWithEvent('hyper-gap')
+    expect(getEffectiveMoveRange(game, 'destroyer')).toBe(4)
+    expect(getTurnModifiers(game).hyperFireRange).toBe(4)
+  })
+
+  it('fair fight: all d6 = 3', () => {
+    const game = gameWithEvent('fair-fight')
+    game.cells[0].ships = [
+      { id: 'd1', type: 'destroyer', ownerId: 'player-1' },
+      { id: 'd2', type: 'destroyer', ownerId: 'player-2' },
+    ]
+    game.cells[0].controlOwnerId = 'player-2'
+    const preview = buildCombatPreview(game, { q: 0, r: 0 }, 'player-1', [
+      { id: 'a1', type: 'destroyer', ownerId: 'player-1' },
+    ])
+    expect(preview).not.toBeNull()
+    const round = rollCombatRound(preview!, () => 0.99, 3)
+    for (const roll of round.shipRolls) {
+      if (roll.combatRolls.length) {
+        expect(roll.combatRolls.every((v) => v === 3)).toBe(true)
+      }
+    }
+  })
+
+  it('shadow economy: token value +2', () => {
+    const game = gameWithEvent('shadow-economy')
+    expect(getEffectiveTokenValue(game, 3)).toBe(5)
+  })
+
+  it('local self-defense: cannot enter power center hex', () => {
+    const game = gameWithEvent('local-self-defense')
+    const dest = game.cells[0]
+    dest.isPowerCenter = true
+    expect(isMovementIntoCellBlocked(game, dest, '1,0', '0,0')).toBe(true)
+    expect(isMovementIntoCellBlocked(game, dest, '0,0', '0,0')).toBe(false)
+  })
+
+  it('local self-defense: cannot enter cell with resource token', () => {
+    const game = gameWithEvent('local-self-defense')
+    const dest = game.cells[0]
+    dest.resourceTokens = [{ type: 'credits', value: 2, faceUp: true }]
+    expect(isMovementIntoCellBlocked(game, dest, '1,0', hexKey(0, 0))).toBe(true)
+  })
+
+  it('combat chaos: destruction order ignores priority tiers', () => {
+    const ships: ShipUnit[] = [
+      { id: 'bb', type: 'battleship', ownerId: 'p1' },
+      { id: 'dd', type: 'destroyer', ownerId: 'p1' },
+    ]
+    const destroyed = selectShipsToDestroy(ships, 20, new Set(), ['bb', 'dd'], {
+      ignoreDestructionPriority: true,
+      destroyCostForType: (t) => (t === 'battleship' ? 9 : 3),
+    })
+    expect(destroyed[0]).toBe('bb')
+  })
+
+  it('hold formation: destroyCost +2', () => {
+    const game = gameWithEvent('hold-formation')
+    expect(getEffectiveDestroyCost(game, 'destroyer')).toBe(5)
+  })
+
+  it('production accident blocks supply build', () => {
+    const game = gameWithEvent('production-accident')
+    expect(getTurnModifiers(game).cannotBuildShipTypes).toContain('supply')
+  })
+
+  it('ammo detonation blocks combat ships only', () => {
+    const game = gameWithEvent('ammo-detonation')
+    const blocked = getTurnModifiers(game).cannotBuildShipTypes
+    expect(blocked).toContain('destroyer')
+    expect(blocked).not.toContain('shield')
+  })
+
+  it('all for front limits production tokens to 3', () => {
+    const game = gameWithEvent('all-for-front')
+    expect(getTurnModifiers(game).maxProductionTokensPerPlayer).toBe(3)
+  })
+
+  it('smoke: each event id produces modifiers or is no-op', () => {
+    const ids: EventCardId[] = [
+      'magnetic-storm',
+      'empty-void',
+      'stand-to-death',
+      'saboteurs-activation',
+      'production-accident',
+      'ammo-detonation',
+      'fair-fight',
+      'peoples-donation',
+      'mandatory-overtime',
+      'hyper-gap',
+      'all-for-front',
+      'shadow-economy',
+      'hold-formation',
+      'combat-chaos',
+      'local-self-defense',
+    ]
+    for (const id of ids) {
+      const game = gameWithEvent(id)
+      expect(() => getTurnModifiers(game)).not.toThrow()
+    }
+  })
+})

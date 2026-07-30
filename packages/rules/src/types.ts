@@ -36,6 +36,8 @@ export interface MapCellDefinition {
 export interface MapDefinition {
   id: string
   name: string
+  /** Задуманное число игроков на карте (1–6); не связано с режимом симметрии редактора */
+  playerCount?: number
   cells: MapCellDefinition[]
 }
 

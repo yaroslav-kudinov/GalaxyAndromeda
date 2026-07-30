@@ -18,6 +18,13 @@ export function loadGameSession(): GameSession | null {
   }
 }
 
+/** Session only if it belongs to the given room */
+export function loadGameSessionForRoom(roomId: string): GameSession | null {
+  const session = loadGameSession()
+  if (!session || session.roomId !== roomId) return null
+  return session
+}
+
 export function saveGameSession(session: GameSession): void {
   if (!import.meta.client) return
   sessionStorage.setItem(SESSION_KEY, JSON.stringify(session))

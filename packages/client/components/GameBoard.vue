@@ -2,6 +2,7 @@
 import type { BoardCellView } from '~/utils/board-adapter'
 import { boardMarkerKeys } from '~/utils/board-adapter'
 import type { HexOrientation } from '~/utils/hex-layout'
+import type { TerritoryLabelPlayer } from '~/composables/usePlayerTerritoryLabels'
 
 const props = withDefaults(
   defineProps<{
@@ -11,7 +12,12 @@ const props = withDefaults(
     symmetryOrbitKeys?: string[]
     reachableKeys?: string[]
     destinationKeys?: string[]
+    contestedKeys?: string[]
+    supplyChainKeys?: string[]
+    myTerritoryKeys?: string[]
     movementSourceKey?: string | null
+    previewMoves?: { from: { q: number; r: number }; to: { q: number; r: number }; combat?: boolean }[]
+    territoryLabelPlayers?: TerritoryLabelPlayer[]
     availableActionMarkerKeys?: string[]
     availableProductionMarkerKeys?: string[]
     mode?: 'editor' | 'game'
@@ -26,7 +32,12 @@ const props = withDefaults(
     symmetryOrbitKeys: () => [],
     reachableKeys: () => [],
     destinationKeys: () => [],
+    contestedKeys: () => [],
+    supplyChainKeys: () => [],
+    myTerritoryKeys: () => [],
     movementSourceKey: null,
+    previewMoves: () => [],
+    territoryLabelPlayers: () => [],
     availableActionMarkerKeys: () => [],
     availableProductionMarkerKeys: () => [],
     mode: 'editor',
@@ -54,7 +65,12 @@ const markerKeys = computed(() => boardMarkerKeys(props.cells))
     :production-marker-keys="markerKeys.production"
     :reachable-keys="reachableKeys"
     :destination-keys="destinationKeys"
+    :contested-keys="contestedKeys"
+    :supply-chain-keys="supplyChainKeys"
+    :my-territory-keys="myTerritoryKeys"
     :movement-source-key="movementSourceKey"
+    :preview-moves="previewMoves"
+    :territory-label-players="territoryLabelPlayers"
     :available-action-marker-keys="availableActionMarkerKeys"
     :available-production-marker-keys="availableProductionMarkerKeys"
     :mode="mode"

@@ -1,9 +1,83 @@
 # Changelog
 
+- **Бой:** исправлена пауза после частичного уничтожения: атакующие корабли движения сохраняются в `pendingCombat` до финала, поэтому не оказываются ошибочно вместе с выжившим защитником. Решение attacker → defender теперь показывает допустимые клетки отступления и передаёт `retreatTo`; отступившие корабли действительно перемещаются. При захвате клетки удаляется маркер действия защитника.
+- **UI боя:** в prep добавлено объяснение priority skip: уровни N → N+1, live-эффект следующей доступной цели и итог `destroyCost` типа (+1 за пропуск).
+
 ## [Unreleased]
+
+### Changed
+
+- **Бой:** неучастник с кораблями поддержки в `fireRange` выбирает в prep сторону помощи, остальные наблюдают без ready/skip UI; после раунда решение принимается в порядке attacker → defender; следующий раунд запускается только после двух «Продолжить», а оба участника могут отступить (кроме «Стоять насмерть!»). Выбор уничтожения в модалке динамически блокирует корабли, не помещающиеся в остаток бюджета, и показывает фактическую цену с учётом событий и priority skip.
+- **Производство и очередь хода:** активный игрок обязан использовать, перезарядить или снять свой маркер производства перед передачей хода; игроки без доступного действия в Planning/Actions/Production пропускаются автоматически. В `ProductionModal` кредиты и производство отмечены цветными символами `₡` и `⚙`.
+- **Priority skip:** без фишек; пропущенный тип дороже на **+1** `destroyCost` (линкор 9→10); reorder в конце tier
+- **Г.О. fireRange:** min 2 / max 3 (не соседняя клетка)
+- **Обстрел:** несколько целей за маркер (`queuedBombardmentPlans`); UI — цель на корабль
+- **Мультиплеер sync:** `lastCombatResult` сохраняется при активном `pendingCombat`; один bump revision на resolve prep
+- **Тесты «По правилам»:** `rulebook-compliance.test.ts`
+- **Обстрел — подготовка и контроль:** защитник пассивен в prep (без skip/ready); countdown стартует только от готовности атакующего; при полном уничтожении флота защитника клетка не передаётся атакующему; `BattleModal` — режим наблюдателя для защитника
+- **Priority skip (ранее):** убрана оплата фишками; валидация по наличию типа на стороне игрока
+
+### Fixed
+
+- **Бой — недостаточный бюджет уничтожения:** при разнице очков ниже `destroyCost` всех доступных кораблей (с priority skip) раунд не создаёт `awaitingDestruction`, а сразу переходит к решению продолжить или отступить; для ранее открытого пустого выбора доступна кнопка «Ничья / Продолжить без уничтожения». Итог раунда теперь показывает суммы, разницу, щиты, уничтожения и статус продолжения без ошибочного текста о поражении при ничьей.
+- **Лимит маркеров производства:** первый маркер базовый; второй разблокируют 3, третий — 5 отдельных контролируемых регионов по ≥ 4 клетки. Регион остаётся связной контролируемой территорией; ставить маркер можно только в valid region от 3 клеток.
+- **Мультиплеер — отстающий клиент:** polling больше не прекращается, если его тик пришёлся на собственное действие; цикл защищён generation-токеном от позднего ответа после unmount/restart и опрашивает state каждые 750 мс (250 мс при активном бое).
+- **Перезарядка производства:** теперь поднимает все перевёрнутые ресурсные фишки в цепочке снабжения — Credits и Production; модалка и валидация учитывают оба типа.
+- **Мультиплеер — отклонённые действия:** клиент показывает текст HTTP 400, сразу повторно получает authoritative observation и не оставляет устаревший экран; в планировании локально блокируется попытка поставить маркер производства вне региона от 3 клеток.
+- **Мультиплеер — баннер синхронизации:** кнопка «Обновить страницу» вызывает защищённый `reloadPage()` из script setup, а не обращается к `window` из Vue-template.
+- **Мультиплеер — восстановление sync:** клиент отслеживает monotonic `observationRevision`, три подряд неудачных poll и ответ действия без роста revision; после сигнала делает до трёх немедленных повторных запросов с backoff. Если authoritative state не удалось подтвердить, показывается постоянное предупреждение с действиями «Синхронизировать» и «Обновить страницу».
+- **Мультиплеер — подготовка к бою:** API-клиент принудительно отправляет запросы с телом как `POST` и запрещает автоматические redirect, которые могли превратить `POST /action` в `GET`; ошибочный `GET /action` теперь возвращает 405 с понятной причиной.
+- **Обстрел — защитник не бросает кубики (PDF):** `buildBombardmentPreview` обнуляет combat/support защитника; `rollCombatRound` при `trigger: bombardment` бросает только атакующего (`defenderTotal = 0`, winner всегда attacker); очки уничтожения = сумма обстрела; UI `BattleModal` / `CombatPreviewPanel` не показывают бросок защитника
+- **Priority skip в подготовке к бою:** skip объявляется без оплаты; чекбоксы в `BattleModal` всегда доступны для типов на своей стороне
+- **Мультиплеер — синхронизация состояния:** сервер как единственный источник истины — `buildObservation` передаёт все поля snapshot (включая явные `null` для очищенного состояния); `gameSnapshotFromObservation` больше не сохраняет устаревшие `turnEvent`, `gameOver`, `eventLog`, `pendingCombat`; `observationRevision` на сервере; клиент отбрасывает устаревшие ответы и синхронизирует `lastCombatResult` (включая очистку); polling 400ms на любой `pendingCombat`; `buildCombatPreviewFromPending` работает для `awaitingDestruction`/`roundState` — защитник видит модалку после боя
+- **Мультиплеер — countdown боя:** защитник больше не зависает на «Бой через…» — `pendingCombat` не сохраняется локально после очистки сервером; `lastCombatResult` повторяется в observation до следующего действия; resync по окончании countdown с повторными попытками
+- **Мультиплеер — анимация бросков:** polling больше не сбрасывает фазу «кубики крутятся» — `combatResolutionFingerprint` + guard в `BattleModal`; щитоносцы видны в превью и модалке боя с подписью «Щит: поглощает до N»
 
 ### Added
 
+- **Создание комнаты:** до запуска online-игры хост видит мини-превью выбранной карты и выбирает стартовый слот; выбранный `preferredPlayerId` передаётся в join. Для новой offline-игры тот же выбор определяет активного локального игрока.
+- **UI (игровая карта):** никнеймы игроков размещаются за гекс-сеткой у внешней границы контролируемой территории; поиск свободной позиции не пересекает клетки, корабли и маркеры и следует pan/zoom SVG.
+- **Локальная multiplayer-отладка:** structured server logs для join/presence/actions/combat/revisions и HTTP-ошибок; dev-only ring buffer `GET /debug/logs?roomId=`; opt-in client API/observation logs через `?debug=1` или `localStorage`.
+- **Лобби — отладка:** в dev-режиме добавлена сворачиваемая панель с переключателем browser-логов и просмотром server-логов выбранной комнаты.
+- **ADR 004:** turn events, victory, supply chains, multi-round combat (`GameSnapshot` extensions)
+- **Victory/defeat:** `packages/rules/src/victory.ts` — 4×7 регионов, большинство энергоцентров, last standing; `gameOver` в snapshot; блок действий на сервере
+- **Supply chains:** `packages/rules/src/supply-chains.ts` — BFS компонент, оплата производства из цепочки; `spatialSummary.supplyChains`
+- **Events:** `packages/rules/src/events.ts` — 15 карточек с русскими названиями, одно глобальное событие на ходу; `turnEvent` в `GameSnapshot`; модификаторы хода; UI `EventCardPanel`; 16 тестов в `events.test.ts`
+- **UI (события хода):** `TurnEventsPanel` в сайдбаре игры — текущее событие (весь ход, не только фаза «События»), статус применения, время и история прошлых ходов из `eventLog`
+- **Multi-round combat:** `pendingCombat`, `continue-combat` / `stop-combat`, блок «Стоять насмерть!»
+- **UI:** оверлей окончания игры в `pages/game/[roomId].vue`
+- **MAX_FLEET_SIZE_PER_PLAYER** в `@galaxy/rules` — эсминец 16, снабжение 10, крейсер 12, линкор 6, щитоносец 4, Г.О. 2; проверка в `getBuildableShipsForMarker` / `executeProductionBatch`, подсказки в `ProductionModal` и `game-help.ts`
+- **Полная боевая система (MVP):** `resolveCombatAtCell` — priority skip, щиты 4+2, уничтожение по приоритету; интеграция в движение/обстрел; `BattleModal` с «Начать бой»
+
+- **Приказ маркера:** не более одной клетки боя за приказ — `validateSingleCombatDestination` в `@galaxy/rules`, блокировка в `useMarkerMapPick` / `useActionOrderDraft`
+- **Обстрел (bombardment):** `packages/rules/src/bombardment.ts` — крейсер/линкор/Г.О., цель в `fireRange` без входа в клетку; UI «Обстрел» в `MarkerActionModal`, превью через `buildBombardmentPreview`, действие `execute-marker-bombardment`
+- **Редактор карт:** синхронизация `startPlayer` с владельцем кораблей (`syncCellControlWithShips`, `normalizeMapDefinition`, валидация mismatch)
+
+### Changed
+
+- **Мультиплеер — подготовка к бою:** `pendingCombat.prep` (priority skip, mutual ready, countdown 3-2-1); actions `update-combat-prep` / `cancel-combat-prep`; `BattleModal` для обоих игроков; polling 500ms в prep; синхронизация `pendingCombat` в `gameSnapshotFromObservation`
+- **Клиент API:** `submitGameAction` — явный `method: POST`; улучшен текст ошибок Fastify
+- **Бой — ручное уничтожение:** победитель выбирает корабли в рамках бюджета урона; `confirm-combat-destruction`; полное авто-уничтожение при покрытии всего флота
+- **UI (игровая карта):** клетки под вашим контролем (`controlOwnerId === ваш слот`) подсвечиваются пунктирным внутренним кольцом — заливка остаётся той же палитрой `PLAYER_COLORS`, что в лобби/редакторе; подсветка цепочек снабжения — только обводка, без изменения fill
+- **UI:** `CombatPreviewPanel` — перетаскивание за заголовок (`useDraggablePanel`), позиция по умолчанию справа снизу (не перекрывает HUD/баннер), сворачивание до строки «Победа · Ничья · Поражение» с сохранением состояния в сессии
+- **UI:** переработаны SVG-глифы кораблей на гекс-доске — заливка цветом игрока (~90%) со смещением, чёрная обводка, прорези (evenodd) и уникальные силуэты по типам (эсминец, крейсер, линкор, щит, гипер, снабжение)
+- **Бой:** итоги раунда — явная «сумма кубиков» по сторонам (`formatCombatRoundDiceTotals`); `resolveCombatAtCell` учитывает входящие корабли атакующего; `BattleModal` — подписи и финальная строка итога
+- **Бой — очки уничтожения (PDF):** `computeRoundDamage` — разница сумм кубиков |атакующий − защитник|, не полная сумма победителя; лог «Очки уничтожения N»; rulebook § Combat; откат ошибочного «грязного урона»
+
+### Added
+
+- **UI:** модалка `BattleModal` — перетаскивание за заголовок (`useDraggablePanel`), позиция сбрасывается при закрытии
+- **Бой (fair rolls + поддержка):** `rollCombatRound` — пошаговый журнал бросков per-ship (`ShipCombatRollLog`); `collectSupportShips` — supportDice с клеток в пределах `fireRange`; `buildCombatPreview` — список `supportingShips` на сторону; `estimateRoundOneOutcome` через тот же `rollCombatRound`
+- **UI:** `BattleModal` — анимация 1-го раунда («Эсминец бросает…», «Поддержка от …»), бегущие суммы; `CombatPreviewPanel` — список кораблей поддержки
+- **Rules:** `estimateRoundOneOutcome` — Monte-Carlo оценка исхода 1-го раунда (победа / ничья / поражение); валидация хода в contested hex в `movement.ts`
+- **UI:** `CombatPreviewPanel` — полоски вероятностей 1-го раунда при формировании приказа
+- **UI (планирование):** кнопка «← К маркерам действия» — возврат с подшага маркеров производства к расстановке маркеров действия; ручной override подшага имеет приоритет над авто-переходом
+- **UI:** кнопка «Выбрать все» в модалке выбора кораблей для движения с маркера (`MarkerActionModal`); переключается на «Снять выбор», если все доступные корабли уже отмечены
+- **Боевая система (sketch):** `docs/combat-system-draft.md` — триггеры боя, priority skip (линкор 9+2=11), щиты 4+2, модель данных MVP vs future
+- **Rules:** `packages/rules/src/combat.ts` — типы, `detectCombats`, `buildCombatPreview`, skeleton `resolveCombatAtCell`; тесты в `combat.test.ts`
+- **UI фазы «Действия»:** превью боя при выборе оспариваемой клетки (`CombatPreviewPanel`, `BattleModal`), красная подсветка contested hex, подсказки в `game-help.ts`
+- **Редактор карт:** симметрия для **4 игроков** (поворот 180° + отражение); режим симметрии и `playerCount` карты независимы
+- **MapDefinition.playerCount:** задуманное число игроков на карте (1–6); используется при создании комнаты/лобби; обратная совместимость — вывод из стартовых позиций или 2
 - **Пакетная постройка (production batch):** несколько кораблей за маркер, размещение по региону, авто-оплата фишками (`autoAllocateTokens`), действие `execute-production-recharge` для перезарядки производства
 - **UI:** `ProductionModal` — выбор количества и перезарядка; `useProductionShipPick` — размещение кораблей по клеткам региона (вместо `useProductionTokenPick`)
 - **Движение с маркера действия (MVP):** валидация в `@galaxy/rules` (`movement.ts`, `ships.ts`), действие `execute-marker-movement`, один маркер за ход в фазе «Действия»
@@ -18,18 +92,33 @@
 
 ### Changed
 
-- **`execute-production`:** параметры `{ markerId, ships: ShipPlacement[] }` вместо одиночного корабля и ручного выбора фишек; `ProductionBuildPlan` сохранён как thin wrapper
+- **Маркеры производства:** лимит и UI-счётчик «X из Y» учитывают только регионы **от 3 клеток** (`validProductionRegionsForPlayer`); кластеры 1–2 не дают слот маркера
+- **UX игры (`/game/:roomId`):** убран режим карты «Осмотр» / «Маркеры» — клики по карте зависят от фазы; планирование ведёт по шагам (сначала маркеры действия, затем производства) с подсказками и счётчиками в hero-полоске; фазы «Действия», «Производство» и «События» — явные подсказки без модальных оверлеев
+- **Вход в лобби:** выбор слота `player-1…N` при join/rejoin; API `preferredPlayerId`; bootstrap с `joined` и `availablePlayerIds`; слот по умолчанию из claim/session; вход в любую комнату со свободным местом (`/lobbies`, `/game/:id`)
+- **Мультиплеер:** join по ID комнаты; до **6 игроков** в лобби (`MAX_LOBBY_PLAYERS`)
+- **Список лобби (`/lobbies`):** серверный `GET /lobbies` с presence (heartbeat `POST /rooms/:id/presence`); активный игрок = открыта страница игры; повторный вход по claim в `localStorage` (`galaxy-lobby-claims`) и `POST /rooms/:id/rejoin`
+- **Лобби:** импорт `.galaxy.json` с секцией `game` — продолжение offline или создание online-комнаты (`POST /rooms` с `save`)
+- **Движение (2-й игрок):** sync карты из bootstrap при observation; reachable hexes из `game.cells`; территория неучаствующего игрока 3 — нейтральная для хода
+- **Производство:** стабильные id регионов и поиск по координатам маркера — исправлено «Регион маркера не найден» после изменений карты
+- **Dev (tuna-туннель):** клиент слушает `0.0.0.0:3000`, `allowedHosts: ['.ru.tuna.am']`, HMR через `wss`/443; туннель: `tuna http 3000 --subdomain=<ваш>` (502 = dev не запущен или туннель не на :3000); API проксируется на `:3001` через `/api`
 - Нейтральные клетки на карте (`HexBoard`): единая заливка `#6a7483` для пустых и с точками интереса (раньше `#4b5563` с opacity 0.58 vs `#8993a3`)
 - Unified map display: ships always use full `ShipGlyph` layout; resources, power centers and markers use compact `HexCellOverview` at all zoom levels (overlay scales up when zoom ≤ 45%)
 - Phase advancement: button «К планированию / действиям / производству / Завершить ход» cycles events → planning → actions → production and rotates active player (local + server)
 - Turn order: within each phase all players act in sequence (P1→P2→P3); phase changes only after the last player; client auto-switches controlled player on pass (debug)
 - Фаза «Действия»: за свой ход в фазе каждый игрок может исполнить **только один** маркер действия; флаг `actionMarkerResolvedThisTurn` в `GameSnapshot`, сброс при смене активного игрока в фазе и при входе в фазу «Действия»; валидация в `executeMarkerMovement` / `validateMarkerMovement`
 - **Движение снабжения:** захват нейтральной клетки снимает корабль с карты; в UI — выбор «занять» или «только переместить»
-- Маркер действия только на клетке с **своим кораблём**; фаза «Действия» не заканчивается, пока на карте есть маркеры; снятие маркера без исполнения — с подтверждением, **только до** исполнения маркера в этом ходу
+- Маркер действия только на клетке с **своим кораблём** (контроль клетки не обязателен); расстановка маркеров **только в фазе планирования**; подтверждение при завершении планирования с нерасставленными маркерами
 - Фаза «Производство»: `productionMarkerResolvedThisTurn`, снятие других маркеров после постройки заблокировано; новый круг фазы при оставшихся маркерах
 
 ### Fixed
 
-- Движение с маркера: модалка больше не блокирует карту на шаге назначения клеток — после выбора кораблей открывается режим клика по карте с баннером сверху
+- **Бой — очки уничтожения:** `computeRoundDamage` реально переведён на |атакующий − защитник| (subagent обновил docs, код отставал); `selectShipsToDestroy` не тратит бюджет ниже destroyCost следующего эшелона нельзя передать ход («Далее») с неразрешёнными маркерами действия — нужно исполнить маркер или снять его с карты; валидация в `advanceGameSnapshot`, подсказка и блок кнопки в UI
+- **Производство (UI):** polling `/state` мог перезаписать свежий ответ `execute-production` устаревшим observation — корабли исчезали с карты; добавлен `observationEpoch`, отменяющий поздние ответы polling после действия игрока
+- **404 `/state`:** при `Room not found` (комната в памяти сервера пропала после рестарта) клиент переводит сессию в offline вместо бесконечного polling
+- **Очередь хода:** в фазах «Действия» и «Производство» первым ходит игрок с меньшим числом контролируемых регионов (`turn.ts`, rulebook § Turn order)
+- **Страница игры (`/game/:roomId`):** кнопка копирования ссылки — «Ссылка-приглашение» вместо «Ссылка для 2-го игрока» (до 6 игроков)
+- **Страница игры (`/game/:roomId`):** импорт `MAX_LOBBY_PLAYERS` из `@galaxy/rules` — исправлен `ReferenceError` при входе в комнату
+- **Маркер производства в UI:** `gameSnapshotFromObservation` больше не падает при отсутствии карты — `refreshProductionMarkerRegionIds` вызывается только когда передан `map`
+- **Мультиплеер 6 игроков / маркеры:** сохранение `participatingPlayerIds` при polling; очередь хода только among joined
 - Server memory: UI API uses `geometry=0` (no ASCII map rebuild per request); event log capped at 200 entries; Fastify request logging off by default
 - Vitest OOM on Windows: rules tests run in a single fork
