@@ -599,13 +599,10 @@ export function validateGameSnapshot(game: GameSnapshot, map: MapDefinition): st
     if (cell.productionMarkerId && !game.productionMarkers.some((m) => m.id === cell.productionMarkerId)) {
       errors.push(`${key}: unknown productionMarkerId ${cell.productionMarkerId}`)
     }
-    if (cell.ships.length > 0 && cell.controlOwnerId) {
-      const shipOwners = new Set(cell.ships.map((s) => s.ownerId))
-      if (!shipOwners.has(cell.controlOwnerId) && shipOwners.size === 1) {
-        const only = [...shipOwners][0]
-        errors.push(`${key}: controlOwnerId (${cell.controlOwnerId}) не совпадает с владельцем кораблей (${only})`)
-      }
-    }
+    // Владелец контроля намеренно не связан с владельцем кораблей: контроль
+    // переходит только при полном вытеснении защитника. После отступления на
+    // клетке стоят корабли атакующего, а контроль остаётся за защитником —
+    // это легальное состояние, и раньше оно ломало загрузку сохранения.
   }
 
   if (game.phase !== 'planning' && game.phase !== 'actions') {

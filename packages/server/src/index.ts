@@ -1,6 +1,7 @@
 import Fastify from 'fastify'
 import websocket from '@fastify/websocket'
-import { registerHttpRoutes } from './room.js'
+import { registerHttpRoutes, restoreRoomsFromDisk } from './room.js'
+import { devRoomsDir, roomPersistenceEnabled } from './room-persistence.js'
 
 const PORT = Number(process.env.PORT ?? 3001)
 const HOST = process.env.HOST ?? '0.0.0.0'
@@ -9,6 +10,11 @@ const app = Fastify({
   logger: process.env.LOG_LEVEL ? { level: process.env.LOG_LEVEL } : false,
 })
 await app.register(websocket)
+
+if (roomPersistenceEnabled) {
+  const restoredRooms = restoreRoomsFromDisk()
+  console.log(`@galaxy/server dev-rooms: ${devRoomsDir} (восстановлено комнат: ${restoredRooms})`)
+}
 
 registerHttpRoutes(app)
 

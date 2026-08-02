@@ -180,6 +180,28 @@ pnpm --filter @galaxy/rules test
 node harness/scripts/simulate-lobby.mjs
 ```
 
+### Локальная симуляция боя
+
+```bash
+node harness/scripts/simulate-combat.mjs
+```
+
+Гоняет боевой конечный автомат против живого сервера (`GAME_SERVER_URL`, по умолчанию `http://127.0.0.1:3001`): подготовка → countdown → авторазрешение → `confirm-combat-destruction` → `continue-combat` / `stop-combat` с отступлением → `abort-combat`. После каждого шага проверяются инвариант `pendingCombatInvariantViolations`, одинаковые фаза боя и `observationRevision` у всех трёх клиентов и server-логи на автоснятие боя. Итог — `PASS`/`FAIL` с кодом выхода.
+
+Правила берутся из `packages/rules/dist` (нужен `pnpm --filter @galaxy/rules build`) либо из исходников, если запустить через `pnpm tsx harness/scripts/simulate-combat.mjs`.
+
+### Персист комнат в dev (`.dev-rooms/`)
+
+Вне production сервер пишет каждую комнату в `.dev-rooms/<roomId>.json` (дебаунс 400 мс) и поднимает их при старте, поэтому рестарт `tsx watch` не убивает живые партии. Состояние прогоняется через `normalizeGalaxySave`, так что старый формат `pendingCombat` миграется; битый файл только логируется и пропускается. WebSocket-соединения и presence не сохраняются — клиенты переподключаются сами.
+
+| Переменная | Смысл |
+|------------|-------|
+| `GALAXY_DEV_ROOMS=0` | выключить персист локально |
+| `GALAXY_DEV_ROOMS_DIR` | другой каталог вместо `.dev-rooms/` |
+| `GALAXY_DEV_ROOMS_DEBOUNCE_MS` | окно дебаунса записи |
+
+Чтобы забыть все локальные партии, достаточно удалить каталог `.dev-rooms/`.
+
 ## Параллельная разработка (worktrees)
 
 Для нескольких агентов/веток без конфликтов:

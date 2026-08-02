@@ -2431,7 +2431,9 @@ export function confirmCombatDestruction(
       rs.incomingAttackerShipIds,
     )
   ) {
-    setupPendingCombat(game, coord, pending.attackerId, pending.roundNumber, 'movement', {
+    // Раунд pending.roundNumber завершён вместе с выбором уничтожения,
+    // поэтому продолжение — уже следующий раунд.
+    setupPendingCombat(game, coord, pending.attackerId, pending.roundNumber + 1, 'movement', {
       movementFrom: { ...rs.movementFrom },
       movementPlans: rs.movementPlans.map((move) => ({ ...move, to: { ...move.to } })),
       incomingAttackerShipIds: [...rs.incomingAttackerShipIds],

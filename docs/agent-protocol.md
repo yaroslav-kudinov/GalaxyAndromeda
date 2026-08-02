@@ -25,10 +25,11 @@ HTTP base: `http://127.0.0.1:3001` (env `GAME_SERVER_URL` for MCP).
 | `confirm-combat-destruction` | `{ destructionSelection: string[] }` | Winner confirms ship IDs to destroy after round |
 | `update-combat-prep` | `{ ready: boolean, prioritySkips?: { shipType }[], supportSide?: 'attacker' \| 'defender' }` | Участники объявляют skip + ready; неучастник с доступной поддержкой выбирает `supportSide` без ready |
 | `cancel-combat-prep` | — | Attacker cancels prep before battle starts |
+| `abort-combat` | — | Participant aborts a stuck combat; pending movement is finalized |
 
-Without `combatOptions`, movement/bombardment into combat enters `pendingCombat.prep`. Movement: mutual ready → countdown 3s → auto-resolve. Bombardment: attacker-only ready → countdown; multiple targets queued via `queuedBombardmentPlans`. Sync via `GET /state` polling.
+Without `combatOptions`, movement/bombardment into combat enters `pendingCombat` with `phase: 'prep'`. Movement: mutual ready → countdown 3s → auto-resolve. Bombardment: attacker-only ready → countdown; multiple targets queued via `queuedBombardmentPlans`. Sync via `GET /state` polling.
 
-When a combat round leaves partial damage, `pendingCombat.awaitingDestruction` is set until the winner calls `confirm-combat-destruction`.
+Combat FSM phases: `prep` → (roll) → `awaiting-destruction` (winner picks losses) → `awaiting-continue` (attacker then defender decide continue/retreat). Invalid `pendingCombat` is released automatically by the server.
 
 ## GameObservation
 

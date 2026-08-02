@@ -18,6 +18,15 @@ Configure in `.cursor/mcp.json`. Requires `@galaxy/server` running on port 3001.
 
 See [docs/agent-workflows.md](../docs/agent-workflows.md).
 
+## Simulations
+
+Против запущенного `@galaxy/server` (адрес — `GAME_SERVER_URL`):
+
+```bash
+node harness/scripts/simulate-lobby.mjs    # 3 игрока, 3 полных хода
+node harness/scripts/simulate-combat.mjs   # полный цикл боя + инвариант pendingCombat
+```
+
 ## Scenarios
 
 JSON fixtures in `scenarios/` for rules tests and agent replay.

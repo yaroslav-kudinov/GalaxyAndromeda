@@ -56,6 +56,8 @@ import {
 
 import { debugLoggingEnabled, debugLog, getDebugLogs } from './debug-log.js'
 
+import { loadPersistedRooms, scheduleRoomPersist } from './room-persistence.js'
+
 
 
 export interface Room {
@@ -91,6 +93,20 @@ interface PlayerPresence {
 }
 
 const rooms = new Map<string, Room>()
+
+/**
+ * Поднимает dev-комнаты с диска (`.dev-rooms/`). Вызывается один раз при старте сервера,
+ * чтобы рестарт `tsx watch` не терял живые партии.
+ */
+export function restoreRoomsFromDisk(): number {
+  let restored = 0
+  for (const room of loadPersistedRooms()) {
+    if (rooms.has(room.id)) continue
+    rooms.set(room.id, room)
+    restored += 1
+  }
+  return restored
+}
 
 const presenceByRoom = new Map<string, Map<string, PlayerPresence>>()
 
@@ -164,6 +180,8 @@ function bumpObservationRevision(room: Room, reason: string): void {
     revision: room.observationRevision,
     reason,
   })
+  // Ревизия растёт на каждой мутации состояния — удобная единая точка для персиста.
+  scheduleRoomPersist(room)
 }
 
 function maybeAdvanceCombatPrep(room: Room): {
@@ -271,6 +289,7 @@ export function createRoom(map: MapDefinition, maxPlayers = 6): Room {
   }
 
   rooms.set(id, room)
+  scheduleRoomPersist(room)
   debugLog('room.create', { roomId: id, code: room.code, maxPlayers: effectiveMax })
 
   return room
@@ -306,6 +325,7 @@ export function createRoomFromSave(save: GalaxySaveFile, maxPlayers = 6): Room {
   }
 
   rooms.set(id, room)
+  scheduleRoomPersist(room)
   debugLog('room.create', { roomId: id, code: room.code, maxPlayers: effectiveMax, source: 'save' })
   return room
 }
@@ -349,6 +369,7 @@ function assignPlayerToSlot(room: Room, playerId: string, playerName: string): b
 
   syncParticipatingPlayerIds(room.state, room.playerIds)
   touchPresence(room.id, playerId, name)
+  scheduleRoomPersist(room)
   return true
 }
 

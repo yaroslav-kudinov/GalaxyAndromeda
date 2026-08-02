@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { gameSnapshotFromMap, type GameSnapshot } from './save-file.js'
+import {
+  GALAXY_SAVE_FORMAT,
+  GALAXY_SAVE_VERSION,
+  gameSnapshotFromMap,
+  migrateLegacyPendingCombat,
+  normalizeGalaxySave,
+  validateGalaxySave,
+  type GameSnapshot,
+} from './save-file.js'
 import { createEmptyMap } from './map.js'
 import type { ShipType } from './types.js'
 import {
@@ -33,6 +41,8 @@ import {
   updateCombatPrep,
   abortPendingCombat,
   combatPrepOf,
+  combatRoundStateOf,
+  confirmCombatDestruction,
   continuePendingCombat,
   isAwaitingContinue,
   pendingCombatInvariantViolations,
@@ -46,6 +56,7 @@ import { applyGameActionOnSnapshot, executeMarkerMovement, resolveCombatPrep } f
 import {
   buildBombardmentPreview,
   canShipBombard,
+  continueBombardmentQueueOrFinalize,
   executeMarkerBombardment,
   getBombardmentTargetKeys,
   validateMarkerBombardment,
@@ -1231,5 +1242,333 @@ describe('pendingCombat FSM', () => {
 
     expect(applyGameActionOnSnapshot(game, map, 'player-1', 'abort-combat').errors).toEqual([])
     expect(game.pendingCombat).toBeUndefined()
+  })
+})
+
+describe('покрытие непокрытых боевых путей', () => {
+  it('раунд 2+: сохраняет movementFrom/plans, attackerId и увеличивает roundNumber', () => {
+    const map = createEmptyMap('round2', 'Round 2')
+    map.cells.push({ q: 1, r: 0 })
+    const game = gameSnapshotFromMap(map)
+    game.phase = 'actions'
+    game.activePlayerId = 'player-1'
+    game.participatingPlayerIds = ['player-1', 'player-2']
+    game.turnNumber = 2
+    game.turnEvent = {
+      eventId: 'fair-fight',
+      turnNumber: 2,
+      resolvedAt: new Date().toISOString(),
+    }
+
+    for (let i = 0; i < 5; i++) {
+      addShip(game, 0, 0, 'player-1', 'destroyer', `att-dd-${i}`)
+    }
+    addShip(game, 1, 0, 'player-2', 'destroyer', 'def-dd-1')
+    addShip(game, 1, 0, 'player-2', 'destroyer', 'def-dd-2')
+    addShip(game, 1, 0, 'player-2', 'destroyer', 'def-dd-3')
+    game.cells.find((c) => c.coord.q === 1 && c.coord.r === 0)!.controlOwnerId = 'player-2'
+
+    const incoming = game.cells
+      .find((c) => c.coord.q === 0 && c.coord.r === 0)!
+      .ships.filter((s) => s.ownerId === 'player-1')
+    const movementPlans = incoming.map((s) => ({ shipId: s.id, to: { q: 1, r: 0 } }))
+
+    const result = resolveCombatAtCell(game, { q: 1, r: 0 }, 'player-1', incoming)
+    expect(result.needsDestructionSelection).toBe(true)
+
+    setupPendingCombatDestruction(
+      game,
+      { q: 1, r: 0 },
+      'player-1',
+      'player-2',
+      result,
+      {},
+      { attacker: [], defender: [] },
+      'movement',
+      {
+        incomingAttackerShipIds: incoming.map((s) => s.id),
+        movementFrom: { q: 0, r: 0 },
+        movementPlans,
+      },
+    )
+    expect(game.pendingCombat?.phase).toBe('awaiting-destruction')
+    expect(game.pendingCombat?.roundNumber).toBe(1)
+
+    const pick = result.destructionState?.selectableIds[0]
+    expect(pick).toBeTruthy()
+    expect(confirmCombatDestruction(game, 'player-1', [pick!]).errors).toEqual([])
+
+    // После частичного уничтожения бой продолжается — следующий раунд.
+    expect(game.pendingCombat?.phase).toBe('awaiting-continue')
+    expect(game.pendingCombat?.roundNumber).toBe(2)
+    expect(game.pendingCombat?.attackerId).toBe('player-1')
+    expect(game.pendingCombat?.continuation?.movementFrom).toEqual({ q: 0, r: 0 })
+    expect(game.pendingCombat?.continuation?.movementPlans).toHaveLength(incoming.length)
+    expect(pendingCombatInvariantViolations(game)).toEqual([])
+
+    // Защитник продолжает бой — attackerId и планы движения не должны пропасть.
+    expect(continuePendingCombat(game, 'player-1').errors).toEqual([])
+    const originalRandom = Math.random
+    Math.random = () => 0.5
+    try {
+      const continued = continuePendingCombat(game, 'player-2')
+      expect(continued.errors).toEqual([])
+      if (game.pendingCombat?.phase === 'awaiting-destruction') {
+        expect(game.pendingCombat.attackerId).toBe('player-1')
+        const rs = combatRoundStateOf(game.pendingCombat)
+        expect(rs?.movementFrom).toEqual({ q: 0, r: 0 })
+        expect(rs?.movementPlans?.length).toBe(incoming.length)
+        expect(pendingCombatInvariantViolations(game)).toEqual([])
+      } else if (game.pendingCombat?.phase === 'awaiting-continue') {
+        expect(game.pendingCombat.attackerId).toBe('player-1')
+        expect(game.pendingCombat.continuation?.movementFrom).toEqual({ q: 0, r: 0 })
+        expect(game.pendingCombat.roundNumber).toBeGreaterThanOrEqual(2)
+      }
+    } finally {
+      Math.random = originalRandom
+    }
+  })
+
+  it('queuedBombardmentPlans подхватывает следующую цель после завершения первой', () => {
+    const map = createEmptyMap('queue-bomb', 'Queue bomb')
+    map.cells.push({ q: 1, r: 0 }, { q: 2, r: 0 })
+    const game = gameSnapshotFromMap(map)
+    game.phase = 'actions'
+    game.activePlayerId = 'player-1'
+    game.participatingPlayerIds = ['player-1', 'player-2']
+
+    addShip(game, 0, 0, 'player-1', 'battleship', 'bb-1')
+    addShip(game, 0, 0, 'player-1', 'battleship', 'bb-2')
+    addShip(game, 1, 0, 'player-2', 'destroyer', 'def-a')
+    addShip(game, 2, 0, 'player-2', 'destroyer', 'def-b')
+    game.cells.find((c) => c.coord.q === 1 && c.coord.r === 0)!.controlOwnerId = 'player-2'
+    game.cells.find((c) => c.coord.q === 2 && c.coord.r === 0)!.controlOwnerId = 'player-2'
+
+    const prevPhase = game.phase
+    game.phase = 'planning'
+    expect(addActionMarker(game, 'player-1', { q: 0, r: 0 })).toEqual([])
+    game.phase = prevPhase
+
+    const start = executeMarkerBombardment(game, map, 'player-1', { q: 0, r: 0 }, [
+      { shipId: 'bb-1', target: { q: 1, r: 0 } },
+      { shipId: 'bb-2', target: { q: 2, r: 0 } },
+    ])
+    expect(start.errors).toEqual([])
+    expect(game.pendingCombat?.phase).toBe('prep')
+    expect(game.pendingCombat?.cellKey).toBe('1,0')
+    expect(combatPrepOf(game.pendingCombat)?.queuedBombardmentPlans).toEqual([
+      { shipId: 'bb-2', target: { q: 2, r: 0 } },
+    ])
+    expect(pendingCombatInvariantViolations(game)).toEqual([])
+
+    const queued = [...(combatPrepOf(game.pendingCombat)?.queuedBombardmentPlans ?? [])]
+    const next = continueBombardmentQueueOrFinalize(
+      game,
+      'player-1',
+      { q: 0, r: 0 },
+      [{ shipId: 'bb-1', target: { q: 1, r: 0 } }],
+      queued,
+    )
+    expect(next.errors).toEqual([])
+    expect(game.pendingCombat?.phase).toBe('prep')
+    expect(game.pendingCombat?.cellKey).toBe('2,0')
+    expect(combatPrepOf(game.pendingCombat)?.queuedBombardmentPlans ?? []).toEqual([])
+    expect(pendingCombatInvariantViolations(game)).toEqual([])
+  })
+
+  it('supportSide: третья сторона выбирает сторону; без кораблей — ошибка', () => {
+    const map = createEmptyMap('support-side', 'Support side')
+    map.cells.push({ q: 1, r: 0 }, { q: 2, r: 0 })
+    const game = gameSnapshotFromMap(map)
+    game.players.push({
+      id: 'player-3',
+      name: 'Игрок 3',
+      color: '#22c55e',
+      isAi: false,
+      eliminated: false,
+    })
+    game.phase = 'actions'
+    game.activePlayerId = 'player-1'
+    game.participatingPlayerIds = ['player-1', 'player-2', 'player-3']
+
+    addShip(game, 0, 0, 'player-1', 'destroyer', 'att-dd')
+    addShip(game, 1, 0, 'player-2', 'destroyer', 'def-dd')
+    addShip(game, 2, 0, 'player-3', 'cruiser', 'third-cr')
+    game.cells.find((c) => c.coord.q === 1 && c.coord.r === 0)!.controlOwnerId = 'player-2'
+
+    expect(
+      setupCombatPrepForMovement(
+        game,
+        { q: 0, r: 0 },
+        [{ shipId: 'att-dd', to: { q: 1, r: 0 } }],
+        'player-1',
+        { q: 1, r: 0 },
+        ['att-dd'],
+      ),
+    ).toEqual([])
+
+    expect(updateCombatPrep(game, 'player-3', false, undefined, 'attacker').errors).toEqual([])
+    expect(combatPrepOf(game.pendingCombat)?.combatOptions.supportSides?.['player-3']).toBe('attacker')
+
+    expect(updateCombatPrep(game, 'player-3', false, undefined, 'defender').errors).toEqual([])
+    expect(combatPrepOf(game.pendingCombat)?.combatOptions.supportSides?.['player-3']).toBe('defender')
+
+    expect(updateCombatPrep(game, 'player-3', false, undefined, null).errors).toEqual([])
+    expect(combatPrepOf(game.pendingCombat)?.combatOptions.supportSides?.['player-3']).toBeUndefined()
+
+    // Игрок без подходящих кораблей рядом — не может вмешиваться.
+    game.players.push({
+      id: 'player-4',
+      name: 'Игрок 4',
+      color: '#a855f7',
+      isAi: false,
+      eliminated: false,
+    })
+    expect(updateCombatPrep(game, 'player-4', false, undefined, 'attacker').errors[0])
+      .toMatch(/не можете поддержать/)
+  })
+
+  it('prep на трёх игроков: countdown стартует от готовности атакующего и защитника', () => {
+    const map = createEmptyMap('prep3', 'Prep 3')
+    map.cells.push({ q: 1, r: 0 }, { q: 2, r: 0 })
+    const game = gameSnapshotFromMap(map)
+    game.players.push({
+      id: 'player-3',
+      name: 'Игрок 3',
+      color: '#22c55e',
+      isAi: false,
+      eliminated: false,
+    })
+    game.phase = 'actions'
+    game.activePlayerId = 'player-1'
+    game.participatingPlayerIds = ['player-1', 'player-2', 'player-3']
+
+    addShip(game, 0, 0, 'player-1', 'destroyer', 'att-dd')
+    addShip(game, 1, 0, 'player-2', 'destroyer', 'def-dd')
+    addShip(game, 2, 0, 'player-3', 'cruiser', 'third-cr')
+    game.cells.find((c) => c.coord.q === 1 && c.coord.r === 0)!.controlOwnerId = 'player-2'
+
+    setupCombatPrepForMovement(
+      game,
+      { q: 0, r: 0 },
+      [{ shipId: 'att-dd', to: { q: 1, r: 0 } }],
+      'player-1',
+      { q: 1, r: 0 },
+      ['att-dd'],
+    )
+
+    expect(updateCombatPrep(game, 'player-3', false, undefined, 'attacker').errors).toEqual([])
+    expect(updateCombatPrep(game, 'player-1', true).errors).toEqual([])
+    expect(combatPrepOf(game.pendingCombat)?.phase).toBe('prep')
+
+    expect(updateCombatPrep(game, 'player-2', true).errors).toEqual([])
+    expect(combatPrepOf(game.pendingCombat)?.phase).toBe('countdown')
+    expect(pendingCombatInvariantViolations(game)).toEqual([])
+  })
+
+  it('migrateLegacyPendingCombat выводит phase из старых флагов', () => {
+    expect(
+      migrateLegacyPendingCombat({
+        cellKey: '1,0',
+        attackerId: 'player-1',
+        defenderIds: ['player-2'],
+        roundNumber: 1,
+        awaitingContinue: false,
+        prep: {
+          phase: 'prep',
+          defenderId: 'player-2',
+          readyBy: {},
+          combatOptions: {},
+        },
+      })?.phase,
+    ).toBe('prep')
+
+    expect(
+      migrateLegacyPendingCombat({
+        cellKey: '1,0',
+        attackerId: 'player-1',
+        defenderIds: ['player-2'],
+        roundNumber: 1,
+        awaitingContinue: false,
+        awaitingDestruction: true,
+        roundState: {
+          rounds: [],
+          shieldAbsorbed: 0,
+          rawDamage: 3,
+          remainingDamage: 3,
+          winnerId: 'player-1',
+          attackerWon: true,
+          defenderId: 'player-2',
+          combatOptions: {},
+          incomingAttackerShipIds: [],
+          attackerSkipTypes: [],
+          defenderSkipTypes: [],
+          trigger: 'movement',
+        },
+      })?.phase,
+    ).toBe('awaiting-destruction')
+
+    expect(
+      migrateLegacyPendingCombat({
+        cellKey: '1,0',
+        attackerId: 'player-1',
+        defenderIds: ['player-2'],
+        roundNumber: 2,
+        awaitingContinue: true,
+        continueDecisions: { attacker: true },
+      })?.phase,
+    ).toBe('awaiting-continue')
+
+    expect(
+      migrateLegacyPendingCombat({
+        cellKey: '1,0',
+        attackerId: 'player-1',
+        defenderIds: ['player-2'],
+        roundNumber: 1,
+      }),
+    ).toBeUndefined()
+
+    // Полный путь нормализации сохранения тоже мигрирует.
+    const map = createEmptyMap('legacy-save', 'Legacy')
+    map.cells.push({ q: 1, r: 0 })
+    const game = gameSnapshotFromMap(map)
+    const normalized = normalizeGalaxySave({
+      format: GALAXY_SAVE_FORMAT,
+      version: GALAXY_SAVE_VERSION,
+      savedAt: '2026-01-01T00:00:00.000Z',
+      map,
+      game: {
+        ...game,
+        pendingCombat: {
+          cellKey: '1,0',
+          attackerId: 'player-1',
+          defenderIds: ['player-2'],
+          roundNumber: 1,
+          awaitingContinue: true,
+          continueDecisions: {},
+        } as never,
+      },
+    })
+    expect(normalized.game?.pendingCombat?.phase).toBe('awaiting-continue')
+  })
+
+  it('сохранение после отступления: контроль защитника и корабли атакующего — легально', () => {
+    const map = createEmptyMap('retreat-save', 'Retreat save')
+    map.cells.push({ q: 1, r: 0 }, { q: 0, r: 1 })
+    const game = gameSnapshotFromMap(map)
+    // После отступления защитника: на клетке боя стоят корабли атакующего,
+    // а контроль всё ещё у защитника — раньше validateGalaxySave это отвергал.
+    const battleCell = game.cells.find((c) => c.coord.q === 1 && c.coord.r === 0)!
+    battleCell.controlOwnerId = 'player-2'
+    battleCell.ships = [{ id: 'att-dd', type: 'destroyer', ownerId: 'player-1' }]
+
+    const errors = validateGalaxySave({
+      format: GALAXY_SAVE_FORMAT,
+      version: GALAXY_SAVE_VERSION,
+      savedAt: '2026-01-01T00:00:00.000Z',
+      map,
+      game,
+    })
+    expect(errors.filter((e) => e.includes('не совпадает с владельцем кораблей'))).toEqual([])
   })
 })

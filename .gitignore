@@ -11,3 +11,5 @@ Thumbs.db
 *.tsbuildinfo
 coverage/
 .turbo/
+# Dev-персист комнат сервера (@galaxy/server, только локальная отладка)
+.dev-rooms/
