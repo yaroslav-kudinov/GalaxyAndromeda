@@ -58,17 +58,18 @@ import type { GameOverState } from './victory.js'
 
 export type { TurnEventState, GameOverState }
 
-export interface PendingCombat {
+/**
+ * Фаза боя между запросами. `rolling` и `finished` не сохраняются: бросок кубов
+ * происходит синхронно внутри одного вызова, а завершённый бой — это
+ * `pendingCombat === undefined`.
+ */
+export type PendingCombatPhase = 'prep' | 'awaiting-destruction' | 'awaiting-continue'
+
+interface PendingCombatBase {
   cellKey: string
   attackerId: string
   defenderIds: string[]
   roundNumber: number
-  awaitingContinue: boolean
-  /** Решения продолжать бой; сначала атакующий, затем защитник. */
-  continueDecisions?: Partial<Record<'attacker' | 'defender', boolean>>
-  /** Победитель раунда выбирает корабли для уничтожения */
-  awaitingDestruction?: boolean
-  roundState?: PendingCombatRoundState
   trigger?: 'movement' | 'stack' | 'bombardment'
   combatOptions?: CombatOptions
   /**
@@ -80,8 +81,161 @@ export interface PendingCombat {
     movementPlans: Array<{ shipId: string; to: HexCoord; declareControl?: boolean }>
     incomingAttackerShipIds: string[]
   }
-  /** Ожидание готовности обеих сторон перед первым раундом */
-  prep?: CombatPrepState
+}
+
+/** Ожидание готовности сторон перед первым раундом */
+export interface PendingCombatPrep extends PendingCombatBase {
+  phase: 'prep'
+  prep: CombatPrepState
+}
+
+/** Победитель раунда выбирает корабли для уничтожения */
+export interface PendingCombatAwaitingDestruction extends PendingCombatBase {
+  phase: 'awaiting-destruction'
+  roundState: PendingCombatRoundState
+}
+
+/** Стороны решают, продолжать бой или отступать */
+export interface PendingCombatAwaitingContinue extends PendingCombatBase {
+  phase: 'awaiting-continue'
+  /** Решения продолжать бой; сначала атакующий, затем защитник. */
+  continueDecisions: Partial<Record<'attacker' | 'defender', boolean>>
+  roundState?: PendingCombatRoundState
+}
+
+/**
+ * Дискриминированное объединение: поля, осмысленные только в одной фазе,
+ * существуют только в её варианте. Комбинации вроде «prep и roundState
+ * одновременно» больше не представимы в типах.
+ */
+export type PendingCombat =
+  | PendingCombatPrep
+  | PendingCombatAwaitingDestruction
+  | PendingCombatAwaitingContinue
+
+function cloneCombatPrep(prep: CombatPrepState): CombatPrepState {
+  return {
+    ...prep,
+    readyBy: { ...prep.readyBy },
+    combatOptions: {
+      ...prep.combatOptions,
+      attacker: prep.combatOptions.attacker ? { ...prep.combatOptions.attacker } : undefined,
+      defender: prep.combatOptions.defender ? { ...prep.combatOptions.defender } : undefined,
+      supportSides: prep.combatOptions.supportSides
+        ? { ...prep.combatOptions.supportSides }
+        : undefined,
+    },
+    movementFrom: prep.movementFrom ? { ...prep.movementFrom } : undefined,
+    movementPlans: prep.movementPlans?.map((m) => ({ ...m, to: { ...m.to } })),
+    bombardmentFrom: prep.bombardmentFrom ? { ...prep.bombardmentFrom } : undefined,
+    bombardmentPlans: prep.bombardmentPlans?.map((p) => ({ ...p, target: { ...p.target } })),
+    queuedBombardmentPlans: prep.queuedBombardmentPlans?.map((p) => ({
+      ...p,
+      target: { ...p.target },
+    })),
+    incomingAttackerShipIds: prep.incomingAttackerShipIds
+      ? [...prep.incomingAttackerShipIds]
+      : undefined,
+  }
+}
+
+function cloneRoundState(rs: PendingCombatRoundState): PendingCombatRoundState {
+  return {
+    ...rs,
+    rounds: rs.rounds.map((r) => ({ ...r, shipRolls: r.shipRolls.map((sr) => ({ ...sr })) })),
+    combatOptions: { ...rs.combatOptions },
+    incomingAttackerShipIds: [...rs.incomingAttackerShipIds],
+    attackerSkipTypes: [...rs.attackerSkipTypes],
+    defenderSkipTypes: [...rs.defenderSkipTypes],
+    movementFrom: rs.movementFrom ? { ...rs.movementFrom } : undefined,
+    movementPlans: rs.movementPlans?.map((m) => ({ ...m, to: { ...m.to } })),
+    bombardmentFrom: rs.bombardmentFrom ? { ...rs.bombardmentFrom } : undefined,
+    bombardmentPlans: rs.bombardmentPlans?.map((p) => ({ ...p, target: { ...p.target } })),
+    queuedBombardmentPlans: rs.queuedBombardmentPlans?.map((p) => ({
+      ...p,
+      target: { ...p.target },
+    })),
+  }
+}
+
+export function clonePendingCombat(pending: PendingCombat | undefined): PendingCombat | undefined {
+  if (!pending) return undefined
+  const base = {
+    cellKey: pending.cellKey,
+    attackerId: pending.attackerId,
+    defenderIds: [...pending.defenderIds],
+    roundNumber: pending.roundNumber,
+    trigger: pending.trigger,
+    combatOptions: pending.combatOptions ? { ...pending.combatOptions } : undefined,
+    continuation: pending.continuation
+      ? {
+          movementFrom: { ...pending.continuation.movementFrom },
+          movementPlans: pending.continuation.movementPlans.map((m) => ({ ...m, to: { ...m.to } })),
+          incomingAttackerShipIds: [...pending.continuation.incomingAttackerShipIds],
+        }
+      : undefined,
+  }
+
+  switch (pending.phase) {
+    case 'prep':
+      return { ...base, phase: 'prep', prep: cloneCombatPrep(pending.prep) }
+    case 'awaiting-destruction':
+      return {
+        ...base,
+        phase: 'awaiting-destruction',
+        roundState: cloneRoundState(pending.roundState),
+      }
+    case 'awaiting-continue':
+      return {
+        ...base,
+        phase: 'awaiting-continue',
+        continueDecisions: { ...pending.continueDecisions },
+        roundState: pending.roundState ? cloneRoundState(pending.roundState) : undefined,
+      }
+  }
+}
+
+/**
+ * Сохранения до введения `phase` кодировали фазу тремя независимыми флагами.
+ * Выводим дискриминатор из них, чтобы старые файлы и комнаты открывались.
+ */
+export function migrateLegacyPendingCombat(raw: unknown): PendingCombat | undefined {
+  if (!raw || typeof raw !== 'object') return undefined
+  const legacy = raw as Record<string, unknown>
+  if (typeof legacy.phase === 'string') return raw as PendingCombat
+
+  const base = {
+    cellKey: String(legacy.cellKey ?? ''),
+    attackerId: String(legacy.attackerId ?? ''),
+    defenderIds: Array.isArray(legacy.defenderIds) ? (legacy.defenderIds as string[]) : [],
+    roundNumber: typeof legacy.roundNumber === 'number' ? legacy.roundNumber : 1,
+    trigger: legacy.trigger as PendingCombat['trigger'],
+    combatOptions: legacy.combatOptions as PendingCombat['combatOptions'],
+    continuation: legacy.continuation as PendingCombat['continuation'],
+  }
+
+  if (legacy.prep) {
+    return { ...base, phase: 'prep', prep: legacy.prep as CombatPrepState }
+  }
+  if (legacy.awaitingDestruction && legacy.roundState) {
+    return {
+      ...base,
+      phase: 'awaiting-destruction',
+      roundState: legacy.roundState as PendingCombatRoundState,
+    }
+  }
+  if (legacy.awaitingContinue) {
+    return {
+      ...base,
+      phase: 'awaiting-continue',
+      continueDecisions:
+        (legacy.continueDecisions as PendingCombatAwaitingContinue['continueDecisions']) ?? {},
+      roundState: legacy.roundState as PendingCombatRoundState | undefined,
+    }
+  }
+  // Бой без распознаваемой фазы восстановить нельзя — безопаснее снять его,
+  // чем оставить игроков в заблокированном состоянии.
+  return undefined
 }
 
 export interface ActionMarker {
@@ -306,85 +460,7 @@ function normalizeGameSnapshot(game: GameSnapshot, map?: MapDefinition): GameSna
       : undefined,
     turnEvent: game.turnEvent ? { ...game.turnEvent } : undefined,
     gameOver: game.gameOver ? { ...game.gameOver } : undefined,
-    pendingCombat: game.pendingCombat
-      ? {
-          ...game.pendingCombat,
-          defenderIds: [...game.pendingCombat.defenderIds],
-          continuation: game.pendingCombat.continuation
-            ? {
-                movementFrom: { ...game.pendingCombat.continuation.movementFrom },
-                movementPlans: game.pendingCombat.continuation.movementPlans.map((m) => ({
-                  ...m,
-                  to: { ...m.to },
-                })),
-                incomingAttackerShipIds: [...game.pendingCombat.continuation.incomingAttackerShipIds],
-              }
-            : undefined,
-          prep: game.pendingCombat.prep
-            ? {
-                ...game.pendingCombat.prep,
-                readyBy: { ...game.pendingCombat.prep.readyBy },
-                combatOptions: {
-                  attacker: game.pendingCombat.prep.combatOptions.attacker
-                    ? { ...game.pendingCombat.prep.combatOptions.attacker }
-                    : undefined,
-                  defender: game.pendingCombat.prep.combatOptions.defender
-                    ? { ...game.pendingCombat.prep.combatOptions.defender }
-                    : undefined,
-                },
-                movementFrom: game.pendingCombat.prep.movementFrom
-                  ? { ...game.pendingCombat.prep.movementFrom }
-                  : undefined,
-                movementPlans: game.pendingCombat.prep.movementPlans?.map((m) => ({
-                  ...m,
-                  to: { ...m.to },
-                })),
-                bombardmentFrom: game.pendingCombat.prep.bombardmentFrom
-                  ? { ...game.pendingCombat.prep.bombardmentFrom }
-                  : undefined,
-                bombardmentPlans: game.pendingCombat.prep.bombardmentPlans?.map((p) => ({
-                  ...p,
-                  target: { ...p.target },
-                })),
-                queuedBombardmentPlans: game.pendingCombat.prep.queuedBombardmentPlans?.map((p) => ({
-                  ...p,
-                  target: { ...p.target },
-                })),
-                incomingAttackerShipIds: game.pendingCombat.prep.incomingAttackerShipIds
-                  ? [...game.pendingCombat.prep.incomingAttackerShipIds]
-                  : undefined,
-              }
-            : undefined,
-          roundState: game.pendingCombat.roundState
-            ? {
-                ...game.pendingCombat.roundState,
-                rounds: game.pendingCombat.roundState.rounds.map((r) => ({
-                  ...r,
-                  shipRolls: r.shipRolls.map((sr) => ({ ...sr })),
-                })),
-                combatOptions: { ...game.pendingCombat.roundState.combatOptions },
-                incomingAttackerShipIds: [...game.pendingCombat.roundState.incomingAttackerShipIds],
-                attackerSkipTypes: [...game.pendingCombat.roundState.attackerSkipTypes],
-                defenderSkipTypes: [...game.pendingCombat.roundState.defenderSkipTypes],
-                movementPlans: game.pendingCombat.roundState.movementPlans?.map((m) => ({ ...m, to: { ...m.to } })),
-                movementFrom: game.pendingCombat.roundState.movementFrom
-                  ? { ...game.pendingCombat.roundState.movementFrom }
-                  : undefined,
-                bombardmentPlans: game.pendingCombat.roundState.bombardmentPlans?.map((p) => ({
-                  ...p,
-                  target: { ...p.target },
-                })),
-                queuedBombardmentPlans: game.pendingCombat.roundState.queuedBombardmentPlans?.map((p) => ({
-                  ...p,
-                  target: { ...p.target },
-                })),
-                bombardmentFrom: game.pendingCombat.roundState.bombardmentFrom
-                  ? { ...game.pendingCombat.roundState.bombardmentFrom }
-                  : undefined,
-              }
-            : undefined,
-        }
-      : undefined,
+    pendingCombat: clonePendingCombat(migrateLegacyPendingCombat(game.pendingCombat)),
     overtimeRegionByPlayer: game.overtimeRegionByPlayer
       ? { ...game.overtimeRegionByPlayer }
       : undefined,

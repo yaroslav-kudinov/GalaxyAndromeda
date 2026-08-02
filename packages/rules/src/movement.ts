@@ -30,8 +30,11 @@ import {
   type BombardmentPlan,
 } from './bombardment.js'
 import {
+  abortPendingCombat,
   applyCombatResultToSnapshot,
   buildCombatPreview,
+  combatPrepOf,
+  combatRoundStateOf,
   combatShouldContinueWithIncomingShips,
   confirmCombatDestruction,
   continuePendingCombat,
@@ -391,7 +394,7 @@ export function completePendingCombatMovement(
   game: GameSnapshot,
   mapId: string,
 ): string[] {
-  const pending = game.pendingCombat?.roundState
+  const pending = combatRoundStateOf(game.pendingCombat)
   if (!pending?.movementFrom || !pending.movementPlans?.length) return []
 
   const combatKey = game.pendingCombat!.cellKey
@@ -582,7 +585,7 @@ export function resolveCombatPrep(
   map: MapDefinition,
 ): { errors: string[]; combatResult?: CombatResolutionResult } {
   const pending = game.pendingCombat
-  const prep = pending?.prep
+  const prep = combatPrepOf(pending)
   if (!pending || !prep) return { errors: ['Нет подготовки к бою'] }
 
   const validationErrors = validatePendingCombatPrepOptions(game)
@@ -602,23 +605,35 @@ export function resolveCombatPrep(
   const bombardmentPlans = prep.bombardmentPlans
   const queuedBombardmentPlans = prep.queuedBombardmentPlans ?? []
 
+  const isBombardment = trigger === 'bombardment' && bombardmentFrom && bombardmentPlans
+  if (!isBombardment && !(movementFrom && movementPlans)) {
+    return { errors: ['Некорректное состояние подготовки боя'] }
+  }
+
+  // Подготовку снимаем только после успешного исполнения: иначе отказ execute
+  // оставил бы игроков без экрана боя и без возможности повторить.
   game.pendingCombat = undefined
 
-  if (trigger === 'bombardment' && bombardmentFrom && bombardmentPlans) {
-    return executeMarkerBombardment(
-      game,
-      map,
-      attackerId,
-      bombardmentFrom,
-      bombardmentPlans,
-      opts,
-      queuedBombardmentPlans,
-    )
+  const result = isBombardment
+    ? executeMarkerBombardment(
+        game,
+        map,
+        attackerId,
+        bombardmentFrom,
+        bombardmentPlans,
+        opts,
+        queuedBombardmentPlans,
+      )
+    : executeMarkerMovement(game, map, attackerId, movementFrom!, movementPlans!, opts)
+
+  if (result.errors.length && !game.pendingCombat) {
+    game.pendingCombat = pending
+    prep.phase = 'prep'
+    prep.countdownStartedAt = undefined
+    prep.readyBy = {}
   }
-  if (movementFrom && movementPlans) {
-    return executeMarkerMovement(game, map, attackerId, movementFrom, movementPlans, opts)
-  }
-  return { errors: ['Некорректное состояние подготовки боя'] }
+
+  return result
 }
 
 function parseHexKeyFromCellKey(key: string): HexCoord {
@@ -690,17 +705,32 @@ export function applyGameActionOnSnapshot(
   if (game.gameOver) return { errors: ['Игра завершена'] }
 
   const isPrepAction = actionId === 'update-combat-prep' || actionId === 'cancel-combat-prep'
-  if (game.pendingCombat?.prep && !isPrepAction) {
+  if (game.pendingCombat?.phase === 'prep' && !isPrepAction && actionId !== 'abort-combat') {
     return { errors: ['Ожидается подготовка к бою'] }
   }
-  const isCombatDecisionAction = actionId === 'continue-combat' || actionId === 'stop-combat'
+  // Боевые решения может делать участник боя (победитель / attacker / defender),
+  // а не только activePlayer текущей фазы.
+  const isCombatDecisionAction =
+    actionId === 'continue-combat'
+    || actionId === 'stop-combat'
+    || actionId === 'confirm-combat-destruction'
+    || actionId === 'abort-combat'
   if (!isPrepAction && !isCombatDecisionAction && game.activePlayerId !== playerId) {
     return { errors: ['Сейчас ход другого игрока'] }
   }
-  if (game.pendingCombat?.awaitingContinue && actionId !== 'continue-combat' && actionId !== 'stop-combat') {
+  if (
+    game.pendingCombat?.phase === 'awaiting-continue'
+    && actionId !== 'continue-combat'
+    && actionId !== 'stop-combat'
+    && actionId !== 'abort-combat'
+  ) {
     return { errors: ['Сначала завершите или продолжите текущий бой'] }
   }
-  if (game.pendingCombat?.awaitingDestruction && actionId !== 'confirm-combat-destruction') {
+  if (
+    game.pendingCombat?.phase === 'awaiting-destruction'
+    && actionId !== 'confirm-combat-destruction'
+    && actionId !== 'abort-combat'
+  ) {
     return { errors: ['Сначала подтвердите выбор уничтожения в бою'] }
   }
 
@@ -709,31 +739,36 @@ export function applyGameActionOnSnapshot(
     if (!Array.isArray(destructionSelection)) {
       return { errors: ['Некорректные параметры выбора уничтожения'] }
     }
-    const movementFrom = game.pendingCombat?.roundState?.movementFrom
-    const movementPlans = game.pendingCombat?.roundState?.movementPlans
-    const bombardmentFrom = game.pendingCombat?.roundState?.bombardmentFrom
-    const bombardmentPlans = game.pendingCombat?.roundState?.bombardmentPlans
-    const queuedBombardmentPlans = game.pendingCombat?.roundState?.queuedBombardmentPlans
-    const combatTrigger = game.pendingCombat?.roundState?.trigger ?? game.pendingCombat?.trigger
+    const priorRoundState = combatRoundStateOf(game.pendingCombat)
+    const movementFrom = priorRoundState?.movementFrom
+    const movementPlans = priorRoundState?.movementPlans
+    const bombardmentFrom = priorRoundState?.bombardmentFrom
+    const bombardmentPlans = priorRoundState?.bombardmentPlans
+    const queuedBombardmentPlans = priorRoundState?.queuedBombardmentPlans
+    const combatTrigger = priorRoundState?.trigger ?? game.pendingCombat?.trigger
     const combatKey = game.pendingCombat?.cellKey
     const attackerId = game.pendingCombat?.attackerId
 
     const result = confirmCombatDestruction(game, playerId, destructionSelection)
     if (result.errors.length) return result
 
+    // Если бой испарился, результата нет, но отложенное движение всё равно нужно
+    // дожать — иначе корабли залипают на исходной клетке вместе с маркером.
+    const combatSettled = !!result.combatResult || !!result.combatVanished
+
     if (
       !game.pendingCombat
       && movementFrom
       && movementPlans?.length
       && attackerId
-      && result.combatResult
+      && combatSettled
     ) {
       finishPendingMovementPlans(
         game,
         attackerId,
         movementFrom,
         movementPlans,
-        result.combatResult,
+        result.combatResult ?? null,
         combatKey,
       )
       game.eventLog.push({
@@ -750,7 +785,7 @@ export function applyGameActionOnSnapshot(
       && bombardmentFrom
       && bombardmentPlans?.length
       && attackerId
-      && result.combatResult
+      && combatSettled
     ) {
       const queueResult = continueBombardmentQueueOrFinalize(
         game,
@@ -776,7 +811,7 @@ export function applyGameActionOnSnapshot(
     const result = continuePendingCombat(game, playerId, combatOptions)
     if (
       result.errors.length === 0
-      && result.combatResult
+      && (result.combatResult || result.combatVanished)
       && !game.pendingCombat
       && continuation
       && combatKey
@@ -787,7 +822,29 @@ export function applyGameActionOnSnapshot(
         attackerId,
         continuation.movementFrom,
         continuation.movementPlans,
-        result.combatResult,
+        result.combatResult ?? null,
+        combatKey,
+      )
+    }
+    applyVictoryAndDefeatChecks(game, map.id)
+    return result
+  }
+
+  if (actionId === 'abort-combat') {
+    const pending = game.pendingCombat
+    const continuation = pending?.continuation
+    const combatKey = pending?.cellKey
+    const attackerId = pending?.attackerId
+    const result = abortPendingCombat(game, playerId)
+    // Прерывание тоже обязано дожать отложенное движение: иначе корабли
+    // остаются на исходной клетке, а маркер действия — израсходованным.
+    if (result.errors.length === 0 && continuation && combatKey && attackerId) {
+      finishPendingMovementPlans(
+        game,
+        attackerId,
+        continuation.movementFrom,
+        continuation.movementPlans,
+        { attackerWon: false },
         combatKey,
       )
     }

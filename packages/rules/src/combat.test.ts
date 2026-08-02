@@ -31,11 +31,18 @@ import {
   SHIELD_ABSORB_NEIGHBOR,
   SHIELD_ABSORB_SELF,
   updateCombatPrep,
+  abortPendingCombat,
+  combatPrepOf,
   continuePendingCombat,
+  isAwaitingContinue,
+  pendingCombatInvariantViolations,
+  releaseInvalidPendingCombat,
+  setupCombatPrepForMovement,
   setupPendingCombat,
+  setupPendingCombatDestruction,
   stopPendingCombat,
 } from './combat.js'
-import { executeMarkerMovement, resolveCombatPrep } from './movement.js'
+import { applyGameActionOnSnapshot, executeMarkerMovement, resolveCombatPrep } from './movement.js'
 import {
   buildBombardmentPreview,
   canShipBombard,
@@ -517,8 +524,7 @@ describe('combat sketch', () => {
       expect(execution.combatResult?.needsDestructionSelection).toBeFalsy()
       expect(execution.combatResult?.log.find((entry) => entry.step === 'destruction')?.message)
         .toMatch(/Ничья раунда без уничтожения/)
-      expect(game.pendingCombat?.awaitingDestruction).toBeFalsy()
-      expect(game.pendingCombat?.awaitingContinue).toBe(true)
+      expect(game.pendingCombat?.phase).toBe('awaiting-continue')
     } finally {
       Math.random = originalRandom
     }
@@ -552,6 +558,68 @@ describe('combat sketch', () => {
     expect(result.destructionState?.remainingDamage).toBe(6)
     expect(result.destructionState?.forceFullWipe).toBe(false)
     expect(result.destructionState?.immediatelyDestroyableIds.length).toBeGreaterThan(0)
+  })
+
+  it('confirm-combat-destruction works for winner who is not activePlayer', () => {
+    const map = createEmptyMap('destroy-winner', 'Destroy winner')
+    map.cells.push({ q: 1, r: 0 })
+    const game = gameSnapshotFromMap(map)
+    game.phase = 'actions'
+    game.activePlayerId = 'player-1'
+    game.participatingPlayerIds = ['player-1', 'player-2']
+    game.turnNumber = 2
+    game.turnEvent = {
+      eventId: 'fair-fight',
+      turnNumber: 2,
+      resolvedAt: new Date().toISOString(),
+    }
+
+    for (let i = 0; i < 5; i++) {
+      addShip(game, 0, 0, 'player-1', 'destroyer', `att-dd-${i}`)
+    }
+    addShip(game, 1, 0, 'player-2', 'destroyer', 'def-dd-1')
+    addShip(game, 1, 0, 'player-2', 'destroyer', 'def-dd-2')
+    addShip(game, 1, 0, 'player-2', 'destroyer', 'def-dd-3')
+    game.cells.find((c) => c.coord.q === 1 && c.coord.r === 0)!.controlOwnerId = 'player-2'
+
+    const incoming = game.cells
+      .find((c) => c.coord.q === 0 && c.coord.r === 0)!
+      .ships.filter((s) => s.ownerId === 'player-1')
+
+    const result = resolveCombatAtCell(game, { q: 1, r: 0 }, 'player-1', incoming)
+    expect(result.needsDestructionSelection).toBe(true)
+    expect(result.winnerId).toBe('player-1')
+
+    setupPendingCombatDestruction(
+      game,
+      { q: 1, r: 0 },
+      'player-1',
+      'player-2',
+      result,
+      {},
+      { attacker: [], defender: [] },
+      'movement',
+      {
+        incomingAttackerShipIds: incoming.map((s) => s.id),
+        movementFrom: { q: 0, r: 0 },
+        movementPlans: incoming.map((s) => ({ shipId: s.id, to: { q: 1, r: 0 } })),
+      },
+    )
+
+    // Ход фазы у другого игрока — победитель раунда всё равно должен подтвердить уничтожение.
+    game.activePlayerId = 'player-2'
+
+    const pick = result.destructionState?.selectableIds[0]
+    expect(pick).toBeTruthy()
+
+    const { errors } = applyGameActionOnSnapshot(
+      game,
+      map,
+      'player-1',
+      'confirm-combat-destruction',
+      { destructionSelection: [pick!] },
+    )
+    expect(errors).toEqual([])
   })
 
   it('applyShieldAbsorption follows 4+2 rulebook example', () => {
@@ -714,10 +782,10 @@ describe('combat sketch', () => {
     expect(prepStart.errors).toEqual([])
 
     expect(updateCombatPrep(game, 'player-2', true, [{ shipType: 'destroyer' }]).errors).toEqual([])
-    expect(game.pendingCombat?.prep?.readyBy['player-2']).toBe(true)
+    expect(combatPrepOf(game.pendingCombat)?.readyBy['player-2']).toBe(true)
 
     updateCombatPrep(game, 'player-1', true)
-    expect(game.pendingCombat?.prep?.phase).toBe('countdown')
+    expect(combatPrepOf(game.pendingCombat)?.phase).toBe('countdown')
   })
 
   it('combat prep waits for both sides then resolves after countdown', () => {
@@ -740,13 +808,13 @@ describe('combat sketch', () => {
     ])
     expect(prepStart.errors).toEqual([])
     expect(prepStart.combatResult).toBeUndefined()
-    expect(game.pendingCombat?.prep?.phase).toBe('prep')
+    expect(combatPrepOf(game.pendingCombat)?.phase).toBe('prep')
 
     expect(updateCombatPrep(game, 'player-1', true).errors).toEqual([])
     expect(updateCombatPrep(game, 'player-2', true).errors).toEqual([])
-    expect(game.pendingCombat?.prep?.phase).toBe('countdown')
+    expect(combatPrepOf(game.pendingCombat)?.phase).toBe('countdown')
 
-    game.pendingCombat!.prep!.countdownStartedAt = Date.now() - 4000
+    combatPrepOf(game.pendingCombat)!.countdownStartedAt = Date.now() - 4000
 
     const originalRandom = Math.random
     let seq = 0
@@ -758,7 +826,7 @@ describe('combat sketch', () => {
       const resolved = resolveCombatPrep(game, map)
       expect(resolved.errors).toEqual([])
       expect(resolved.combatResult?.attackerWon).toBe(true)
-      expect(game.pendingCombat?.prep).toBeUndefined()
+      expect(combatPrepOf(game.pendingCombat)).toBeUndefined()
     } finally {
       Math.random = originalRandom
     }
@@ -776,7 +844,9 @@ describe('combat sketch', () => {
 
     expect(continuePendingCombat(game, 'player-2').errors[0]).toMatch(/Сначала/)
     expect(continuePendingCombat(game, 'player-1').errors).toEqual([])
-    expect(game.pendingCombat?.continueDecisions?.attacker).toBe(true)
+    expect(
+      isAwaitingContinue(game.pendingCombat) && game.pendingCombat.continueDecisions.attacker,
+    ).toBe(true)
     expect(stopPendingCombat(game, 'player-2', { q: 0, r: 1 })).toEqual([])
     expect(game.pendingCombat).toBeUndefined()
   })
@@ -975,8 +1045,7 @@ describe('bombardment', () => {
       attackerId: 'player-1',
       defenderIds: ['player-2'],
       roundNumber: 1,
-      awaitingContinue: false,
-      awaitingDestruction: true,
+      phase: 'awaiting-destruction',
       trigger: 'movement',
       roundState: {
         rounds: [],
@@ -1020,13 +1089,13 @@ describe('bombardment', () => {
     ])
     expect(prepStart.errors).toEqual([])
     expect(game.pendingCombat?.trigger).toBe('bombardment')
-    expect(game.pendingCombat?.prep?.phase).toBe('prep')
+    expect(combatPrepOf(game.pendingCombat)?.phase).toBe('prep')
 
     expect(updateCombatPrep(game, 'player-2', true).errors.length).toBeGreaterThan(0)
-    expect(game.pendingCombat?.prep?.phase).toBe('prep')
+    expect(combatPrepOf(game.pendingCombat)?.phase).toBe('prep')
 
     expect(updateCombatPrep(game, 'player-1', true).errors).toEqual([])
-    expect(game.pendingCombat?.prep?.phase).toBe('countdown')
+    expect(combatPrepOf(game.pendingCombat)?.phase).toBe('countdown')
   })
 
   it('bombardment wipe does not transfer cell control to attacker', () => {
@@ -1066,5 +1135,101 @@ describe('bombardment', () => {
     } finally {
       Math.random = originalRandom
     }
+  })
+})
+
+describe('pendingCombat FSM', () => {
+  function combatOnCell(): GameSnapshot {
+    const map = createEmptyMap('fsm', 'FSM')
+    map.cells.push({ q: 1, r: 0 }, { q: 0, r: 1 })
+    const game = gameSnapshotFromMap(map)
+    addShip(game, 0, 0, 'player-1', 'destroyer', 'att-dd')
+    addShip(game, 1, 0, 'player-2', 'destroyer', 'def-dd')
+    game.cells.find((c) => c.coord.q === 1 && c.coord.r === 0)!.controlOwnerId = 'player-2'
+    return game
+  }
+
+  it('accepts a well-formed pendingCombat in each phase', () => {
+    const game = combatOnCell()
+    setupPendingCombat(game, { q: 1, r: 0 }, 'player-1', 2)
+    expect(game.pendingCombat?.phase).toBe('awaiting-continue')
+    expect(pendingCombatInvariantViolations(game)).toEqual([])
+
+    const prepGame = combatOnCell()
+    prepGame.phase = 'actions'
+    prepGame.activePlayerId = 'player-1'
+    setupCombatPrepForMovement(
+      prepGame,
+      { q: 0, r: 0 },
+      [{ shipId: 'att-dd', to: { q: 1, r: 0 } }],
+      'player-1',
+      { q: 1, r: 0 },
+      ['att-dd'],
+    )
+    expect(prepGame.pendingCombat?.phase).toBe('prep')
+    expect(pendingCombatInvariantViolations(prepGame)).toEqual([])
+  })
+
+  it('reports a violation when the combat cell is not on the map', () => {
+    const game = combatOnCell()
+    setupPendingCombat(game, { q: 1, r: 0 }, 'player-1', 1)
+    game.pendingCombat!.cellKey = '99,99'
+    expect(pendingCombatInvariantViolations(game).join(' ')).toMatch(/отсутствует на карте/)
+  })
+
+  it('reports a violation when the attacker is no longer a player', () => {
+    const game = combatOnCell()
+    setupPendingCombat(game, { q: 1, r: 0 }, 'player-1', 1)
+    game.pendingCombat!.attackerId = 'ghost'
+    expect(pendingCombatInvariantViolations(game).join(' ')).toMatch(/отсутствует среди игроков/)
+  })
+
+  it('releaseInvalidPendingCombat clears a broken combat and logs it', () => {
+    const game = combatOnCell()
+    setupPendingCombat(game, { q: 1, r: 0 }, 'player-1', 1)
+    game.pendingCombat!.attackerId = 'ghost'
+
+    const violations = releaseInvalidPendingCombat(game)
+    expect(violations.length).toBeGreaterThan(0)
+    expect(game.pendingCombat).toBeUndefined()
+    expect(game.eventLog.at(-1)?.message).toMatch(/снят автоматически/)
+  })
+
+  it('releaseInvalidPendingCombat keeps a valid combat untouched', () => {
+    const game = combatOnCell()
+    setupPendingCombat(game, { q: 1, r: 0 }, 'player-1', 1)
+    expect(releaseInvalidPendingCombat(game)).toEqual([])
+    expect(game.pendingCombat).toBeDefined()
+  })
+
+  it('abortPendingCombat is limited to combat participants', () => {
+    const game = combatOnCell()
+    setupPendingCombat(game, { q: 1, r: 0 }, 'player-1', 1)
+
+    expect(abortPendingCombat(game, 'player-3').errors[0]).toMatch(/только участник/)
+    expect(game.pendingCombat).toBeDefined()
+
+    expect(abortPendingCombat(game, 'player-2').errors).toEqual([])
+    expect(game.pendingCombat).toBeUndefined()
+    expect(game.eventLog.at(-1)?.message).toMatch(/прерван участником/)
+  })
+
+  it('abort-combat action unblocks a stuck combat for the attacker', () => {
+    const map = createEmptyMap('fsm-abort', 'FSM abort')
+    map.cells.push({ q: 1, r: 0 }, { q: 0, r: 1 })
+    const game = gameSnapshotFromMap(map)
+    game.phase = 'actions'
+    game.activePlayerId = 'player-1'
+    addShip(game, 0, 0, 'player-1', 'destroyer', 'att-dd')
+    addShip(game, 1, 0, 'player-2', 'destroyer', 'def-dd')
+    game.cells.find((c) => c.coord.q === 1 && c.coord.r === 0)!.controlOwnerId = 'player-2'
+    setupPendingCombat(game, { q: 1, r: 0 }, 'player-1', 2)
+
+    // Пока бой висит, обычные действия заблокированы.
+    expect(applyGameActionOnSnapshot(game, map, 'player-1', 'advance-phase').errors[0])
+      .toMatch(/завершите или продолжите/)
+
+    expect(applyGameActionOnSnapshot(game, map, 'player-1', 'abort-combat').errors).toEqual([])
+    expect(game.pendingCombat).toBeUndefined()
   })
 })

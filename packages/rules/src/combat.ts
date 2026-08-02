@@ -15,7 +15,11 @@ import { buildBombardmentPreview } from './bombardment.js'
 import { getTurnModifiers, canRetreatFromBattle } from './events.js'
 import { hexDistance } from './map.js'
 import type { GameSnapshot, RuntimeCellState } from './save-file.js'
-import type { PendingCombat } from './save-file.js'
+import type {
+  PendingCombat,
+  PendingCombatAwaitingContinue,
+  PendingCombatAwaitingDestruction,
+} from './save-file.js'
 import type { HexCoord, ShipType, ShipUnit } from './types.js'
 import { hexKey } from './types.js'
 
@@ -365,6 +369,137 @@ export interface CombatPrepState {
 }
 
 export const COMBAT_PREP_COUNTDOWN_MS = 3000
+
+/**
+ * Узкие аксессоры к фазам боя. Читать `pending.prep` напрямую нельзя —
+ * поле существует только в варианте `phase: 'prep'`.
+ */
+export function combatPrepOf(pending: PendingCombat | undefined): CombatPrepState | undefined {
+  return pending?.phase === 'prep' ? pending.prep : undefined
+}
+
+export function combatRoundStateOf(
+  pending: PendingCombat | undefined,
+): PendingCombatRoundState | undefined {
+  if (!pending) return undefined
+  return pending.phase === 'awaiting-destruction' || pending.phase === 'awaiting-continue'
+    ? pending.roundState
+    : undefined
+}
+
+export function isAwaitingContinue(
+  pending: PendingCombat | undefined,
+): pending is PendingCombatAwaitingContinue {
+  return pending?.phase === 'awaiting-continue'
+}
+
+export function isAwaitingDestruction(
+  pending: PendingCombat | undefined,
+): pending is PendingCombatAwaitingDestruction {
+  return pending?.phase === 'awaiting-destruction'
+}
+
+/**
+ * Структурные условия, которые обязаны выполняться для любого pendingCombat.
+ * Пустой список означает корректное состояние.
+ */
+export function pendingCombatInvariantViolations(game: GameSnapshot): string[] {
+  const pending = game.pendingCombat
+  if (!pending) return []
+  const violations: string[] = []
+
+  const parts = pending.cellKey.split(',').map(Number)
+  if (parts.length !== 2 || parts.some((n) => !Number.isFinite(n))) {
+    violations.push(`Некорректный cellKey: ${pending.cellKey}`)
+  } else if (!cellAt(game, { q: parts[0]!, r: parts[1]! })) {
+    violations.push(`Клетка боя ${pending.cellKey} отсутствует на карте`)
+  }
+
+  if (!pending.attackerId) violations.push('Бой без attackerId')
+  else if (!game.players.some((p) => p.id === pending.attackerId)) {
+    violations.push(`Атакующий ${pending.attackerId} отсутствует среди игроков`)
+  }
+
+  switch (pending.phase) {
+    case 'prep':
+      if (!pending.prep) violations.push('Фаза prep без данных подготовки')
+      else if (!pending.prep.defenderId) violations.push('Подготовка без defenderId')
+      break
+    case 'awaiting-destruction':
+      if (!pending.roundState) violations.push('Фаза awaiting-destruction без roundState')
+      else if (!pending.roundState.winnerId) {
+        violations.push('roundState без победителя раунда')
+      } else if (!game.players.some((p) => p.id === pending.roundState.winnerId)) {
+        violations.push(`Победитель ${pending.roundState.winnerId} отсутствует среди игроков`)
+      }
+      break
+    case 'awaiting-continue':
+      if (!pending.continueDecisions) violations.push('Фаза awaiting-continue без continueDecisions')
+      if (!pending.defenderIds.length) violations.push('Решение о продолжении без защитников')
+      break
+    default:
+      violations.push(`Неизвестная фаза боя: ${(pending as { phase: string }).phase}`)
+  }
+
+  return violations
+}
+
+/** Бросает при нарушении инварианта — для тестов и dev-сборки. */
+export function assertPendingCombatInvariant(game: GameSnapshot): void {
+  const violations = pendingCombatInvariantViolations(game)
+  if (violations.length) {
+    throw new Error(`Нарушен инвариант pendingCombat: ${violations.join('; ')}`)
+  }
+}
+
+/**
+ * Снимает бой, который больше не проходит инвариант. Возвращает список нарушений,
+ * чтобы вызывающий мог их залогировать. Без этого невалидный бой блокирует партию.
+ */
+export function releaseInvalidPendingCombat(game: GameSnapshot): string[] {
+  const violations = pendingCombatInvariantViolations(game)
+  if (!violations.length) return []
+  game.pendingCombat = undefined
+  game.eventLog.push({
+    id: `evt-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    turn: game.turnNumber,
+    phase: game.phase,
+    type: 'combat',
+    message: `Бой снят автоматически: ${violations.join('; ')}`,
+    timestamp: Date.now(),
+  })
+  return violations
+}
+
+/**
+ * Аварийный выход для участников: снимает зависший бой без применения результата.
+ * Корабли остаются там, где стоят.
+ */
+export function abortPendingCombat(game: GameSnapshot, playerId: string): { errors: string[] } {
+  const pending = game.pendingCombat
+  if (!pending) return { errors: ['Нет активного боя'] }
+
+  const prep = combatPrepOf(pending)
+  const participantIds = new Set<string>([
+    pending.attackerId,
+    ...pending.defenderIds,
+    ...(prep ? [prep.defenderId] : []),
+  ])
+  if (!participantIds.has(playerId)) {
+    return { errors: ['Прервать бой может только участник боя'] }
+  }
+
+  game.pendingCombat = undefined
+  game.eventLog.push({
+    id: `evt-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    turn: game.turnNumber,
+    phase: game.phase,
+    type: 'combat',
+    message: `Бой прерван участником ${playerId}`,
+    timestamp: Date.now(),
+  })
+  return { errors: [] }
+}
 
 export interface DestructionSelectionState {
   remainingDamage: number
@@ -1800,7 +1935,7 @@ export function resolveCombatAtCell(
 /** Проверка combatOptions в pendingCombat.prep до старта боя или countdown */
 export function validatePendingCombatPrepOptions(game: GameSnapshot): string[] {
   const pending = game.pendingCombat
-  const prep = pending?.prep
+  const prep = combatPrepOf(pending)
   if (!pending || !prep) return ['Нет подготовки к бою']
 
   const [q, r] = pending.cellKey.split(',').map(Number)
@@ -2033,7 +2168,7 @@ export function getCombatRetreatDestinations(
   playerId: string,
 ): HexCoord[] {
   const pending = game.pendingCombat
-  if (!pending?.awaitingContinue || !canRetreatFromBattle(game)) return []
+  if (!isAwaitingContinue(pending) || !canRetreatFromBattle(game)) return []
   const [q, r] = pending.cellKey.split(',').map(Number)
   const battleCoord = { q, r }
   const isAttacker = pending.attackerId === playerId
@@ -2196,8 +2331,7 @@ export function setupPendingCombatDestruction(
     attackerId,
     defenderIds: defenderIdsOnCell(game, coord, attackerId),
     roundNumber: 1,
-    awaitingContinue: false,
-    awaitingDestruction: true,
+    phase: 'awaiting-destruction',
     trigger,
     combatOptions,
     roundState: {
@@ -2226,9 +2360,9 @@ export function confirmCombatDestruction(
   game: GameSnapshot,
   playerId: string,
   destructionSelection: string[],
-): { errors: string[]; combatResult?: CombatResolutionResult } {
+): { errors: string[]; combatResult?: CombatResolutionResult; combatVanished?: boolean } {
   const pending = game.pendingCombat
-  if (!pending?.awaitingDestruction || !pending.roundState) {
+  if (!isAwaitingDestruction(pending) || !pending.roundState) {
     return { errors: ['Нет боя, ожидающего выбора уничтожения'] }
   }
   if (pending.roundState.winnerId !== playerId) {
@@ -2262,8 +2396,10 @@ export function confirmCombatDestruction(
         })()
       : buildCombatPreview(game, coord, pending.attackerId, incomingShips)
   if (!preview) {
+    // Бой испарился (защитники исчезли между запросами). Это не ошибка игрока:
+    // сообщаем вызывающему, чтобы он дожал движение и снял маркер.
     game.pendingCombat = undefined
-    return { errors: ['Бой на клетке больше не актуален'] }
+    return { errors: [], combatVanished: true }
   }
 
   const result = applyCombatDestructionSelection(
@@ -2321,7 +2457,7 @@ export function setupPendingCombat(
     attackerId,
     defenderIds: defenderIdsOnCell(game, coord, attackerId),
     roundNumber,
-    awaitingContinue: true,
+    phase: 'awaiting-continue',
     continueDecisions: {},
     trigger,
     continuation,
@@ -2333,9 +2469,9 @@ export function continuePendingCombat(
   playerId: string,
   combatOptions?: CombatOptions,
   rng: () => number = Math.random,
-): { errors: string[]; combatResult?: CombatResolutionResult } {
+): { errors: string[]; combatResult?: CombatResolutionResult; combatVanished?: boolean } {
   const pending = game.pendingCombat
-  if (!pending?.awaitingContinue) return { errors: ['Нет незавершённого боя'] }
+  if (!isAwaitingContinue(pending)) return { errors: ['Нет незавершённого боя'] }
   const defenderId = pending.defenderIds[0]
   if (playerId === pending.attackerId) {
     if (pending.continueDecisions?.attacker != null) {
@@ -2359,7 +2495,7 @@ export function continuePendingCombat(
   const preview = buildCombatPreview(game, coord, pending.attackerId, incomingShips)
   if (!preview) {
     game.pendingCombat = undefined
-    return { errors: [] }
+    return { errors: [], combatVanished: true }
   }
 
   const opts = combatOptions ?? pending.combatOptions
@@ -2381,13 +2517,20 @@ export function continuePendingCombat(
     setupPendingCombatDestruction(
       game,
       coord,
-      playerId,
+      // Решение о продолжении присылает защитник, но бой всё это время ведёт
+      // атакующий из pending — playerId здесь был бы не тем игроком.
+      pending.attackerId,
       preview.defenderId,
       result,
       opts ?? {},
       skipTypes,
       pending.trigger ?? 'movement',
-      { incomingAttackerShipIds: pending.continuation?.incomingAttackerShipIds ?? [] },
+      {
+        incomingAttackerShipIds: pending.continuation?.incomingAttackerShipIds ?? [],
+        // Без переноса планов движения раунд 2+ терял контекст отступления.
+        movementFrom: pending.continuation?.movementFrom,
+        movementPlans: pending.continuation?.movementPlans,
+      },
     )
     game.pendingCombat!.roundNumber = pending.roundNumber
     return { errors: [], combatResult: result }
@@ -2426,7 +2569,7 @@ export function stopPendingCombat(
   retreatTo?: HexCoord,
 ): string[] {
   const pending = game.pendingCombat
-  if (!pending) return []
+  if (!isAwaitingContinue(pending)) return []
   const defenderId = pending.defenderIds[0]
   const isAttacker = pending.attackerId === playerId
   const isDefender = defenderId === playerId
@@ -2504,10 +2647,16 @@ function buildCombatPreviewFromPendingPlans(
     .map((id) => fromCell?.ships.find((s) => s.id === id))
     .filter((s): s is ShipUnit => !!s)
 
-    return buildCombatPreview(game, coord, pending.attackerId, incomingShips, pending.prep?.combatOptions)
+  return buildCombatPreview(
+    game,
+    coord,
+    pending.attackerId,
+    incomingShips,
+    combatPrepOf(pending)?.combatOptions,
+  )
 }
 
-/** Превью боя из pendingCombat — prep, awaitingDestruction (roundState) или awaitingContinue */
+/** Превью боя из pendingCombat — по текущей фазе */
 export function buildCombatPreviewFromPending(game: GameSnapshot): CombatPreview | null {
   const pending = game.pendingCombat
   if (!pending) return null
@@ -2515,7 +2664,7 @@ export function buildCombatPreviewFromPending(game: GameSnapshot): CombatPreview
   const [q, r] = pending.cellKey.split(',').map(Number)
   const coord = { q, r }
 
-  if (pending.prep) {
+  if (pending.phase === 'prep') {
     return buildCombatPreviewFromPendingPlans(game, pending, coord, {
       trigger: pending.trigger,
       movementFrom: pending.prep.movementFrom,
@@ -2525,8 +2674,8 @@ export function buildCombatPreviewFromPending(game: GameSnapshot): CombatPreview
     })
   }
 
-  if (pending.roundState) {
-    const rs = pending.roundState
+  const rs = combatRoundStateOf(pending)
+  if (rs) {
     return buildCombatPreviewFromPendingPlans(game, pending, coord, {
       trigger: rs.trigger ?? pending.trigger,
       movementFrom: rs.movementFrom,
@@ -2536,7 +2685,7 @@ export function buildCombatPreviewFromPending(game: GameSnapshot): CombatPreview
     })
   }
 
-  if (pending.awaitingContinue) {
+  if (pending.phase === 'awaiting-continue') {
     return buildCombatPreview(
       game,
       coord,
@@ -2568,7 +2717,7 @@ export function setupCombatPrepForMovement(
     attackerId: playerId,
     defenderIds: defenderIdsOnCell(game, combatCoord, playerId),
     roundNumber: 1,
-    awaitingContinue: false,
+    phase: 'prep',
     trigger: 'movement',
     prep: {
       phase: 'prep',
@@ -2612,7 +2761,7 @@ export function setupCombatPrepForBombardment(
     attackerId: playerId,
     defenderIds: defenderIdsOnCell(game, target, playerId),
     roundNumber: 1,
-    awaitingContinue: false,
+    phase: 'prep',
     trigger: 'bombardment',
     prep: {
       phase: 'prep',
@@ -2660,7 +2809,7 @@ export function updateCombatPrep(
   supportSide?: 'attacker' | 'defender' | null,
 ): { errors: string[] } {
   const pending = game.pendingCombat
-  const prep = pending?.prep
+  const prep = combatPrepOf(pending)
   if (!pending || !prep) return { errors: ['Нет подготовки к бою'] }
 
   const isBombardment = pending.trigger === 'bombardment'
@@ -2753,7 +2902,7 @@ export function updateCombatPrep(
 
 export function cancelCombatPrep(game: GameSnapshot, playerId: string): { errors: string[] } {
   const pending = game.pendingCombat
-  if (!pending?.prep) return { errors: ['Нет подготовки к бою'] }
+  if (pending?.phase !== 'prep') return { errors: ['Нет подготовки к бою'] }
   if (pending.attackerId !== playerId) return { errors: ['Отменить подготовку может только атакующий'] }
   game.pendingCombat = undefined
   game.eventLog.push({
@@ -2768,7 +2917,7 @@ export function cancelCombatPrep(game: GameSnapshot, playerId: string): { errors
 }
 
 export function tickCombatPrepCountdown(game: GameSnapshot, now = Date.now()): boolean {
-  const prep = game.pendingCombat?.prep
+  const prep = combatPrepOf(game.pendingCombat)
   if (!prep || prep.phase !== 'countdown' || prep.countdownStartedAt == null) return false
   return now - prep.countdownStartedAt >= COMBAT_PREP_COUNTDOWN_MS
 }

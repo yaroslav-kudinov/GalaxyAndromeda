@@ -492,7 +492,7 @@ describe('galaxy save file', () => {
       attackerId: 'player-1',
       defenderIds: ['player-2'],
       roundNumber: 1,
-      awaitingContinue: false,
+      phase: 'prep',
       prep: {
         phase: 'countdown',
         defenderId: 'player-2',

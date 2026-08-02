@@ -367,7 +367,7 @@ const destroyedShipsText = computed(() => {
 
 const continueStatusText = computed(() => {
   const pending = props.snapshot.pendingCombat
-  if (pending?.awaitingContinue) {
+  if (pending?.phase === 'awaiting-continue') {
     if (pending.continueDecisions?.attacker !== true) {
       return 'Бой продолжается: атакующий выбирает продолжение или отступление.'
     }
@@ -787,8 +787,9 @@ onUnmounted(() => {
             {{ resolving ? 'Отмена…' : 'Отменить готовность' }}
           </button>
         </template>
+        <!-- «Начать бой» — только локальная игра: в онлайне бой запускает countdown -->
         <button
-          v-else-if="phase === 'pre'"
+          v-else-if="phase === 'pre' && !isOnlinePrep"
           type="button"
           class="btn-primary"
           :disabled="resolving"

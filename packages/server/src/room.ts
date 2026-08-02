@@ -24,6 +24,10 @@ import {
 
   resolveCombatPrep,
 
+  combatPrepOf,
+
+  releaseInvalidPendingCombat,
+
   tickCombatPrepCountdown,
 
   syncParticipatingPlayerIds,
@@ -166,7 +170,7 @@ function maybeAdvanceCombatPrep(room: Room): {
   combatResult?: import('@galaxy/rules').CombatResolutionResult
   changed: boolean
 } {
-  const prepBefore = room.state.pendingCombat?.prep
+  const prepBefore = combatPrepOf(room.state.pendingCombat)
   if (!tickCombatPrepCountdown(room.state)) return { changed: false }
   const { errors, combatResult } = resolveCombatPrep(room.state, room.map)
   if (errors.length) {
@@ -178,7 +182,7 @@ function maybeAdvanceCombatPrep(room: Room): {
     roomId: room.id,
     phaseBefore: prepBefore?.phase,
     countdownStartedAt: prepBefore?.countdownStartedAt,
-    phaseAfter: room.state.pendingCombat?.prep?.phase ?? null,
+    phaseAfter: combatPrepOf(room.state.pendingCombat)?.phase ?? null,
     winnerId: combatResult?.winnerId,
   })
   return { combatResult, changed: true }
@@ -495,18 +499,21 @@ export function submitAction(
     throw new Error('Игра завершена')
   }
 
+  // Бой, не проходящий инвариант, блокирует всю комнату: снимаем его до того,
+  // как игрок упрётся в «Сначала завершите текущий бой».
+  const violations = releaseInvalidPendingCombat(room.state)
+  if (violations.length) {
+    debugLog('combat.invariant.released', { roomId: room.id, violations })
+    bumpObservationRevision(room, 'combat:invariant-released')
+  }
+
   if (action.actionId !== 'update-combat-prep') {
-    const pending = room.state.pendingCombat
-    const keepResult = !!(
-      pending?.prep
-      || pending?.awaitingDestruction
-      || pending?.awaitingContinue
-    )
-    if (!keepResult) {
+    // Результат последнего боя нужен клиенту, пока бой ещё на экране.
+    if (!room.state.pendingCombat) {
       room.lastCombatResult = undefined
     }
   }
-  const prepBefore = room.state.pendingCombat?.prep
+  const prepBefore = combatPrepOf(room.state.pendingCombat)
 
   const { errors, combatResult: actionCombatResult } = applyGameActionOnSnapshot(
     room.state,
@@ -526,7 +533,7 @@ export function submitAction(
 
   bumpObservationRevision(room, `action:${action.actionId}`)
   if (action.actionId === 'update-combat-prep') {
-    const prep = room.state.pendingCombat?.prep
+    const prep = combatPrepOf(room.state.pendingCombat)
     debugLog('combat.prep', {
       roomId: room.id,
       playerId,
