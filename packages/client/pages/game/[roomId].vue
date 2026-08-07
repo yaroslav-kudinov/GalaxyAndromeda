@@ -65,7 +65,10 @@ import { useProductionShipPick } from '~/composables/useProductionShipPick'
 import { snapshotToBoardCells } from '~/utils/board-adapter'
 import {
   gameHelpForPhase,
+  legalActionChipIcon,
+  legalActionChipLabel,
   phaseGuidanceForTurn,
+  type HelpStepIcon,
   type MarkerKind,
   type PlanningSubStep,
 } from '~/utils/game-help'
@@ -153,6 +156,8 @@ const battleModalOpen = ref(false)
 const battlePreviewSnapshot = ref<import('@galaxy/rules').CombatPreview | null>(null)
 const pendingOrderAfterBattle = ref<MarkerOrderConfirmResult | null>(null)
 const battleResolution = ref<CombatResolutionResult | null>(null)
+/** Fingerprint итога, который игрок уже закрыл — чтобы poll не открывал модалку снова */
+const dismissedCombatResultKey = ref<string | null>(null)
 const battleResolving = ref(false)
 const productionModalOpen = ref(false)
 const productionMarkerSource = ref<HexCoord | null>(null)
@@ -256,6 +261,12 @@ const playerNameById = computed(() => {
   return map
 })
 
+const myPlayer = computed(() =>
+  snapshot.value?.players.find((p) => p.id === playerId.value) ?? null,
+)
+
+const myPlayerColor = computed(() => myPlayer.value?.color ?? '#3B82F6')
+
 const territoryLabelPlayers = computed(() =>
   (snapshot.value?.players ?? []).map((player, index) => ({
     slot: index + 1,
@@ -263,6 +274,10 @@ const territoryLabelPlayers = computed(() =>
     color: player.color,
   })),
 )
+
+const youBadgeStyle = computed(() => ({
+  '--my-color': myPlayerColor.value,
+}))
 
 const phaseAdvanceBtnStyle = computed(() => ({
   '--player-color': activePlayerColor.value,
@@ -376,26 +391,47 @@ const combatDecisionRole = computed<'attacker' | 'defender' | null>(() => {
   return null
 })
 
+const battleResolutionKey = computed(() =>
+  combatResolutionFingerprint(battleResolution.value),
+)
+
+const roundResultsPendingView = computed(() => {
+  const key = battleResolutionKey.value
+  return key != null && key !== dismissedCombatResultKey.value
+})
+
 /**
- * Экран боя нужен только тем, от кого сейчас ждут решения. Остальным участникам
- * и наблюдателям показываем баннер, чтобы модалка не перехватывала управление.
+ * Модалка: prep, итоги раунда (всем участникам) и выбор уничтожения победителем.
+ * Решение «продолжить / отступить» — баннером после закрытия итогов, чтобы не перекрывать карту.
  */
 const needsBattleModal = computed(() => {
+  if (combatParticipantRole.value === null) return false
   switch (combatPhase.value) {
     case 'prep':
-      return combatParticipantRole.value !== null
+      return true
     case 'awaiting-destruction':
-      return isCombatDestructionChooser.value
+      return true
     case 'awaiting-continue':
-      return combatDecisionRole.value !== null
+      return roundResultsPendingView.value
     default:
       return false
   }
 })
 
-/** Идёт бой, в котором игрок ничего не решает */
+/** Сейчас ваш ход решить: продолжить бой или отступить (после просмотра итогов) */
+const showCombatContinueDecision = computed(
+  () =>
+    combatPhase.value === 'awaiting-continue'
+    && combatDecisionRole.value != null
+    && !needsBattleModal.value,
+)
+
+/** Идёт бой, в котором вы сейчас ничего не решаете */
 const showForeignCombatBanner = computed(
-  () => hasActivePendingCombat.value && !needsBattleModal.value,
+  () =>
+    hasActivePendingCombat.value
+    && !needsBattleModal.value
+    && !showCombatContinueDecision.value,
 )
 
 const foreignCombatBannerText = computed(() => {
@@ -408,33 +444,91 @@ const foreignCombatBannerText = computed(() => {
     const winnerName = winner ? playerNameById.value[winner] ?? winner : ''
     return `Бой на (${cell}): победитель раунда${winnerName ? ` ${winnerName}` : ''} выбирает потери`
   }
+  if (pending.phase === 'awaiting-continue') {
+    const mustContinue = pending.shipsDestroyedInCombat !== true
+    if (pending.continueDecisions.attacker !== true) {
+      const attackerName = playerNameById.value[pending.attackerId] ?? 'атакующий'
+      if (mustContinue) {
+        return combatParticipantRole.value === 'defender'
+          ? `Раунд окончен без уничтожений — отступление недоступно. Ожидайте подтверждения атакующего (${attackerName}).`
+          : `Бой на (${cell}): без уничтожений — атакующий (${attackerName}) подтверждает продолжение`
+      }
+      return combatParticipantRole.value === 'defender'
+        ? `Раунд окончен. Ожидайте решения атакующего (${attackerName}): продолжить бой или отступить. Затем очередь перейдёт к вам.`
+        : `Бой на (${cell}): атакующий (${attackerName}) выбирает — продолжить или отступить`
+    }
+    const defenderId = pending.defenderIds[0]
+    const defenderName = defenderId ? playerNameById.value[defenderId] ?? 'защитник' : 'защитник'
+    if (mustContinue) {
+      return combatParticipantRole.value === 'attacker'
+        ? `Вы продолжили бой. Ожидайте подтверждения защитника (${defenderName}) — отступление пока недоступно.`
+        : `Бой на (${cell}): без уничтожений — защитник (${defenderName}) подтверждает продолжение`
+    }
+    return combatParticipantRole.value === 'attacker'
+      ? `Вы продолжили бой. Ожидайте решения защитника (${defenderName}): продолжить или отступить.`
+      : `Бой на (${cell}): защитник (${defenderName}) выбирает — продолжить или отступить`
+  }
   return `Бой на (${cell}): стороны решают, продолжать ли сражение`
 })
 
+const combatRetreatAllowed = computed(
+  () => pendingCombatState.value?.shipsDestroyedInCombat === true,
+)
+
 const retreatDestinations = computed(() => {
-  if (!snapshot.value || !combatDecisionRole.value) return [] as HexCoord[]
+  if (!snapshot.value || !combatDecisionRole.value || !combatRetreatAllowed.value) {
+    return [] as HexCoord[]
+  }
   return getCombatRetreatDestinations(snapshot.value, playerId.value)
 })
+
+const retreatDestinationKeys = computed(() =>
+  retreatDestinations.value.map((coord) => hexKey(coord.q, coord.r)),
+)
+
+/** Клетка отступления под курсором кнопки в баннере */
+const retreatHoverKey = ref<string | null>(null)
+
+watch(showCombatContinueDecision, (active) => {
+  if (!active) retreatHoverKey.value = null
+})
+
+watch(
+  battleResolutionKey,
+  (key, prev) => {
+    if (key && key !== prev) dismissedCombatResultKey.value = null
+  },
+)
+
+function openBattleModalFromPending() {
+  if (!needsBattleModal.value || !snapshot.value) return
+  const preview = buildCombatPreviewFromPending(snapshot.value)
+  if (!preview) return
+  battlePreviewSnapshot.value = preview
+  battleModalOpen.value = true
+}
 
 watch(
   pendingCombatState,
   (pending, prev) => {
     if (!pending) {
+      dismissedCombatResultKey.value = null
       if (prev?.phase === 'prep' && battleModalOpen.value && !battleResolution.value) {
         void resyncAfterCombatCountdown()
       }
       return
     }
 
-    if (!needsBattleModal.value || !snapshot.value) return
-
-    const preview = buildCombatPreviewFromPending(snapshot.value)
-    if (!preview) return
-
-    battlePreviewSnapshot.value = preview
-    battleModalOpen.value = true
+    openBattleModalFromPending()
   },
   { deep: true },
+)
+
+watch(
+  [needsBattleModal, battleResolutionKey],
+  () => {
+    openBattleModalFromPending()
+  },
 )
 
 watch(
@@ -447,6 +541,7 @@ watch(
     }
     if (prev === 'countdown' && phase === 'prep') {
       battleResolution.value = null
+      dismissedCombatResultKey.value = null
     }
   },
 )
@@ -459,13 +554,6 @@ const supplyChainHighlightKeys = computed((): string[] => {
   return summary.supplyChains
     .filter((c) => c.playerId === playerId.value)
     .flatMap((c) => c.path)
-})
-
-const myControlledKeys = computed((): string[] => {
-  if (!snapshot.value) return []
-  return snapshot.value.cells
-    .filter((cell) => cell.controlOwnerId === playerId.value)
-    .map((cell) => hexKey(cell.coord.q, cell.coord.r))
 })
 
 const planningSubStep = computed((): PlanningSubStep => {
@@ -569,7 +657,49 @@ const phaseHelp = computed(() =>
   gameHelpForPhase(snapshot.value?.phase, isMyTurn.value, effectiveMarkerKind.value),
 )
 
+const playerColorById = computed(() => {
+  const map: Record<string, string> = {}
+  for (const p of snapshot.value?.players ?? []) {
+    map[p.id] = p.color
+  }
+  return map
+})
+
+function sidePanelPlayerColor(ownerId: string): string {
+  return playerColorById.value[ownerId] ?? '#64748b'
+}
+
+function sidePanelPlayerName(ownerId: string): string {
+  return playerNameById.value[ownerId] ?? ownerId
+}
+
+function helpStepSymbol(icon: HelpStepIcon): string {
+  const symbols: Record<HelpStepIcon, string> = {
+    wait: '…',
+    event: '✦',
+    click: '⌖',
+    'marker-action': '●',
+    'marker-prod': '■',
+    ship: '▲',
+    fight: '⚔',
+    build: '⚙',
+    queue: '☰',
+    limit: '#',
+    pass: '→',
+    tip: 'i',
+  }
+  return symbols[icon] ?? '·'
+}
+
 const currentPhase = computed(() => snapshot.value?.phase)
+
+const sidePanelActionRemaining = computed(() =>
+  Math.max(0, MAX_ACTION_MARKERS_PER_PLAYER - myActionMarkerCount.value),
+)
+
+const sidePanelProdRemaining = computed(() =>
+  Math.max(0, maxProductionRegions.value - myProductionMarkerCount.value),
+)
 
 const showActionsControls = computed(
   () => isMyTurn.value && currentPhase.value === 'actions',
@@ -819,15 +949,23 @@ const availableProductionMarkerKeys = computed(() => {
 const boardReachableKeys = computed(() => {
   if (markerMapPickActive.value) return markerMapPick.reachableKeys.value
   if (productionShipPickActive.value) return productionShipPick.reachableKeys.value
+  if (showCombatContinueDecision.value) return retreatDestinationKeys.value
   return []
 })
 const boardContestedKeys = computed(() => {
   if (markerMapPickActive.value) return markerMapPick.contestedKeys.value
+  // Клетка боя — ориентир, куда сейчас идёт сражение.
+  if (showCombatContinueDecision.value && pendingCombatState.value?.cellKey) {
+    return [pendingCombatState.value.cellKey]
+  }
   return []
 })
 const boardDestinationKeys = computed(() => {
   if (markerMapPickActive.value) return markerMapPick.destinationKeys.value
   if (productionShipPickActive.value) return productionShipPick.destinationKeys.value
+  if (showCombatContinueDecision.value && retreatHoverKey.value) {
+    return [retreatHoverKey.value]
+  }
   return []
 })
 const boardPreviewMoves = computed(() => {
@@ -1073,11 +1211,22 @@ async function confirmMarkerOrder() {
 }
 
 function closeBattleModal() {
+  const resultKey = battleResolutionKey.value
+  if (
+    resultKey
+    && (
+      combatPhase.value === 'awaiting-continue'
+      || (combatPhase.value === 'awaiting-destruction' && !isCombatDestructionChooser.value)
+    )
+  ) {
+    dismissedCombatResultKey.value = resultKey
+  }
+
   battleModalOpen.value = false
   markerMapPick.afterBattleModalClosed()
   battlePreviewSnapshot.value = null
   pendingOrderAfterBattle.value = null
-  if (combatPhase.value !== 'awaiting-destruction') {
+  if (combatPhase.value !== 'awaiting-destruction' && combatPhase.value !== 'awaiting-continue') {
     battleResolution.value = null
   }
   battleResolving.value = false
@@ -1245,12 +1394,16 @@ async function confirmBattleDestruction(destructionSelection: string[]) {
 }
 
 async function continuePendingCombatAction() {
-  if (!pendingCombatState.value || !combatDecisionRole.value) return
+  const role = combatDecisionRole.value
+  if (!pendingCombatState.value || !role) return
+  retreatHoverKey.value = null
   bumpObservationEpoch()
   try {
     const obs = await submitGameAction(roomId.value, playerId.value, 'continue-combat')
     applyObservation(obs)
-    markerActionHint.value = 'Бой продолжен'
+    markerActionHint.value = role === 'attacker'
+      ? 'Вы продолжили бой — ждём решения защитника'
+      : 'Бой продолжен'
   } catch (e) {
     markerActionHint.value = actionErrorMessage(e, 'Не удалось продолжить бой')
   }
@@ -1258,11 +1411,12 @@ async function continuePendingCombatAction() {
 
 async function stopPendingCombatAction(retreatTo: HexCoord) {
   if (!pendingCombatState.value || !combatDecisionRole.value) return
+  retreatHoverKey.value = null
   bumpObservationEpoch()
   try {
     const obs = await submitGameAction(roomId.value, playerId.value, 'stop-combat', { retreatTo })
     applyObservation(obs)
-    markerActionHint.value = 'Бой прекращён'
+    markerActionHint.value = `Отступление в (${retreatTo.q}, ${retreatTo.r})`
   } catch (e) {
     markerActionHint.value = actionErrorMessage(e, 'Не удалось остановить бой')
   }
@@ -1736,6 +1890,14 @@ async function selectCell(q: number, r: number) {
     return
   }
 
+  if (showCombatContinueDecision.value && combatRetreatAllowed.value) {
+    const key = hexKey(q, r)
+    if (retreatDestinationKeys.value.includes(key)) {
+      await stopPendingCombatAction({ q, r })
+    }
+    return
+  }
+
   const phase = snapshot.value?.phase
 
   if (isMyTurn.value && phase === 'actions' && hasMyActionMarkerAt(q, r)) {
@@ -2076,7 +2238,6 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
         :available-action-marker-keys="availableActionMarkerKeys"
         :available-production-marker-keys="availableProductionMarkerKeys"
         :supply-chain-keys="supplyChainHighlightKeys"
-        :my-territory-keys="myControlledKeys"
         @select="selectCell"
       />
       <p v-else class="empty-hint">Нет данных карты — импортируйте .galaxy.json</p>
@@ -2132,30 +2293,51 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
     </div>
 
     <div
-      v-if="pendingCombatState && combatPhase === 'awaiting-continue' && combatDecisionRole"
+      v-if="showCombatContinueDecision && pendingCombatState"
       class="map-pick-banner map-pick-banner--combat"
       role="status"
     >
       <p class="map-pick-text">
-        Бой на {{ pendingCombatState.cellKey }} — раунд {{ pendingCombatState.roundNumber }}.
-        {{ combatDecisionRole === 'attacker' ? 'Атакующий выбирает первым.' : 'Атакующий выбрал продолжение — ваше решение.' }}
+        Бой на ({{ pendingCombatState.cellKey }}) — раунд {{ pendingCombatState.roundNumber }}.
+        <template v-if="!combatRetreatAllowed">
+          Пока в этом бою никто не уничтожен — отступление недоступно, бой продолжается.
+          <template v-if="combatDecisionRole === 'attacker'">Подтвердите продолжение.</template>
+          <template v-else>Атакующий продолжил — подтвердите продолжение как защитник.</template>
+        </template>
+        <template v-else-if="combatDecisionRole === 'attacker'">
+          Ваш ход как атакующего: продолжить сражение или отступить на подсвеченную клетку.
+        </template>
+        <template v-else>
+          Атакующий продолжил бой — ваш ход как защитника: продолжить или отступить на подсвеченную клетку.
+        </template>
+      </p>
+      <p v-if="combatRetreatAllowed" class="map-pick-text map-pick-text--hint">
+        Клетки отступления подсвечены на карте. Можно нажать на клетку или на кнопку ниже;
+        наведение на кнопку подсвечивает клетку ярче.
       </p>
       <div class="map-pick-actions">
         <button type="button" class="map-pick-primary" @click="continuePendingCombatAction">
           Продолжить бой
         </button>
-        <span v-if="!retreatDestinations.length" class="map-pick-error">
-          Нет доступной соседней клетки для отступления.
-        </span>
-        <button
-          v-for="coord in retreatDestinations"
-          :key="hexKey(coord.q, coord.r)"
-          type="button"
-          class="map-pick-secondary"
-          @click="stopPendingCombatAction(coord)"
-        >
-          Отступить в ({{ coord.q }}, {{ coord.r }})
-        </button>
+        <template v-if="combatRetreatAllowed">
+          <span v-if="!retreatDestinations.length" class="map-pick-error">
+            Нет доступной соседней клетки для отступления.
+          </span>
+          <button
+            v-for="coord in retreatDestinations"
+            :key="hexKey(coord.q, coord.r)"
+            type="button"
+            class="map-pick-secondary"
+            :class="{ 'map-pick-secondary--hover-hex': retreatHoverKey === hexKey(coord.q, coord.r) }"
+            @mouseenter="retreatHoverKey = hexKey(coord.q, coord.r)"
+            @mouseleave="retreatHoverKey = null"
+            @focus="retreatHoverKey = hexKey(coord.q, coord.r)"
+            @blur="retreatHoverKey = null"
+            @click="stopPendingCombatAction(coord)"
+          >
+            Отступить в ({{ coord.q }}, {{ coord.r }})
+          </button>
+        </template>
       </div>
     </div>
 
@@ -2249,99 +2431,123 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
       </div>
     </div>
 
-    <header class="hud-top">
-      <div class="hud-top-left">
-        <NuxtLink to="/" class="back-link">← Lobby</NuxtLink>
-        <span class="you-badge" :class="{ 'you-badge--turn': isMyTurn }">
-          Вы: {{ myPlayerName }}
-          <span v-if="snapshot?.activePlayerId" class="you-badge-sub">
-            · ход {{ activePlayerName }}
+    <div class="hud-chrome">
+      <header class="hud-top">
+        <div class="hud-top-left">
+          <NuxtLink to="/" class="back-link">← Lobby</NuxtLink>
+          <div v-if="saveFile" class="hud-title">
+            <strong>{{ saveFile.map.name }}</strong>
+            <span class="hud-id">{{ roomId }}</span>
+          </div>
+        </div>
+
+        <div v-if="isMyTurn" class="hud-top-center">
+          <button
+            v-if="showPlanningBackToActionBtn"
+            type="button"
+            class="planning-step-btn planning-step-btn--hero planning-step-btn--back"
+            @click="backToPlanningActionStep"
+          >
+            ← К маркерам действия
+          </button>
+          <button
+            v-if="showPlanningActionDoneBtn"
+            type="button"
+            class="planning-step-btn planning-step-btn--hero"
+            @click="finishPlanningActionStep"
+          >
+            Готово с маркерами действия
+          </button>
+          <button
+            type="button"
+            class="phase-advance-btn phase-advance-btn--hero"
+            :style="phaseAdvanceBtnStyle"
+            :disabled="advancingPhase || !canAdvancePhase"
+            :title="phaseAdvanceBlockedReason ?? undefined"
+            @click="endPhase"
+          >
+            {{ advancingPhase ? '…' : advancePhaseLabel }}
+          </button>
+          <p v-if="phaseHint" class="hud-center-hint err">{{ phaseHint }}</p>
+          <p v-else-if="phaseAdvanceBlockedReason" class="hud-center-hint err">
+            {{ phaseAdvanceBlockedReason }}
+          </p>
+        </div>
+        <div v-else class="hud-top-center hud-top-center--idle" aria-hidden="true" />
+
+        <div class="hud-top-right">
+          <PhasePanel
+            v-if="snapshot"
+            variant="hero"
+            :phase="snapshot.phase"
+            :turn-number="snapshot.turnNumber"
+            :active-player-id="snapshot.activePlayerId"
+            :players="snapshot.players"
+            :is-my-turn="isMyTurn"
+            :prompt="phaseGuidance?.prompt"
+            :count-hint="phaseGuidance?.countHint"
+            :guidance-accent="phaseGuidance?.accent"
+          />
+          <span class="server-pill" :class="serverStatus">
+            {{ serverStatus === 'online' ? 'Сервер' : serverStatus === 'offline' ? 'Offline' : '…' }}
           </span>
-        </span>
-        <div v-if="saveFile" class="hud-title">
-          <strong>{{ saveFile.map.name }}</strong>
-          <span class="hud-id">{{ roomId }}</span>
+          <button
+            v-if="serverStatus === 'online' && roomBootstrap && roomBootstrap.playerCount < roomBootstrap.maxPlayers"
+            type="button"
+            class="invite-btn"
+            @click="copyInviteLink"
+          >
+            {{ inviteCopied ? 'Ссылка скопирована' : 'Ссылка-приглашение' }}
+          </button>
+        </div>
+      </header>
+
+      <div class="you-plaque-slot" aria-live="polite">
+        <div
+          class="you-plaque"
+          :class="{ 'you-plaque--turn': isMyTurn }"
+          :style="youBadgeStyle"
+          :title="`Вы — ${myPlayerName}`"
+        >
+          {{ myPlayerName }}
         </div>
       </div>
-
-      <div v-if="isMyTurn" class="hud-top-center">
-        <button
-          v-if="showPlanningBackToActionBtn"
-          type="button"
-          class="planning-step-btn planning-step-btn--hero planning-step-btn--back"
-          @click="backToPlanningActionStep"
-        >
-          ← К маркерам действия
-        </button>
-        <button
-          v-if="showPlanningActionDoneBtn"
-          type="button"
-          class="planning-step-btn planning-step-btn--hero"
-          @click="finishPlanningActionStep"
-        >
-          Готово с маркерами действия
-        </button>
-        <button
-          type="button"
-          class="phase-advance-btn phase-advance-btn--hero"
-          :style="phaseAdvanceBtnStyle"
-          :disabled="advancingPhase || !canAdvancePhase"
-          :title="phaseAdvanceBlockedReason ?? undefined"
-          @click="endPhase"
-        >
-          {{ advancingPhase ? '…' : advancePhaseLabel }}
-        </button>
-        <p v-if="phaseHint" class="hud-center-hint err">{{ phaseHint }}</p>
-        <p v-else-if="phaseAdvanceBlockedReason" class="hud-center-hint err">
-          {{ phaseAdvanceBlockedReason }}
-        </p>
-      </div>
-      <div v-else class="hud-top-center hud-top-center--idle" aria-hidden="true" />
-
-      <div class="hud-top-right">
-        <PhasePanel
-          v-if="snapshot"
-          variant="hero"
-          :phase="snapshot.phase"
-          :turn-number="snapshot.turnNumber"
-          :active-player-id="snapshot.activePlayerId"
-          :players="snapshot.players"
-          :is-my-turn="isMyTurn"
-          :prompt="phaseGuidance?.prompt"
-          :count-hint="phaseGuidance?.countHint"
-          :guidance-accent="phaseGuidance?.accent"
-        />
-        <span class="server-pill" :class="serverStatus">
-          {{ serverStatus === 'online' ? 'Сервер' : serverStatus === 'offline' ? 'Offline' : '…' }}
-        </span>
-        <button
-          v-if="serverStatus === 'online' && roomBootstrap && roomBootstrap.playerCount < roomBootstrap.maxPlayers"
-          type="button"
-          class="invite-btn"
-          @click="copyInviteLink"
-        >
-          {{ inviteCopied ? 'Ссылка скопирована' : 'Ссылка-приглашение' }}
-        </button>
-      </div>
-    </header>
+    </div>
 
     <aside class="hud-right" :class="{ collapsed: panelCollapsed }">
-      <button type="button" class="panel-toggle" @click="panelCollapsed = !panelCollapsed">
+      <button
+        type="button"
+        class="panel-toggle"
+        :title="panelCollapsed ? 'Развернуть панель' : 'Свернуть панель'"
+        :aria-expanded="!panelCollapsed"
+        aria-controls="game-side-panel"
+        @click="panelCollapsed = !panelCollapsed"
+      >
         {{ panelCollapsed ? '«' : '»' }}
       </button>
-      <div v-if="!panelCollapsed" class="panel-inner">
-        <h2 class="panel-heading">Игра</h2>
-
-        <section
-          v-if="activePlayerName"
-          class="block active-player-block"
-          :style="phaseAdvanceBtnStyle"
-        >
-          <p class="active-player-label">
-            <span class="active-player-dot" aria-hidden="true" />
-            Активный: <strong>{{ activePlayerName }}</strong>
-          </p>
-        </section>
+      <div v-if="!panelCollapsed" id="game-side-panel" class="panel-inner">
+        <header class="panel-heading-row">
+          <h2 class="panel-heading">Игра</h2>
+          <div class="panel-heading-meta">
+            <span
+              class="you-mini"
+              :style="youBadgeStyle"
+              :title="`Вы — ${myPlayerName}`"
+            >
+              <span class="you-mini-swatch" aria-hidden="true" />
+              Вы
+            </span>
+            <span
+              v-if="activePlayerName"
+              class="active-mini"
+              :style="phaseAdvanceBtnStyle"
+              :title="`Активный игрок: ${activePlayerName}`"
+            >
+              <span class="active-player-dot" aria-hidden="true" />
+              {{ activePlayerName }}
+            </span>
+          </div>
+        </header>
 
         <section v-if="showTurnEventsPanel" class="block event-block">
           <TurnEventsPanel
@@ -2353,7 +2559,7 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
           />
         </section>
 
-        <section class="block">
+        <section class="block block--cell">
           <CellDetailPanel
             :cell="selectedCell"
             :cell-key="selectedKey"
@@ -2365,10 +2571,176 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
           />
         </section>
 
+        <section class="block metrics-block" aria-label="Состояние фазы">
+          <div class="metric-row">
+            <span
+              class="metric-pill metric-pill--action"
+              :title="`Маркеры действия: ваши ${myActionMarkerCount}/${MAX_ACTION_MARKERS_PER_PLAYER}, на карте ${actionMarkers.length}`"
+            >
+              <span class="metric-glyph metric-glyph--action" aria-hidden="true" />
+              <span class="metric-value">{{ myActionMarkerCount }}/{{ MAX_ACTION_MARKERS_PER_PLAYER }}</span>
+              <span class="metric-sub">осталось {{ sidePanelActionRemaining }}</span>
+            </span>
+            <span
+              class="metric-pill metric-pill--prod"
+              :title="`Маркеры производства: ваши ${myProductionMarkerCount}/${maxProductionRegions}, на карте ${productionMarkers.length}`"
+            >
+              <span class="metric-glyph metric-glyph--prod" aria-hidden="true" />
+              <span class="metric-value">{{ myProductionMarkerCount }}/{{ maxProductionRegions }}</span>
+              <span class="metric-sub">осталось {{ sidePanelProdRemaining }}</span>
+            </span>
+          </div>
+
+          <div v-if="showActionsControls || showProductionControls" class="status-strip">
+            <template v-if="showActionsControls">
+              <span
+                v-if="actionMarkerUsedThisTurn"
+                class="status-chip status-chip--warn"
+                :title="ACTION_MARKER_ALREADY_RESOLVED_MSG"
+              >
+                ● исполнен
+              </span>
+              <span
+                v-else
+                class="status-chip status-chip--action"
+                title="Клик по маркеру на карте — перемещение. Снять — в карточке клетки."
+              >
+                ● клик по маркеру
+              </span>
+            </template>
+            <template v-if="showProductionControls">
+              <span
+                v-if="productionMarkerUsedThisTurn"
+                class="status-chip status-chip--warn"
+                :title="PRODUCTION_MARKER_ALREADY_RESOLVED_MSG"
+              >
+                ■ исполнен
+              </span>
+              <span
+                v-else
+                class="status-chip status-chip--prod"
+                title="Клик по маркеру — постройка или перезарядка. Снять — в карточке клетки."
+              >
+                ■ клик по маркеру
+              </span>
+            </template>
+            <span
+              v-if="isMyTurn && snapshot?.phase === 'actions' && remainingActionMarkersCount > 0"
+              class="status-chip"
+              :title="`На карте осталось маркеров действия: ${remainingActionMarkersCount}`"
+            >
+              карта · {{ remainingActionMarkersCount }}
+            </span>
+          </div>
+
+          <p v-if="markerHint" class="err" role="alert">{{ markerHint }}</p>
+          <p v-if="participationHint" class="hint participation-hint">{{ participationHint }}</p>
+          <p v-if="markerActionHint" class="hint">{{ markerActionHint }}</p>
+          <p v-if="productionHint" class="hint hint--production">{{ productionHint }}</p>
+        </section>
+
         <section class="block">
-          <h3>Файл</h3>
+          <h3 class="block-label">Доступно</h3>
+          <ul v-if="legalActions.length" class="action-chips" aria-label="Доступные действия">
+            <li
+              v-for="action in legalActions"
+              :key="action.id"
+              class="action-chip"
+              :class="`action-chip--${legalActionChipIcon(action.type)}`"
+              :title="action.description"
+            >
+              <span class="help-icon" aria-hidden="true">{{ helpStepSymbol(legalActionChipIcon(action.type)) }}</span>
+              <span>{{ legalActionChipLabel(action) }}</span>
+            </li>
+          </ul>
+          <p v-else-if="!isMyTurn" class="hint">Не ваш ход</p>
+          <p v-else class="hint">Нет действий</p>
+        </section>
+
+        <section class="block help-block">
+          <div class="help-head">
+            <h3>{{ phaseHelp.title }}</h3>
+            <button
+              type="button"
+              class="help-toggle"
+              :title="showHelp ? 'Свернуть справку' : 'Развернуть справку'"
+              :aria-expanded="showHelp"
+              @click="showHelp = !showHelp"
+            >
+              {{ showHelp ? '−' : '?' }}
+            </button>
+          </div>
+          <ul v-if="showHelp" class="help-steps">
+            <li
+              v-for="(step, idx) in phaseHelp.steps"
+              :key="idx"
+              class="help-step"
+              :class="`help-step--${step.icon}`"
+              :title="step.detail ?? step.label"
+            >
+              <span
+                class="help-icon"
+                :aria-hidden="true"
+              >{{ helpStepSymbol(step.icon) }}</span>
+              <span class="help-step-label">{{ step.label }}</span>
+            </li>
+          </ul>
+        </section>
+
+        <details class="block marker-details">
+          <summary>
+            <span class="metric-glyph metric-glyph--action" aria-hidden="true" />
+            Действие
+            <span class="marker-count">{{ actionMarkers.length }}</span>
+          </summary>
+          <ul v-if="actionMarkers.length" class="marker-cards">
+            <li
+              v-for="m in actionMarkers"
+              :key="m.id"
+              class="marker-card"
+              :title="`${sidePanelPlayerName(m.ownerId)} · (${m.coord.q}, ${m.coord.r}) · ${m.placedInPhase}`"
+            >
+              <span
+                class="owner-swatch"
+                :style="{ background: sidePanelPlayerColor(m.ownerId) }"
+                aria-hidden="true"
+              />
+              <span class="marker-card-name">{{ sidePanelPlayerName(m.ownerId) }}</span>
+              <span class="marker-card-coord">{{ m.coord.q }},{{ m.coord.r }}</span>
+            </li>
+          </ul>
+          <p v-else class="hint">Пусто</p>
+        </details>
+
+        <details class="block marker-details">
+          <summary>
+            <span class="metric-glyph metric-glyph--prod" aria-hidden="true" />
+            Производство
+            <span class="marker-count">{{ productionMarkers.length }}</span>
+          </summary>
+          <ul v-if="productionMarkers.length" class="marker-cards">
+            <li
+              v-for="m in productionMarkers"
+              :key="m.id"
+              class="marker-card"
+              :title="`${sidePanelPlayerName(m.ownerId)} · (${m.coord.q}, ${m.coord.r}) · регион ${m.targetRegionId}`"
+            >
+              <span
+                class="owner-swatch"
+                :style="{ background: sidePanelPlayerColor(m.ownerId) }"
+                aria-hidden="true"
+              />
+              <span class="marker-card-name">{{ sidePanelPlayerName(m.ownerId) }}</span>
+              <span class="marker-card-coord">{{ m.coord.q }},{{ m.coord.r }}</span>
+            </li>
+          </ul>
+          <p v-else class="hint">Пусто</p>
+        </details>
+
+        <section class="block block--file">
+          <h3 class="block-label">Файл</h3>
           <label class="export-name-field">
-            <span class="export-name-label">Имя файла</span>
+            <span class="export-name-label">Имя</span>
             <input
               v-model="exportFileName"
               type="text"
@@ -2379,92 +2751,14 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
             />
           </label>
           <div class="btn-row">
-            <button type="button" @click="exportGameSave">Экспорт</button>
-            <label class="file-btn">
-              Импорт
+            <button type="button" title="Экспорт сохранения" @click="exportGameSave">↓ Экспорт</button>
+            <label class="file-btn" title="Импорт сохранения">
+              ↑ Импорт
               <input type="file" accept="application/json,.json,.galaxy.json" hidden @change="importGameSave" />
             </label>
           </div>
-          <p v-if="loadError" class="err">{{ loadError }}</p>
+          <p v-if="loadError" class="err" role="alert">{{ loadError }}</p>
         </section>
-
-        <section v-if="isMyTurn || participationHint" class="block">
-          <h3>Фаза хода</h3>
-          <p v-if="markerHint" class="err">{{ markerHint }}</p>
-          <p v-if="participationHint" class="hint participation-hint">{{ participationHint }}</p>
-          <p v-else-if="isMyTurn && snapshot?.phase === 'actions' && remainingActionMarkersCount > 0" class="hint">
-            Фаза «Действия» продолжается, пока на карте есть маркеры (осталось {{ remainingActionMarkersCount }}).
-          </p>
-          <p v-else-if="isMyTurn" class="hint">
-            В каждой фазе ходят все игроки по очереди (1→2→3→…).
-            При передаче хода управление переключается на активного игрока.
-          </p>
-        </section>
-
-        <section v-if="showActionsControls" class="block">
-          <h3>Маркер действия</h3>
-          <p v-if="actionMarkerUsedThisTurn" class="hint action-marker-used">
-            {{ ACTION_MARKER_ALREADY_RESOLVED_MSG }}
-          </p>
-          <p v-else class="hint">
-            Клик по своему маркеру на карте откроет перемещение.
-            Снять маркер без действия — карточка клетки (с подтверждением), до исполнения маркера в этом ходу.
-          </p>
-        </section>
-
-        <section v-if="showProductionControls" class="block">
-          <h3>Маркер производства</h3>
-          <p v-if="productionMarkerUsedThisTurn" class="hint action-marker-used">
-            {{ PRODUCTION_MARKER_ALREADY_RESOLVED_MSG }}
-          </p>
-          <p v-else class="hint">
-            Клик по маркеру на карте — постройка или перезарядка.
-            Снять маркер — карточка клетки (с подтверждением), до постройки в этом ходу.
-          </p>
-        </section>
-
-        <section class="block">
-          <h3>Действия</h3>
-          <ul v-if="legalActions.length" class="action-list">
-            <li v-for="action in legalActions" :key="action.id">{{ action.description }}</li>
-          </ul>
-          <p v-else-if="!isMyTurn" class="hint">Сейчас не ваш ход.</p>
-          <p v-else class="hint">Нет доступных действий.</p>
-          <p v-if="markerActionHint" class="hint">{{ markerActionHint }}</p>
-          <p v-if="productionHint" class="hint hint--production">{{ productionHint }}</p>
-        </section>
-
-        <section class="block help-block">
-          <div class="help-head">
-            <h3>{{ phaseHelp.title }}</h3>
-            <button type="button" class="help-toggle" @click="showHelp = !showHelp">
-              {{ showHelp ? '−' : '?' }}
-            </button>
-          </div>
-          <ul v-if="showHelp" class="help-list">
-            <li v-for="(line, idx) in phaseHelp.lines" :key="idx">{{ line }}</li>
-          </ul>
-        </section>
-
-        <details class="block marker-details">
-          <summary>Маркеры действия ({{ actionMarkers.length }})</summary>
-          <ul v-if="actionMarkers.length" class="marker-list">
-            <li v-for="m in actionMarkers" :key="m.id">
-              {{ m.ownerId }} @ ({{ m.coord.q }}, {{ m.coord.r }}) · {{ m.placedInPhase }}
-            </li>
-          </ul>
-          <p v-else class="hint">Нет маркеров.</p>
-        </details>
-
-        <details class="block marker-details">
-          <summary>Маркеры производства ({{ productionMarkers.length }})</summary>
-          <ul v-if="productionMarkers.length" class="marker-list">
-            <li v-for="m in productionMarkers" :key="m.id">
-              {{ m.ownerId }} @ ({{ m.coord.q }}, {{ m.coord.r }}) · регион {{ m.targetRegionId }}
-            </li>
-          </ul>
-          <p v-else class="hint">Нет маркеров.</p>
-        </details>
       </div>
     </aside>
   </div>
@@ -2558,12 +2852,19 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
   justify-content: center;
   color: #94a3b8;
 }
-.hud-top {
+.hud-chrome {
   position: absolute;
   top: 0;
   left: 0;
   right: 0;
   z-index: 30;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  pointer-events: none;
+}
+.hud-top {
+  position: relative;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: center;
@@ -2572,7 +2873,6 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
   padding: 0.5rem 0.75rem;
   background: linear-gradient(to bottom, rgba(15, 23, 42, 0.95), rgba(15, 23, 42, 0.65), transparent);
   backdrop-filter: blur(6px);
-  pointer-events: none;
 }
 .hud-top-left,
 .hud-top-center,
@@ -2694,28 +2994,78 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
   background: #1e293b;
   color: #e2e8f0;
 }
+.map-pick-secondary--hover-hex {
+  border-color: #38bdf8;
+  background: #0c4a6e;
+  color: #e0f2fe;
+}
+.map-pick-text--hint {
+  font-size: 0.75rem;
+  color: #bae6fd;
+  opacity: 0.9;
+}
 .back-link {
   color: #93c5fd;
   text-decoration: none;
   font-size: 0.85rem;
 }
-.you-badge {
-  padding: 0.28rem 0.55rem;
+.you-plaque-slot {
+  align-self: flex-start;
+  padding: 0.2rem 0.75rem 0.55rem;
+}
+.you-plaque {
+  display: inline-block;
+  max-width: min(360px, 62vw);
+  padding: 0.6rem 1.35rem 0.55rem;
+  border-radius: 12px;
+  font-family: Orbitron, "Segoe UI", "Trebuchet MS", sans-serif;
+  font-size: 1.28rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  line-height: 1.2;
+  color: #fff;
+  text-shadow:
+    0 1px 0 rgba(15, 23, 42, 0.55),
+    0 2px 8px rgba(15, 23, 42, 0.35);
+  background: var(--my-color, #3b82f6);
+  border: 2px solid color-mix(in srgb, var(--my-color, #3b82f6) 35%, #fff);
+  box-shadow:
+    0 2px 0 color-mix(in srgb, var(--my-color, #3b82f6) 35%, #0f172a),
+    0 8px 20px rgba(0, 0, 0, 0.38);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.you-plaque--turn {
+  outline: 2px solid #fff;
+  outline-offset: 2px;
+}
+.panel-heading-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
+}
+.you-mini {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.15rem 0.45rem 0.15rem 0.25rem;
   border-radius: 999px;
-  font-size: 0.78rem;
-  font-weight: 600;
-  color: #e2e8f0;
-  background: rgba(51, 65, 85, 0.85);
-  border: 1px solid rgba(100, 116, 139, 0.6);
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #f8fafc;
+  background: color-mix(in srgb, var(--my-color, #3b82f6) 28%, rgba(15, 23, 42, 0.9));
+  border: 1px solid color-mix(in srgb, var(--my-color, #3b82f6) 70%, #fff);
 }
-.you-badge--turn {
-  color: #bbf7d0;
-  border-color: rgba(134, 239, 172, 0.55);
-  background: rgba(22, 78, 50, 0.75);
-}
-.you-badge-sub {
-  font-weight: 500;
-  opacity: 0.9;
+.you-mini-swatch {
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 999px;
+  background: var(--my-color, #3b82f6);
+  box-shadow: 0 0 0 1px #0f172a;
 }
 .hud-title {
   display: flex;
@@ -2769,46 +3119,232 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
   flex: 1;
   min-width: 0;
   overflow-y: auto;
-  padding: 0.75rem;
+  padding: 0.65rem 0.7rem 0.85rem;
+}
+.panel-heading-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.65rem;
 }
 .panel-heading {
-  margin: 0 0 0.75rem;
-  font-size: 1rem;
+  margin: 0;
+  font-size: 0.95rem;
+  letter-spacing: 0.01em;
+}
+.active-mini {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  max-width: 9rem;
+  padding: 0.18rem 0.45rem;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: #fff;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border: 1px solid color-mix(in srgb, var(--player-color, #3b82f6) 55%, #fff);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--player-color, #3b82f6) 78%, #fff),
+    var(--player-color, #3b82f6)
+  );
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+}
+.active-player-dot {
+  width: 0.45rem;
+  height: 0.45rem;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 0 5px rgba(255, 255, 255, 0.75);
+  flex-shrink: 0;
 }
 .block {
-  margin-bottom: 1rem;
-  padding-bottom: 0.75rem;
-  border-bottom: 1px solid #334155;
+  margin-bottom: 0.75rem;
+  padding-bottom: 0.65rem;
+  border-bottom: 1px solid rgba(51, 65, 85, 0.9);
 }
+.block-label,
 .block h3 {
-  margin: 0 0 0.5rem;
-  font-size: 0.85rem;
+  margin: 0 0 0.4rem;
+  font-size: 0.72rem;
+  font-weight: 700;
   color: #94a3b8;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.block--cell {
+  padding-bottom: 0.55rem;
+}
+.block--file {
+  border-bottom: none;
+  margin-bottom: 0;
+  padding-bottom: 0;
+}
+.metrics-block {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.metric-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.35rem;
+}
+.metric-pill {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  grid-template-rows: auto auto;
+  column-gap: 0.35rem;
+  row-gap: 0.05rem;
+  align-items: center;
+  padding: 0.4rem 0.45rem;
+  border-radius: 8px;
+  border: 1px solid rgba(71, 85, 105, 0.7);
+  background: rgba(15, 23, 42, 0.55);
+  min-width: 0;
+}
+.metric-pill .metric-glyph {
+  grid-row: 1 / span 2;
+}
+.metric-pill--action {
+  border-color: rgba(250, 204, 21, 0.4);
+  background: rgba(66, 32, 6, 0.35);
+}
+.metric-pill--prod {
+  border-color: rgba(244, 114, 182, 0.4);
+  background: rgba(80, 7, 36, 0.35);
+}
+.metric-glyph {
+  width: 0.55rem;
+  height: 0.55rem;
+  display: inline-block;
+  vertical-align: middle;
+}
+.metric-glyph--action {
+  border-radius: 50%;
+  background: #facc15;
+  box-shadow: 0 0 0 2px rgba(250, 204, 21, 0.3);
+}
+.metric-glyph--prod {
+  border-radius: 2px;
+  background: #f472b6;
+  box-shadow: 0 0 0 2px rgba(244, 114, 182, 0.3);
+}
+.metric-value {
+  grid-column: 2;
+  font-size: 0.92rem;
+  font-weight: 800;
+  color: #f8fafc;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+}
+.metric-sub {
+  grid-column: 2;
+}
+.metric-pill--action .metric-value {
+  color: #fef08a;
+}
+.metric-pill--prod .metric-value {
+  color: #fbcfe8;
+}
+.metric-pill .metric-sub {
+  font-size: 0.66rem;
+  color: #94a3b8;
+}
+.status-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+.status-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.2rem 0.45rem;
+  border-radius: 999px;
+  border: 1px solid rgba(100, 116, 139, 0.45);
+  background: rgba(30, 41, 59, 0.7);
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: #cbd5e1;
+}
+.status-chip--action {
+  border-color: rgba(250, 204, 21, 0.45);
+  color: #fef08a;
+  background: rgba(113, 63, 18, 0.4);
+}
+.status-chip--prod {
+  border-color: rgba(244, 114, 182, 0.45);
+  color: #fbcfe8;
+  background: rgba(131, 24, 67, 0.4);
+}
+.status-chip--warn {
+  border-color: rgba(251, 191, 36, 0.55);
+  color: #fcd34d;
+  background: rgba(120, 53, 15, 0.45);
+}
+.action-chips {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+.action-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.28rem 0.5rem;
+  border-radius: 7px;
+  border: 1px solid rgba(71, 85, 105, 0.75);
+  background: rgba(15, 23, 42, 0.7);
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: #e2e8f0;
+}
+.action-chip--marker-action,
+.action-chip--fight {
+  border-color: rgba(250, 204, 21, 0.4);
+}
+.action-chip--build,
+.action-chip--marker-prod {
+  border-color: rgba(244, 114, 182, 0.4);
+}
+.action-chip--event {
+  border-color: rgba(167, 139, 250, 0.4);
+}
+.action-chip--pass {
+  border-color: rgba(56, 189, 248, 0.4);
 }
 .btn-row {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.5rem;
+  gap: 0.45rem;
 }
 .export-name-field {
   display: flex;
   flex-direction: column;
-  gap: 0.25rem;
-  margin-bottom: 0.5rem;
+  gap: 0.2rem;
+  margin-bottom: 0.4rem;
 }
 .export-name-label {
-  font-size: 0.72rem;
+  font-size: 0.68rem;
   color: #94a3b8;
 }
 .export-name-input {
   width: 100%;
   box-sizing: border-box;
-  padding: 0.35rem 0.5rem;
+  padding: 0.3rem 0.45rem;
   border-radius: 6px;
   border: 1px solid #475569;
   background: #1e293b;
   color: #f8fafc;
-  font-size: 0.82rem;
+  font-size: 0.78rem;
 }
 .export-name-input:focus {
   outline: none;
@@ -2816,50 +3352,101 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
 }
 button,
 .file-btn {
-  padding: 0.35rem 0.65rem;
+  padding: 0.32rem 0.55rem;
   border-radius: 6px;
   border: 1px solid #475569;
   background: #334155;
   color: #f8fafc;
   cursor: pointer;
-  font-size: 0.82rem;
+  font-size: 0.78rem;
 }
 .file-btn {
   display: inline-block;
 }
 .hint {
   margin: 0;
-  font-size: 0.82rem;
+  font-size: 0.76rem;
   color: #94a3b8;
 }
 .err {
-  margin: 0.35rem 0 0;
-  font-size: 0.82rem;
+  margin: 0.2rem 0 0;
+  font-size: 0.76rem;
   color: #f87171;
 }
-.action-marker-used {
-  color: #fcd34d;
-}
-.action-list,
-.marker-list {
-  margin: 0;
-  padding-left: 1.1rem;
-  font-size: 0.82rem;
-}
 .marker-details summary {
-  color: #94a3b8;
-  font-size: 0.82rem;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: #cbd5e1;
+  font-size: 0.76rem;
   font-weight: 600;
   cursor: pointer;
+  user-select: none;
+  list-style: none;
+}
+.marker-details summary::-webkit-details-marker {
+  display: none;
 }
 .marker-details[open] summary {
-  margin-bottom: 0.5rem;
+  margin-bottom: 0.4rem;
+}
+.marker-count {
+  margin-left: auto;
+  min-width: 1.25rem;
+  padding: 0.05rem 0.35rem;
+  border-radius: 999px;
+  background: rgba(51, 65, 85, 0.85);
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  color: #e2e8f0;
+}
+.marker-cards {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+.marker-card {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.3rem 0.4rem;
+  border-radius: 7px;
+  border: 1px solid rgba(71, 85, 105, 0.55);
+  background: rgba(15, 23, 42, 0.6);
+  font-size: 0.72rem;
+}
+.marker-card-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #e2e8f0;
+  font-weight: 600;
+}
+.marker-card-coord {
+  font-variant-numeric: tabular-nums;
+  color: #94a3b8;
+  font-weight: 600;
+}
+.owner-swatch {
+  display: inline-block;
+  width: 0.6rem;
+  height: 0.6rem;
+  border-radius: 2px;
+  border: 1px solid rgba(0, 0, 0, 0.25);
+  flex-shrink: 0;
 }
 .help-block {
-  background: rgba(15, 23, 42, 0.45);
+  background: rgba(15, 23, 42, 0.5);
   border-radius: 8px;
-  padding: 0.5rem 0.55rem;
-  margin-bottom: 0.75rem;
+  border: 1px solid rgba(51, 65, 85, 0.85);
+  padding: 0.45rem 0.5rem;
+  margin-bottom: 0.65rem;
 }
 .help-head {
   display: flex;
@@ -2869,20 +3456,85 @@ button,
 }
 .help-head h3 {
   margin: 0;
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 0.8rem;
+  color: #e2e8f0;
 }
 .help-toggle {
-  padding: 0.15rem 0.45rem;
+  padding: 0.12rem 0.4rem;
   font-size: 0.85rem;
   line-height: 1;
 }
-.help-list {
-  margin: 0.45rem 0 0;
-  padding-left: 1rem;
-  font-size: 0.78rem;
+.help-steps {
+  list-style: none;
+  margin: 0.4rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.28rem;
+}
+.help-step {
+  display: grid;
+  grid-template-columns: 1.35rem 1fr;
+  gap: 0.4rem;
+  align-items: start;
+  font-size: 0.74rem;
+  line-height: 1.3;
   color: #cbd5e1;
 }
-.help-list li {
-  margin-bottom: 0.35rem;
+.help-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.25rem;
+  height: 1.25rem;
+  border-radius: 5px;
+  background: rgba(51, 65, 85, 0.85);
+  border: 1px solid rgba(100, 116, 139, 0.45);
+  font-size: 0.68rem;
+  font-weight: 800;
+  color: #e2e8f0;
+  flex-shrink: 0;
+}
+.help-step--marker-action .help-icon,
+.action-chip--marker-action .help-icon {
+  color: #facc15;
+  border-color: rgba(250, 204, 21, 0.4);
+  background: rgba(113, 63, 18, 0.45);
+}
+.help-step--marker-prod .help-icon,
+.help-step--build .help-icon,
+.action-chip--build .help-icon {
+  color: #f472b6;
+  border-color: rgba(244, 114, 182, 0.4);
+  background: rgba(131, 24, 67, 0.4);
+}
+.help-step--fight .help-icon,
+.action-chip--fight .help-icon {
+  color: #fca5a5;
+  border-color: rgba(248, 113, 113, 0.4);
+  background: rgba(127, 29, 29, 0.4);
+}
+.help-step--event .help-icon,
+.action-chip--event .help-icon {
+  color: #c4b5fd;
+  border-color: rgba(167, 139, 250, 0.4);
+  background: rgba(76, 29, 149, 0.35);
+}
+.help-step--pass .help-icon,
+.action-chip--pass .help-icon {
+  color: #7dd3fc;
+  border-color: rgba(56, 189, 248, 0.4);
+  background: rgba(12, 74, 110, 0.45);
+}
+.help-step--ship .help-icon {
+  color: #86efac;
+  border-color: rgba(74, 222, 128, 0.35);
+  background: rgba(20, 83, 45, 0.4);
+}
+.help-step-label {
+  padding-top: 0.1rem;
 }
 .mode-row {
   display: flex;
@@ -2985,44 +3637,8 @@ button,
   opacity: 0.55;
   cursor: wait;
 }
-.active-player-block {
-  padding: 0.55rem 0.65rem;
-  border-radius: 10px;
-  border: 2px solid color-mix(in srgb, var(--player-color, #3b82f6) 55%, #fff);
-  background: linear-gradient(
-    180deg,
-    color-mix(in srgb, var(--player-color, #3b82f6) 28%, rgba(15, 23, 42, 0.9)),
-    rgba(15, 23, 42, 0.75)
-  );
-  animation: active-player-pulse 1.55s ease-in-out infinite;
-}
-.active-player-label {
-  margin: 0;
-  display: flex;
-  align-items: center;
-  gap: 0.45rem;
-  font-size: 0.82rem;
-  color: #f8fafc;
-}
-.active-player-label strong {
-  color: color-mix(in srgb, var(--player-color, #3b82f6) 65%, #fff);
-}
-.active-player-dot {
-  width: 0.55rem;
-  height: 0.55rem;
-  border-radius: 50%;
-  background: var(--player-color, #3b82f6);
-  box-shadow: 0 0 8px color-mix(in srgb, var(--player-color, #3b82f6) 70%, transparent);
+.active-mini .active-player-dot {
   animation: active-player-dot 1.55s ease-in-out infinite;
-}
-@keyframes active-player-pulse {
-  0%,
-  100% {
-    box-shadow: 0 0 0 0 color-mix(in srgb, var(--player-color, #3b82f6) 30%, transparent);
-  }
-  50% {
-    box-shadow: 0 0 0 4px color-mix(in srgb, var(--player-color, #3b82f6) 0%, transparent);
-  }
 }
 @keyframes active-player-dot {
   0%,
@@ -3139,7 +3755,11 @@ button,
 
 @media (max-width: 900px) {
   .game-viewport {
-    --hud-header-height: 4.5rem;
+    --hud-header-height: 5.75rem;
+  }
+  .you-plaque {
+    font-size: 1.12rem;
+    padding: 0.5rem 1.15rem 0.45rem;
   }
   .hud-top {
     grid-template-columns: 1fr;

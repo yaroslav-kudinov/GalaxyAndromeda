@@ -53,7 +53,7 @@ export interface PendingEvent {
 }
 
 import type { CombatOptions, CombatPrepState, PendingCombatRoundState } from './combat.js'
-import type { TurnEventState } from './events.js'
+import { migrateLegacyEventId, type TurnEventState } from './events.js'
 import type { GameOverState } from './victory.js'
 
 export type { TurnEventState, GameOverState }
@@ -72,6 +72,11 @@ interface PendingCombatBase {
   roundNumber: number
   trigger?: 'movement' | 'stack' | 'bombardment'
   combatOptions?: CombatOptions
+  /**
+   * За время текущего боя уже уничтожен хотя бы один корабль.
+   * Пока false — отступление запрещено, стороны обязаны продолжать.
+   */
+  shipsDestroyedInCombat?: boolean
   /**
    * Контекст боя, начатого перемещением. Атакующие остаются на исходной клетке
    * до окончательного исхода боя, чтобы могли выбрать корректное отступление.
@@ -167,6 +172,7 @@ export function clonePendingCombat(pending: PendingCombat | undefined): PendingC
     roundNumber: pending.roundNumber,
     trigger: pending.trigger,
     combatOptions: pending.combatOptions ? { ...pending.combatOptions } : undefined,
+    shipsDestroyedInCombat: pending.shipsDestroyedInCombat,
     continuation: pending.continuation
       ? {
           movementFrom: { ...pending.continuation.movementFrom },
@@ -211,6 +217,7 @@ export function migrateLegacyPendingCombat(raw: unknown): PendingCombat | undefi
     roundNumber: typeof legacy.roundNumber === 'number' ? legacy.roundNumber : 1,
     trigger: legacy.trigger as PendingCombat['trigger'],
     combatOptions: legacy.combatOptions as PendingCombat['combatOptions'],
+    shipsDestroyedInCombat: legacy.shipsDestroyedInCombat === true,
     continuation: legacy.continuation as PendingCombat['continuation'],
   }
 
@@ -458,7 +465,12 @@ function normalizeGameSnapshot(game: GameSnapshot, map?: MapDefinition): GameSna
     participatingPlayerIds: game.participatingPlayerIds
       ? [...game.participatingPlayerIds]
       : undefined,
-    turnEvent: game.turnEvent ? { ...game.turnEvent } : undefined,
+    turnEvent: game.turnEvent
+      ? {
+          ...game.turnEvent,
+          eventId: migrateLegacyEventId(String(game.turnEvent.eventId)),
+        }
+      : undefined,
     gameOver: game.gameOver ? { ...game.gameOver } : undefined,
     pendingCombat: clonePendingCombat(migrateLegacyPendingCombat(game.pendingCombat)),
     overtimeRegionByPlayer: game.overtimeRegionByPlayer

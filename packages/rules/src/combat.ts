@@ -508,8 +508,14 @@ export interface DestructionSelectionState {
   destroyCostByShipId: Record<string, number>
   /** Корабли первого доступного tier — уничтожаются первыми при авто-режиме */
   immediatelyDestroyableIds: string[]
-  /** Все корабли, которые можно выбрать в рамках бюджета и приоритета */
+  /**
+   * Корабли, которые можно выбрать при пустом выборе (бюджет + приоритет).
+   * После выбора эсминцев UI должен пересчитать доступность через validateDestructionSelection.
+   */
   selectableIds: string[]
+  /** Priority skip победителя — эти типы проигравшего можно обойти */
+  prioritySkipTypes: ShipType[]
+  ignoreDestructionPriority: boolean
   /** Урон покрывает все корабли проигравшего — обязательное полное уничтожение */
   forceFullWipe: boolean
 }
@@ -875,81 +881,65 @@ function collectShieldContributions(
 
 
 /**
-
- * Корабли игрока вне гекса боя, дающие supportDice в пределах fireRange.
-
- * combatDice на гексе боя; supportDice — только с дистанции (ships.yaml / rulebook).
-
+ * Мирные ходы того же маркера (не в клетку боя) — для поддержки считаем корабль
+ * уже на клетке назначения, даже если физически он ещё на исходной.
  */
+export function supportPositionOverridesForMovement(
+  plans: ReadonlyArray<{ shipId: string; to: HexCoord }> | undefined,
+  combatCoord: HexCoord,
+): Map<string, HexCoord> {
+  const overrides = new Map<string, HexCoord>()
+  if (!plans?.length) return overrides
+  const combatKey = hexKey(combatCoord.q, combatCoord.r)
+  for (const plan of plans) {
+    if (hexKey(plan.to.q, plan.to.r) === combatKey) continue
+    overrides.set(plan.shipId, { ...plan.to })
+  }
+  return overrides
+}
 
+/**
+ * Корабли игрока вне гекса боя, дающие supportDice в пределах fireRange.
+ * combatDice на гексе боя; supportDice — только с дистанции (ships.yaml / rulebook).
+ * @param positionOverrides — плановые координаты (мирные ходы маркера до разрешения боя)
+ */
 export function collectSupportShips(
   game: GameSnapshot,
   battleCoord: HexCoord,
   playerId: string,
   battleHexShipIds: ReadonlySet<string> = new Set(),
+  positionOverrides?: ReadonlyMap<string, HexCoord>,
 ): CombatSupportShip[] {
-
   const out: CombatSupportShip[] = []
-
   const battleKey = hexKey(battleCoord.q, battleCoord.r)
 
-
-
   for (const cell of game.cells) {
-
-    const key = hexKey(cell.coord.q, cell.coord.r)
-
-    if (key === battleKey) continue
-
-
-
-    const dist = hexDistance(battleCoord, cell.coord)
-
-
-
     for (const ship of cell.ships) {
-
       if (ship.ownerId !== playerId) continue
-
       if (battleHexShipIds.has(ship.id)) continue
 
+      const fromCoord = positionOverrides?.get(ship.id) ?? cell.coord
+      if (hexKey(fromCoord.q, fromCoord.r) === battleKey) continue
 
-
+      const dist = hexDistance(battleCoord, fromCoord)
       const supportDice = SHIP_SUPPORT_DICE[ship.type] ?? 0
       const bounds = getEffectiveFireRangeBounds(game, ship.type)
-
       if (supportDice <= 0 || bounds.max <= 0) continue
-
       if (dist < bounds.min || dist > bounds.max) continue
 
-
-
       out.push({
-
         shipId: ship.id,
-
         type: ship.type,
-
         ownerId: ship.ownerId,
-
-        fromCoord: { ...cell.coord },
-
+        fromCoord: { ...fromCoord },
         supportDice,
-
         distance: dist,
-
       })
-
     }
-
   }
 
-
-
   return out.sort((a, b) => a.distance - b.distance || a.shipId.localeCompare(b.shipId))
-
 }
-
 
 
 function inferDefenderId(
@@ -1003,47 +993,38 @@ function toParticipants(
 
 
 function buildSidePreview(
-
   game: GameSnapshot,
-
   battleCoord: HexCoord,
-
   playerId: string,
-
   role: 'attacker' | 'defender',
-
   battleHexShips: ShipUnit[],
-
   assignedSupport: CombatSupportShip[] = [],
-
+  supportPositionOverrides?: ReadonlyMap<string, HexCoord>,
 ): CombatSidePreview {
-
   const battleHexShipIds = new Set(battleHexShips.map((s) => s.id))
-
   const supportingShips = [
-    ...collectSupportShips(game, battleCoord, playerId, battleHexShipIds),
+    ...collectSupportShips(
+      game,
+      battleCoord,
+      playerId,
+      battleHexShipIds,
+      supportPositionOverrides,
+    ),
     ...assignedSupport,
   ]
 
-
-
   return {
-
     playerId,
-
     role,
-
     ships: toParticipants(battleHexShips, role),
-
     combatDiceTotal: sumCombatDiceForShips(battleHexShips),
-
     supportDiceTotal: supportingShips.reduce((sum, s) => sum + s.supportDice, 0),
-
     supportingShips,
-
   }
-
 }
+
+/**
+ * Строит превью боя для UI до применения хода.
 
 
 
@@ -1055,30 +1036,23 @@ function buildSidePreview(
 
  */
 
+export interface BuildCombatPreviewOptions extends Pick<CombatOptions, 'supportSides'> {
+  /** Планы движения атакующего: мирные назначения учитываются для supportDice */
+  attackerMovementPlans?: ReadonlyArray<{ shipId: string; to: HexCoord }>
+}
+
 export function buildCombatPreview(
-
   game: GameSnapshot,
-
   coord: HexCoord,
-
   attackerId: string,
-
   incomingAttackerShips: ShipUnit[] = [],
-
-  options: Pick<CombatOptions, 'supportSides'> = {},
-
+  options: BuildCombatPreviewOptions = {},
 ): CombatPreview | null {
-
   const cell = cellAt(game, coord)
-
   if (!cell) return null
-
   if (!isCombatDestination(game, attackerId, coord)) return null
 
-
-
   const defenderId = inferDefenderId(cell, attackerId)
-
   if (!defenderId) return null
 
 
@@ -1094,31 +1068,23 @@ export function buildCombatPreview(
 
 
   const supportNotes: string[] = []
-
+  const attackerSupportOverrides = supportPositionOverridesForMovement(
+    options.attackerMovementPlans,
+    coord,
+  )
   const attSupport = collectSupportShips(
-
     game,
-
     coord,
-
     attackerId,
-
     new Set(attackerShips.map((s) => s.id)),
-
+    attackerSupportOverrides,
   )
-
   const defSupport = collectSupportShips(
-
     game,
-
     coord,
-
     defenderId,
-
     new Set(defenderShips.map((s) => s.id)),
-
   )
-
   const supportCandidates = new Map<string, CombatSupportShip[]>()
   for (const player of game.players) {
     if (player.id === attackerId || player.id === defenderId) continue
@@ -1156,12 +1122,17 @@ export function buildCombatPreview(
 
     defenderId,
 
-    attacker: buildSidePreview(game, coord, attackerId, 'attacker', attackerShips, assignedAttackerSupport),
-
+    attacker: buildSidePreview(
+      game,
+      coord,
+      attackerId,
+      'attacker',
+      attackerShips,
+      assignedAttackerSupport,
+      attackerSupportOverrides,
+    ),
     defender: buildSidePreview(game, coord, defenderId, 'defender', defenderShips, assignedDefenderSupport),
-
     shieldContributions,
-
     shieldAbsorbTotal: shieldContributions.reduce((s, c) => s + c.absorbCapacity, 0),
 
     destructionOrder: [...DESTRUCTION_PRIORITY],
@@ -1448,7 +1419,7 @@ function validatePrioritySkipPlans(
     seen.add(plan.shipType)
 
     if (!allowedShipTypes.has(plan.shipType)) {
-      errors.push(`Тип ${SHIP_LABELS[plan.shipType]} не участвует в бою на вашей стороне`)
+      errors.push(`Тип ${SHIP_LABELS[plan.shipType]} нет у противника в этом бою`)
     }
   }
 
@@ -1466,7 +1437,7 @@ function applyPrioritySkips(
     skipTypes.add(plan.shipType)
     log.push({
       step: 'priority-skip',
-      message: `${SHIP_LABELS[plan.shipType]} (все): priority skip`,
+      message: `${SHIP_LABELS[plan.shipType]} (противник): priority skip`,
       data: { shipType: plan.shipType },
     })
   }
@@ -1582,8 +1553,19 @@ export function buildDestructionSelectionState(
     ignorePriority,
   )
 
+  const destroyOpts = {
+    ignoreDestructionPriority: ignorePriority,
+    destroyCostForType,
+  }
+
+  // Только корабли, валидные как одиночный выбор — нельзя сразу ткнуть крейсер
+  // при живых эсминцах без priority skip.
   const selectableIds = ordered
-    .filter((s) => destroyCostForType(s.type) <= damage)
+    .filter((s) => {
+      if (destroyCostForType(s.type) > damage) return false
+      return validateDestructionSelection(ordered, [s.id], damage, prioritySkipTypes, destroyOpts)
+        .length === 0
+    })
     .map((s) => s.id)
 
   return {
@@ -1594,6 +1576,8 @@ export function buildDestructionSelectionState(
     ),
     immediatelyDestroyableIds,
     selectableIds,
+    prioritySkipTypes: [...prioritySkipTypes],
+    ignoreDestructionPriority: ignorePriority,
     forceFullWipe,
   }
 }
@@ -1630,21 +1614,25 @@ export function validateDestructionSelection(
     errors.push(`Сумма destroyCost (${totalCost}) превышает бюджет урона (${damage})`)
   }
 
-  const ordered = sortShipsForDestruction(
-    loserShips,
-    prioritySkipTypes,
-    undefined,
-    ignorePriority,
-  )
-  for (const selectedId of selectedIds) {
-    const selectedIdx = ordered.findIndex((s) => s.id === selectedId)
-    if (selectedIdx < 0) continue
-    for (let i = 0; i < selectedIdx; i++) {
-      const higher = ordered[i]!
-      if (!selected.has(higher.id) && !prioritySkipTypes.has(higher.type)) {
-        errors.push(
-          `Нельзя уничтожить ${SHIP_LABELS[ordered[selectedIdx]!.type]} раньше ${SHIP_LABELS[higher.type]}`,
-        )
+  // Приоритет уничтожения — по типу корабля, не по отдельным экземплярам.
+  // Среди эсминцев можно выбрать любой; нельзя взять крейсер, пока остаётся
+  // невыбранный (и не пропущенный priority skip) эсминец.
+  if (!ignorePriority) {
+    const seen = new Set<string>()
+    for (const selectedId of selectedIds) {
+      const chosen = loserShips.find((s) => s.id === selectedId)
+      if (!chosen) continue
+      for (const other of loserShips) {
+        if (selected.has(other.id)) continue
+        // Пропущенный тип можно обойти — это смысл priority skip.
+        if (prioritySkipTypes.has(other.type)) continue
+        if (compareDestructionPriority(other.type, chosen.type) >= 0) continue
+        const message =
+          `Нельзя уничтожить ${SHIP_LABELS[chosen.type]} раньше ${SHIP_LABELS[other.type]}`
+        if (!seen.has(message)) {
+          seen.add(message)
+          errors.push(message)
+        }
       }
     }
   }
@@ -1710,6 +1698,11 @@ function maybeTransferControl(
   const cell = cellAt(game, coord)
   if (!cell) return
 
+  // Нейтральную клетку боем не захватывают — только кораблём снабжения.
+  if (cell.controlOwnerId == null) return
+  // Контроль переходит лишь при полном вытеснении владельца клетки.
+  if (cell.controlOwnerId !== defenderId) return
+
   const defenderRemaining = cell.ships.some((s) => s.ownerId === defenderId)
   if (defenderRemaining) return
 
@@ -1760,11 +1753,37 @@ export function resolveCombatAtCell(
   let round = rollCombatRound(preview, rng, fixedDice)
   rounds.push(round)
   let roundNumber = 1
+  const MAX_DRAW_REROLLS = 64
 
-  while (round.winner === 'draw') {
+  while (round.winner === 'draw' && roundNumber < MAX_DRAW_REROLLS) {
     roundNumber += 1
     round = rollCombatRound(preview, rng, fixedDice)
     rounds.push(round)
+  }
+
+  if (round.winner === 'draw') {
+    log.push({
+      step: 'dice-roll',
+      message: formatCombatRoundDiceTotals(round, roundNumber, {
+        bombardment: preview.trigger === 'bombardment',
+      }),
+      data: { round, roundNumber, rounds },
+    })
+    log.push({
+      step: 'destruction',
+      message: 'Ничья раунда без уничтожения (лимит перебросов).',
+    })
+    return {
+      coord,
+      winnerId: null,
+      attackerWon: false,
+      log,
+      destroyedShipIds: [],
+      stub: false,
+      roundOne: rounds[0],
+      rawDamage: 0,
+      needsDestructionSelection: false,
+    }
   }
 
   log.push({
@@ -1778,7 +1797,8 @@ export function resolveCombatAtCell(
   const attackerWon = round.winner === 'attacker'
   const winnerId = attackerWon ? preview.attackerId : preview.defenderId
   const loserRole = attackerWon ? 'defender' : 'attacker'
-  const loserSkipTypes = attackerWon ? defenderSkipTypes : attackerSkipTypes
+  // Skip объявляют по типам врага; на флот проигравшего действуют skip победителя.
+  const loserSkipTypes = attackerWon ? attackerSkipTypes : defenderSkipTypes
   const loserOptions = attackerWon ? options.defender : options.attacker
 
   log.push({
@@ -1990,8 +2010,8 @@ export function validateCombatOptions(
   ])
 
   return [
-    ...validatePrioritySkipPlans(options.attacker?.prioritySkips, attackerTypes),
-    ...validatePrioritySkipPlans(options.defender?.prioritySkips, defenderTypes),
+    ...validatePrioritySkipPlans(options.attacker?.prioritySkips, defenderTypes),
+    ...validatePrioritySkipPlans(options.defender?.prioritySkips, attackerTypes),
   ]
 }
 
@@ -1999,6 +2019,20 @@ export function validateCombatOptions(
 export interface ApplyCombatResultOptions {
   /** false для обстрела — атакующий не занимает клетку */
   transferControl?: boolean
+}
+
+/** Снимает маркер действия защитника с клетки боя (независимо от контроля). */
+function removeDefenderActionMarkerAt(
+  game: GameSnapshot,
+  coord: HexCoord,
+  defenderId: string,
+): void {
+  const cell = cellAt(game, coord)
+  if (!cell?.actionMarkerId) return
+  const marker = game.actionMarkers.find((candidate) => candidate.id === cell.actionMarkerId)
+  if (!marker || marker.ownerId !== defenderId) return
+  game.actionMarkers = game.actionMarkers.filter((candidate) => candidate.id !== marker.id)
+  cell.actionMarkerId = null
 }
 
 export function applyCombatResultToSnapshot(
@@ -2011,15 +2045,9 @@ export function applyCombatResultToSnapshot(
   removeShipsFromSnapshot(game, result.destroyedShipIds)
   if (result.attackerWon && options.transferControl !== false) {
     maybeTransferControl(game, result.coord, attackerId, defenderId)
-    const cell = cellAt(game, result.coord)
-    const markerId = cell?.actionMarkerId
-    const marker = markerId
-      ? game.actionMarkers.find((candidate) => candidate.id === markerId)
-      : undefined
-    if (cell && marker?.ownerId === defenderId) {
-      game.actionMarkers = game.actionMarkers.filter((candidate) => candidate.id !== marker.id)
-      cell.actionMarkerId = null
-    }
+    // Маркер снимаем при победе атакующего — даже на нейтральной клетке.
+    // При победе защитника маркер остаётся.
+    removeDefenderActionMarkerAt(game, result.coord, defenderId)
   }
 }
 
@@ -2163,12 +2191,18 @@ export function combatShouldContinueWithIncomingShips(
   return incomingAttackerShipIds.some((id) => findShipUnit(game, id)?.ownerId === attackerId)
 }
 
+/** Отступление доступно только после первого уничтожения корабля в этом бою. */
+export function isCombatRetreatAllowed(pending: PendingCombat | undefined): boolean {
+  return pending?.shipsDestroyedInCombat === true
+}
+
 export function getCombatRetreatDestinations(
   game: GameSnapshot,
   playerId: string,
 ): HexCoord[] {
   const pending = game.pendingCombat
   if (!isAwaitingContinue(pending) || !canRetreatFromBattle(game)) return []
+  if (!isCombatRetreatAllowed(pending)) return []
   const [q, r] = pending.cellKey.split(',').map(Number)
   const battleCoord = { q, r }
   const isAttacker = pending.attackerId === playerId
@@ -2221,7 +2255,7 @@ export function applyCombatDestructionSelection(
   const winnerId = roundState.winnerId
   const loserRole = attackerWon ? 'defender' : 'attacker'
   const loserSkipTypes = new Set<ShipType>(
-    attackerWon ? roundState.defenderSkipTypes : roundState.attackerSkipTypes,
+    attackerWon ? roundState.attackerSkipTypes : roundState.defenderSkipTypes,
   )
   const loserOptions = attackerWon ? roundState.combatOptions.defender : roundState.combatOptions.attacker
 
@@ -2323,7 +2357,7 @@ export function setupPendingCombatDestruction(
     | 'bombardmentPlans'
     | 'incomingAttackerShipIds'
     | 'queuedBombardmentPlans'
-  >,
+  > & { shipsDestroyedInCombat?: boolean },
 ): void {
   const remainingDamage = result.destructionState?.remainingDamage ?? 0
   game.pendingCombat = {
@@ -2334,6 +2368,7 @@ export function setupPendingCombatDestruction(
     phase: 'awaiting-destruction',
     trigger,
     combatOptions,
+    shipsDestroyedInCombat: extra?.shipsDestroyedInCombat ?? false,
     roundState: {
       rounds: result.rounds ?? (result.roundOne ? [result.roundOne] : []),
       shieldAbsorbed: result.shieldAbsorbed ?? 0,
@@ -2394,7 +2429,9 @@ export function confirmCombatDestruction(
             rs.bombardmentFrom!,
           )
         })()
-      : buildCombatPreview(game, coord, pending.attackerId, incomingShips)
+      : buildCombatPreview(game, coord, pending.attackerId, incomingShips, {
+          attackerMovementPlans: rs.movementPlans,
+        })
   if (!preview) {
     // Бой испарился (защитники исчезли между запросами). Это не ошибка игрока:
     // сообщаем вызывающему, чтобы он дожал движение и снял маркер.
@@ -2420,26 +2457,31 @@ export function confirmCombatDestruction(
   applyCombatResultToSnapshot(game, result, pending.attackerId, rs.defenderId, {
     transferControl: !isBombardment,
   })
+  const shipsDestroyedInCombat =
+    (pending.shipsDestroyedInCombat ?? false) || result.destroyedShipIds.length > 0
   if (
     !isBombardment
     && rs.movementFrom
     && rs.movementPlans?.length
-    && combatShouldContinueWithIncomingShips(
-      game,
-      coord,
-      pending.attackerId,
-      rs.incomingAttackerShipIds,
-    )
   ) {
-    // Раунд pending.roundNumber завершён вместе с выбором уничтожения,
-    // поэтому продолжение — уже следующий раунд.
-    setupPendingCombat(game, coord, pending.attackerId, pending.roundNumber + 1, 'movement', {
-      movementFrom: { ...rs.movementFrom },
-      movementPlans: rs.movementPlans.map((move) => ({ ...move, to: { ...move.to } })),
-      incomingAttackerShipIds: [...rs.incomingAttackerShipIds],
+    const followUp = beginOrAwaitCombatContinuation(game, {
+      coord,
+      attackerId: pending.attackerId,
+      completedRoundNumber: pending.roundNumber,
+      trigger: 'movement',
+      continuation: {
+        movementFrom: { ...rs.movementFrom },
+        movementPlans: rs.movementPlans.map((move) => ({ ...move, to: { ...move.to } })),
+        incomingAttackerShipIds: [...rs.incomingAttackerShipIds],
+      },
+      combatOptions: rs.combatOptions,
+      shipsDestroyedInCombat,
     })
-    game.pendingCombat!.combatOptions = rs.combatOptions
-    return { errors: [], combatResult: result }
+    return {
+      errors: followUp.errors,
+      combatResult: followUp.combatResult ?? result,
+      combatVanished: followUp.combatVanished,
+    }
   }
   game.pendingCombat = undefined
 
@@ -2453,6 +2495,7 @@ export function setupPendingCombat(
   roundNumber: number,
   trigger: PendingCombat['trigger'] = 'movement',
   continuation?: PendingCombat['continuation'],
+  options?: { shipsDestroyedInCombat?: boolean },
 ): void {
   game.pendingCombat = {
     cellKey: hexKey(coord.q, coord.r),
@@ -2463,6 +2506,246 @@ export function setupPendingCombat(
     continueDecisions: {},
     trigger,
     continuation,
+    shipsDestroyedInCombat: options?.shipsDestroyedInCombat ?? false,
+  }
+}
+
+/** Защита от зацикливания при детерминированном RNG в тестах; в игре ничья рано или поздно рвётся. */
+const MAX_AUTO_COMBAT_ROUNDS = 64
+
+type ContinuedRoundStep = {
+  errors: string[]
+  combatResult?: CombatResolutionResult
+  combatVanished?: boolean
+  /** Раунд полностью обработан и ждёт выбора уничтожения */
+  awaitingDestruction?: boolean
+  shipsDestroyedInCombat: boolean
+  completedRoundNumber: number
+  shouldContinue: boolean
+  combatOptions?: CombatOptions
+}
+
+/**
+ * После раунда: если уничтожений ещё не было — автоматически бросаем следующие раунды
+ * (без UI «продолжить/отступить»), пока рандом не даст уничтожение или конец боя.
+ * Если уничтожения уже были — обычный awaiting-continue с выбором отступления.
+ */
+export function beginOrAwaitCombatContinuation(
+  game: GameSnapshot,
+  args: {
+    coord: HexCoord
+    attackerId: string
+    /** Номер только что завершённого раунда */
+    completedRoundNumber: number
+    trigger?: PendingCombat['trigger']
+    continuation?: PendingCombat['continuation']
+    combatOptions?: CombatOptions
+    shipsDestroyedInCombat: boolean
+  },
+  rng: () => number = Math.random,
+): { errors: string[]; combatResult?: CombatResolutionResult; combatVanished?: boolean } {
+  let shipsDestroyedInCombat = args.shipsDestroyedInCombat
+  let completedRoundNumber = args.completedRoundNumber
+  let combatOptions = args.combatOptions
+  let lastResult: CombatResolutionResult | undefined
+
+  for (let autoRound = 0; autoRound < MAX_AUTO_COMBAT_ROUNDS; autoRound++) {
+    const shouldContinue = args.continuation
+      ? combatShouldContinueWithIncomingShips(
+          game,
+          args.coord,
+          args.attackerId,
+          args.continuation.incomingAttackerShipIds,
+        )
+      : combatShouldContinueAfterRound(game, args.coord, args.attackerId)
+
+    if (!shouldContinue) {
+      game.pendingCombat = undefined
+      return { errors: [], combatResult: lastResult }
+    }
+
+    if (shipsDestroyedInCombat) {
+      setupPendingCombat(
+        game,
+        args.coord,
+        args.attackerId,
+        completedRoundNumber + 1,
+        args.trigger,
+        args.continuation,
+        { shipsDestroyedInCombat: true },
+      )
+      if (combatOptions) game.pendingCombat!.combatOptions = combatOptions
+      return { errors: [], combatResult: lastResult }
+    }
+
+    // Нет уничтожений — сразу следующий раунд, без решения continue/retreat.
+    setupPendingCombat(
+      game,
+      args.coord,
+      args.attackerId,
+      completedRoundNumber + 1,
+      args.trigger,
+      args.continuation,
+      { shipsDestroyedInCombat: false },
+    )
+    if (combatOptions) game.pendingCombat!.combatOptions = combatOptions
+    if (isAwaitingContinue(game.pendingCombat)) {
+      game.pendingCombat.continueDecisions = { attacker: true, defender: true }
+    }
+
+    const step = executeContinuedCombatRound(game, combatOptions, rng)
+    if (step.errors.length) {
+      return { errors: step.errors, combatResult: step.combatResult ?? lastResult }
+    }
+    if (step.combatVanished) {
+      return { errors: [], combatResult: step.combatResult ?? lastResult, combatVanished: true }
+    }
+    if (step.combatResult) lastResult = step.combatResult
+
+    if (step.awaitingDestruction) {
+      return { errors: [], combatResult: lastResult }
+    }
+
+    shipsDestroyedInCombat = step.shipsDestroyedInCombat
+    completedRoundNumber = step.completedRoundNumber
+    combatOptions = step.combatOptions ?? combatOptions
+
+    if (!step.shouldContinue) {
+      game.pendingCombat = undefined
+      return { errors: [], combatResult: lastResult }
+    }
+    // shouldContinue && !shipsDestroyed → ещё один авто-раунд в цикле
+    // shouldContinue && shipsDestroyed → на следующей итерации откроется awaiting-continue
+  }
+
+  // Защитный потолок: must-continue без отступления.
+  setupPendingCombat(
+    game,
+    args.coord,
+    args.attackerId,
+    completedRoundNumber + 1,
+    args.trigger,
+    args.continuation,
+    { shipsDestroyedInCombat: false },
+  )
+  if (combatOptions) game.pendingCombat!.combatOptions = combatOptions
+  return { errors: [], combatResult: lastResult }
+}
+
+/** Исполнение одного раунда, когда оба решения «продолжить» уже приняты. */
+function executeContinuedCombatRound(
+  game: GameSnapshot,
+  combatOptions: CombatOptions | undefined,
+  rng: () => number,
+): ContinuedRoundStep {
+  const pending = game.pendingCombat
+  if (!isAwaitingContinue(pending)) {
+    return {
+      errors: ['Нет незавершённого боя'],
+      shipsDestroyedInCombat: false,
+      completedRoundNumber: 0,
+      shouldContinue: false,
+    }
+  }
+
+  const [q, r] = pending.cellKey.split(',').map(Number)
+  const coord = { q, r }
+  const incomingShips = incomingShipsForPendingContinuation(game, pending)
+  const preview = buildCombatPreview(game, coord, pending.attackerId, incomingShips, {
+    attackerMovementPlans: pending.continuation?.movementPlans,
+    supportSides: (combatOptions ?? pending.combatOptions)?.supportSides,
+  })
+  if (!preview) {
+    if (!defenderIdsOnCell(game, coord, pending.attackerId).length) {
+      game.pendingCombat = undefined
+      return {
+        errors: [],
+        combatVanished: true,
+        shipsDestroyedInCombat: pending.shipsDestroyedInCombat === true,
+        completedRoundNumber: pending.roundNumber,
+        shouldContinue: false,
+      }
+    }
+    return {
+      errors: ['Не удалось продолжить бой: нет превью сражения'],
+      shipsDestroyedInCombat: pending.shipsDestroyedInCombat === true,
+      completedRoundNumber: pending.roundNumber,
+      shouldContinue: false,
+    }
+  }
+
+  const opts = combatOptions ?? pending.combatOptions
+  const result = resolveCombatAtCell(
+    game,
+    coord,
+    pending.attackerId,
+    incomingShips,
+    opts,
+    rng,
+    preview,
+  )
+
+  const shipsDestroyedInCombat =
+    (pending.shipsDestroyedInCombat ?? false) || result.destroyedShipIds.length > 0
+  const completedRoundNumber = pending.roundNumber
+  const continuation = pending.continuation
+  const trigger = pending.trigger
+  const attackerId = pending.attackerId
+
+  if (result.needsDestructionSelection) {
+    const skipTypes = {
+      attacker: (opts?.attacker?.prioritySkips ?? []).map((p) => p.shipType),
+      defender: (opts?.defender?.prioritySkips ?? []).map((p) => p.shipType),
+    }
+    setupPendingCombatDestruction(
+      game,
+      coord,
+      attackerId,
+      preview.defenderId,
+      result,
+      opts ?? {},
+      skipTypes,
+      trigger ?? 'movement',
+      {
+        incomingAttackerShipIds: continuation?.incomingAttackerShipIds ?? [],
+        movementFrom: continuation?.movementFrom,
+        movementPlans: continuation?.movementPlans,
+        shipsDestroyedInCombat,
+      },
+    )
+    game.pendingCombat!.roundNumber = completedRoundNumber
+    return {
+      errors: [],
+      combatResult: result,
+      awaitingDestruction: true,
+      shipsDestroyedInCombat,
+      completedRoundNumber,
+      shouldContinue: true,
+      combatOptions: opts,
+    }
+  }
+
+  applyCombatResultToSnapshot(game, result, attackerId, preview.defenderId)
+
+  const shouldContinue = continuation
+    ? combatShouldContinueWithIncomingShips(
+        game,
+        coord,
+        attackerId,
+        continuation.incomingAttackerShipIds,
+      )
+    : combatShouldContinueAfterRound(game, coord, attackerId)
+
+  // Не ставим следующий pending здесь — этим управляет цикл beginOrAwait / caller.
+  game.pendingCombat = undefined
+
+  return {
+    errors: [],
+    combatResult: result,
+    shipsDestroyedInCombat,
+    completedRoundNumber,
+    shouldContinue,
+    combatOptions: opts,
   }
 }
 
@@ -2474,6 +2757,29 @@ export function continuePendingCombat(
 ): { errors: string[]; combatResult?: CombatResolutionResult; combatVanished?: boolean } {
   const pending = game.pendingCombat
   if (!isAwaitingContinue(pending)) return { errors: ['Нет незавершённого боя'] }
+
+  const isParticipant =
+    playerId === pending.attackerId || pending.defenderIds.includes(playerId)
+  if (!isParticipant) return { errors: ['Продолжить бой может только участник боя'] }
+
+  // Пока уничтожений не было — отступления нет; крутим раунды, пока рандом не даст исход.
+  if (!isCombatRetreatAllowed(pending)) {
+    const [q, r] = pending.cellKey.split(',').map(Number)
+    return beginOrAwaitCombatContinuation(
+      game,
+      {
+        coord: { q, r },
+        attackerId: pending.attackerId,
+        completedRoundNumber: Math.max(0, pending.roundNumber - 1),
+        trigger: pending.trigger,
+        continuation: pending.continuation,
+        combatOptions: combatOptions ?? pending.combatOptions,
+        shipsDestroyedInCombat: false,
+      },
+      rng,
+    )
+  }
+
   const defenderId = pending.defenderIds[0]
   if (playerId === pending.attackerId) {
     if (pending.continueDecisions?.attacker != null) {
@@ -2492,77 +2798,34 @@ export function continuePendingCombat(
   pending.continueDecisions = { ...pending.continueDecisions, defender: true }
 
   const [q, r] = pending.cellKey.split(',').map(Number)
-  const coord = { q, r }
-  const incomingShips = incomingShipsForPendingContinuation(game, pending)
-  const preview = buildCombatPreview(game, coord, pending.attackerId, incomingShips)
-  if (!preview) {
-    game.pendingCombat = undefined
-    return { errors: [], combatVanished: true }
+  const attackerId = pending.attackerId
+  const trigger = pending.trigger
+  const continuation = pending.continuation
+
+  const step = executeContinuedCombatRound(game, combatOptions, rng)
+  if (step.errors.length) {
+    return { errors: step.errors, combatResult: step.combatResult }
+  }
+  if (step.combatVanished) {
+    return { errors: [], combatResult: step.combatResult, combatVanished: true }
+  }
+  if (step.awaitingDestruction) {
+    return { errors: [], combatResult: step.combatResult }
   }
 
-  const opts = combatOptions ?? pending.combatOptions
-  const result = resolveCombatAtCell(
+  return beginOrAwaitCombatContinuation(
     game,
-    coord,
-    pending.attackerId,
-    incomingShips,
-    opts,
+    {
+      coord: { q, r },
+      attackerId,
+      completedRoundNumber: step.completedRoundNumber,
+      trigger,
+      continuation,
+      combatOptions: combatOptions ?? step.combatOptions,
+      shipsDestroyedInCombat: step.shipsDestroyedInCombat,
+    },
     rng,
-    preview,
   )
-
-  if (result.needsDestructionSelection) {
-    const skipTypes = {
-      attacker: (opts?.attacker?.prioritySkips ?? []).map((p) => p.shipType),
-      defender: (opts?.defender?.prioritySkips ?? []).map((p) => p.shipType),
-    }
-    setupPendingCombatDestruction(
-      game,
-      coord,
-      // Решение о продолжении присылает защитник, но бой всё это время ведёт
-      // атакующий из pending — playerId здесь был бы не тем игроком.
-      pending.attackerId,
-      preview.defenderId,
-      result,
-      opts ?? {},
-      skipTypes,
-      pending.trigger ?? 'movement',
-      {
-        incomingAttackerShipIds: pending.continuation?.incomingAttackerShipIds ?? [],
-        // Без переноса планов движения раунд 2+ терял контекст отступления.
-        movementFrom: pending.continuation?.movementFrom,
-        movementPlans: pending.continuation?.movementPlans,
-      },
-    )
-    game.pendingCombat!.roundNumber = pending.roundNumber
-    return { errors: [], combatResult: result }
-  }
-
-  applyCombatResultToSnapshot(game, result, pending.attackerId, preview.defenderId)
-
-  const shouldContinue = pending.continuation
-    ? combatShouldContinueWithIncomingShips(
-        game,
-        coord,
-        pending.attackerId,
-        pending.continuation.incomingAttackerShipIds,
-      )
-    : combatShouldContinueAfterRound(game, coord, pending.attackerId)
-  if (shouldContinue) {
-    setupPendingCombat(
-      game,
-      coord,
-      pending.attackerId,
-      pending.roundNumber + 1,
-      pending.trigger,
-      pending.continuation,
-    )
-    if (opts) game.pendingCombat!.combatOptions = opts
-  } else {
-    game.pendingCombat = undefined
-  }
-
-  return { errors: [], combatResult: result }
 }
 
 export function stopPendingCombat(
@@ -2578,6 +2841,9 @@ export function stopPendingCombat(
   if (!isAttacker && !isDefender) return ['Остановить бой может только участник боя']
   if (isDefender && pending.continueDecisions?.attacker !== true) {
     return ['Сначала решение о продолжении принимает атакующий']
+  }
+  if (!isCombatRetreatAllowed(pending)) {
+    return ['Отступление недоступно, пока в этом бою не уничтожен ни один корабль']
   }
   if (!canRetreatFromBattle(game)) return ['«Стоять насмерть!»: отступление запрещено']
   if (!retreatTo) return ['Выберите соседнюю клетку для отступления']
@@ -2600,6 +2866,11 @@ export function stopPendingCombat(
     if (!found || found.ownerId !== playerId) continue
     found.cell.ships = found.cell.ships.filter((ship) => ship.id !== shipId)
     destination.ships.push({ id: found.id, type: found.type, ownerId: found.ownerId })
+  }
+  // Отступление защитника = атакующий удерживает клетку боя → его маркер снимаем.
+  // Отступление атакующего = защитник остаётся → маркер сохраняется.
+  if (isDefender && defenderId) {
+    removeDefenderActionMarkerAt(game, { q, r }, defenderId)
   }
   game.pendingCombat = undefined
   game.eventLog.push({
@@ -2624,6 +2895,7 @@ function buildCombatPreviewFromPendingPlans(
   plans: {
     trigger?: PendingCombat['trigger']
     movementFrom?: HexCoord
+    movementPlans?: Array<{ shipId: string; to: HexCoord }>
     incomingAttackerShipIds?: string[]
     bombardmentFrom?: HexCoord
     bombardmentPlans?: { shipId: string; target: HexCoord }[]
@@ -2648,13 +2920,21 @@ function buildCombatPreviewFromPendingPlans(
   const incomingShips = (plans.incomingAttackerShipIds ?? [])
     .map((id) => fromCell?.ships.find((s) => s.id === id))
     .filter((s): s is ShipUnit => !!s)
+  const prepOptions = combatPrepOf(pending)?.combatOptions
+  const movementPlans =
+    plans.movementPlans
+    ?? combatPrepOf(pending)?.movementPlans
+    ?? combatRoundStateOf(pending)?.movementPlans
 
   return buildCombatPreview(
     game,
     coord,
     pending.attackerId,
     incomingShips,
-    combatPrepOf(pending)?.combatOptions,
+    {
+      ...prepOptions,
+      attackerMovementPlans: movementPlans,
+    },
   )
 }
 
@@ -2670,6 +2950,7 @@ export function buildCombatPreviewFromPending(game: GameSnapshot): CombatPreview
     return buildCombatPreviewFromPendingPlans(game, pending, coord, {
       trigger: pending.trigger,
       movementFrom: pending.prep.movementFrom,
+      movementPlans: pending.prep.movementPlans,
       incomingAttackerShipIds: pending.prep.incomingAttackerShipIds,
       bombardmentFrom: pending.prep.bombardmentFrom,
       bombardmentPlans: pending.prep.bombardmentPlans,
@@ -2681,6 +2962,7 @@ export function buildCombatPreviewFromPending(game: GameSnapshot): CombatPreview
     return buildCombatPreviewFromPendingPlans(game, pending, coord, {
       trigger: rs.trigger ?? pending.trigger,
       movementFrom: rs.movementFrom,
+      movementPlans: rs.movementPlans,
       incomingAttackerShipIds: rs.incomingAttackerShipIds,
       bombardmentFrom: rs.bombardmentFrom,
       bombardmentPlans: rs.bombardmentPlans,
@@ -2693,6 +2975,9 @@ export function buildCombatPreviewFromPending(game: GameSnapshot): CombatPreview
       coord,
       pending.attackerId,
       incomingShipsForPendingContinuation(game, pending),
+      {
+        attackerMovementPlans: pending.continuation?.movementPlans,
+      },
     )
   }
 
@@ -2711,7 +2996,9 @@ export function setupCombatPrepForMovement(
   const incomingShips = incomingShipIds
     .map((id) => fromCell?.ships.find((s) => s.id === id))
     .filter((s): s is ShipUnit => !!s)
-  const preview = buildCombatPreview(game, combatCoord, playerId, incomingShips)
+  const preview = buildCombatPreview(game, combatCoord, playerId, incomingShips, {
+    attackerMovementPlans: moves,
+  })
   if (!preview) return ['Не удалось подготовить бой']
 
   game.pendingCombat = {
@@ -2721,6 +3008,7 @@ export function setupCombatPrepForMovement(
     roundNumber: 1,
     phase: 'prep',
     trigger: 'movement',
+    shipsDestroyedInCombat: false,
     prep: {
       phase: 'prep',
       defenderId: preview.defenderId,
@@ -2765,6 +3053,7 @@ export function setupCombatPrepForBombardment(
     roundNumber: 1,
     phase: 'prep',
     trigger: 'bombardment',
+    shipsDestroyedInCombat: false,
     prep: {
       phase: 'prep',
       defenderId: preview.defenderId,

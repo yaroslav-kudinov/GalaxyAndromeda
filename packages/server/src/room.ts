@@ -56,7 +56,11 @@ import {
 
 import { debugLoggingEnabled, debugLog, getDebugLogs } from './debug-log.js'
 
-import { loadPersistedRooms, scheduleRoomPersist } from './room-persistence.js'
+import {
+  deletePersistedRoom,
+  loadPersistedRooms,
+  scheduleRoomPersist,
+} from './room-persistence.js'
 
 
 
@@ -79,6 +83,9 @@ export interface Room {
 
   /** Монотонный счётчик изменений состояния для клиентской синхронизации */
   observationRevision: number
+
+  /** Последняя активность (создание, join, presence, действие) — для чистки пустых лобби */
+  lastActivityAt: number
 
 }
 
@@ -113,17 +120,86 @@ const presenceByRoom = new Map<string, Map<string, PlayerPresence>>()
 /** Игрок «онлайн», если страница игры слала heartbeat недавно */
 export const PRESENCE_TTL_MS = 20_000
 
+/** Пустое лобби без активности дольше этого времени удаляется */
+export const EMPTY_LOBBY_TTL_MS = 30 * 60 * 1000
+
+/** Как часто проверяем пустые лобби */
+const EMPTY_LOBBY_SWEEP_MS = 60_000
+
+function touchRoomActivity(room: Room, at = Date.now()): void {
+  room.lastActivityAt = at
+}
+
 function touchPresence(roomId: string, playerId: string, playerName: string): void {
   let roomPresence = presenceByRoom.get(roomId)
   if (!roomPresence) {
     roomPresence = new Map()
     presenceByRoom.set(roomId, roomPresence)
   }
+  const now = Date.now()
   roomPresence.set(playerId, {
     playerId,
     playerName,
-    lastSeen: Date.now(),
+    lastSeen: now,
   })
+  const room = rooms.get(roomId)
+  if (room) touchRoomActivity(room, now)
+}
+
+function countActivePlayers(roomId: string, now = Date.now()): number {
+  const roomPresence = presenceByRoom.get(roomId)
+  if (!roomPresence) return 0
+  let count = 0
+  for (const entry of roomPresence.values()) {
+    if (now - entry.lastSeen <= PRESENCE_TTL_MS) count += 1
+  }
+  return count
+}
+
+function destroyRoom(roomId: string, reason: string): boolean {
+  const room = rooms.get(roomId)
+  if (!room) return false
+  rooms.delete(roomId)
+  presenceByRoom.delete(roomId)
+  deletePersistedRoom(roomId)
+  debugLog('room.destroy', {
+    roomId,
+    code: room.code,
+    reason,
+    playerCount: room.playerIds.length,
+    idleMs: Date.now() - room.lastActivityAt,
+  })
+  return true
+}
+
+/**
+ * Удаляет пустые лобби без онлайн-игроков, если активности не было дольше получаса.
+ * «Пустое» = никто не шлёт presence (все вкладки закрыты / никто не зашёл).
+ */
+export function purgeInactiveEmptyLobbies(now = Date.now()): string[] {
+  const removed: string[] = []
+  for (const room of [...rooms.values()]) {
+    if (countActivePlayers(room.id, now) > 0) continue
+    if (now - room.lastActivityAt < EMPTY_LOBBY_TTL_MS) continue
+    if (destroyRoom(room.id, 'empty-lobby-ttl')) removed.push(room.id)
+  }
+  if (removed.length) {
+    debugLog('rooms.purge', { removed: removed.length, roomIds: removed, ttlMs: EMPTY_LOBBY_TTL_MS })
+  }
+  return removed
+}
+
+let lobbyJanitorTimer: NodeJS.Timeout | null = null
+
+/** Фоновая чистка пустых лобби; безопасна при повторном вызове. */
+export function startEmptyLobbyJanitor(): void {
+  if (lobbyJanitorTimer) return
+  lobbyJanitorTimer = setInterval(() => {
+    purgeInactiveEmptyLobbies()
+  }, EMPTY_LOBBY_SWEEP_MS)
+  lobbyJanitorTimer.unref?.()
+  // Сразу после старта подчищаем зомби из `.dev-rooms`, пролежавшие дольше TTL.
+  purgeInactiveEmptyLobbies()
 }
 
 function isPlayerActive(roomId: string, playerId: string, now = Date.now()): boolean {
@@ -175,6 +251,7 @@ function wantsFullGeometry(raw: string | undefined): boolean {
 
 function bumpObservationRevision(room: Room, reason: string): void {
   room.observationRevision += 1
+  touchRoomActivity(room)
   debugLog('observation.revision', {
     roomId: room.id,
     revision: room.observationRevision,
@@ -286,6 +363,8 @@ export function createRoom(map: MapDefinition, maxPlayers = 6): Room {
 
     observationRevision: 0,
 
+    lastActivityAt: Date.now(),
+
   }
 
   rooms.set(id, room)
@@ -322,6 +401,7 @@ export function createRoomFromSave(save: GalaxySaveFile, maxPlayers = 6): Room {
     playerIds: [],
     maxPlayers: effectiveMax,
     observationRevision: 0,
+    lastActivityAt: Date.now(),
   }
 
   rooms.set(id, room)
@@ -573,6 +653,7 @@ export function submitAction(
 
 
 export function registerHttpRoutes(app: FastifyInstance): void {
+  startEmptyLobbyJanitor()
 
   app.get('/health', async () => ({ ok: true, service: '@galaxy/server' }))
 

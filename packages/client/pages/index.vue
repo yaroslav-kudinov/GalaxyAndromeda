@@ -19,6 +19,11 @@ import { savePlayerClaim } from '~/composables/usePlayerClaim'
 import { bootstrapToLobbySlots, defaultSlotForRoom, roomHasFreeSlot } from '~/utils/lobby-slot'
 import { loadLobbySaves, upsertLobbySave } from '~/composables/useLobbySaves'
 import { usePlayerProfile } from '~/composables/usePlayerProfile'
+import {
+  boardMarkerKeys,
+  mapCellsToBoardCells,
+  snapshotToBoardCells,
+} from '~/utils/board-adapter'
 
 const MAPS_STORAGE_KEY = 'galaxy-maps'
 const DRAFT_STORAGE_KEY = 'galaxy-editor-draft'
@@ -139,6 +144,15 @@ const selectedMapDefinition = computed(
   () => selectedMap.value?.map ?? defaultMap.value,
 )
 
+/** Клетки превью: из снимка партии (контроль, флот, маркеры), иначе стартовая карта */
+const previewBoardCells = computed(() => {
+  const game = selectedMap.value?.fullSave?.game
+  if (game) return snapshotToBoardCells(game)
+  return mapCellsToBoardCells(selectedMapDefinition.value.cells)
+})
+
+const previewMarkerKeys = computed(() => boardMarkerKeys(previewBoardCells.value))
+
 const isContinueSave = computed(() => Boolean(selectedMap.value?.fullSave?.game))
 
 const savePlayerCount = computed(() => {
@@ -174,6 +188,14 @@ const creatorSlots = computed((): LobbyPlayerSlot[] => {
     joined: false,
   }))
 })
+
+const previewTerritoryPlayers = computed(() =>
+  creatorSlots.value.map((player, index) => ({
+    slot: index + 1,
+    name: player.name,
+    color: player.color,
+  })),
+)
 
 const joinPreviewSlots = computed((): LobbyPlayerSlot[] => {
   const preview = joinPreview.value
@@ -513,20 +535,38 @@ onUnmounted(() => {
         </label>
         <p v-if="importError" class="err">{{ importError }}</p>
 
-        <div v-if="(serverOnline || !isContinueSave) && creatorSlots.length" class="preview-block">
-          <h3 class="preview-title">Карта и стартовая позиция</h3>
+        <div v-if="previewBoardCells.length" class="preview-block">
+          <h3 class="preview-title">
+            {{ isContinueSave ? 'Текущее состояние карты' : 'Карта и стартовая позиция' }}
+          </h3>
           <HexBoard
             class="map-preview"
-            :cells="selectedMapDefinition.cells"
+            mode="game"
+            :cells="previewBoardCells"
             :ghosts="[]"
             :selected-key="null"
+            :action-marker-keys="previewMarkerKeys.action"
+            :production-marker-keys="previewMarkerKeys.production"
+            :territory-label-players="previewTerritoryPlayers"
+            :auto-fit-on-map-change="true"
             :zoomable="false"
             :show-orientation-toggle="false"
             :show-auto-fit-toggle="false"
             :fill-viewport="false"
           />
-          <p class="hint">Выберите свободную стартовую позицию на этой карте.</p>
-          <LobbySlotPicker v-model="selectedCreatorSlot" :slots="creatorSlots" :disabled="busy" />
+          <template v-if="(serverOnline || !isContinueSave) && creatorSlots.length">
+            <p class="hint">
+              {{
+                isContinueSave
+                  ? 'Состояние из сохранения (контроль, флот, маркеры). Выберите слот для входа.'
+                  : 'Выберите свободную стартовую позицию на этой карте.'
+              }}
+            </p>
+            <LobbySlotPicker v-model="selectedCreatorSlot" :slots="creatorSlots" :disabled="busy" />
+          </template>
+          <p v-else-if="isContinueSave" class="hint">
+            Состояние из сохранения (контроль, флот, маркеры).
+          </p>
         </div>
 
         <p v-if="error" class="err">{{ error }}</p>

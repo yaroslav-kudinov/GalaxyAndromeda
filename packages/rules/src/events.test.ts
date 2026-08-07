@@ -62,7 +62,7 @@ describe('events', () => {
         turn: 2,
         phase: 'events',
         type: 'turn-event',
-        message: 'Событие хода: «Честный бой» — Все d6 = 3',
+        message: 'Событие хода: «Теневая экономика» — Номинал фишек +2',
         timestamp: 3000,
       },
     )
@@ -70,7 +70,7 @@ describe('events', () => {
     expect(history).toHaveLength(2)
     expect(history[0]).toMatchObject({
       turn: 2,
-      eventId: 'fair-fight',
+      eventId: 'shadow-economy',
       applied: false,
       drawnAt: 3000,
     })
@@ -138,8 +138,8 @@ describe('events', () => {
     expect(getTurnModifiers(game).hyperFireRange).toBe(4)
   })
 
-  it('fair fight: all d6 = 3', () => {
-    const game = gameWithEvent('fair-fight')
+  it('rollCombatRound can fix all d6 via override', () => {
+    const game = gameWithEvent('empty-void')
     game.cells[0].ships = [
       { id: 'd1', type: 'destroyer', ownerId: 'player-1' },
       { id: 'd2', type: 'destroyer', ownerId: 'player-2' },
@@ -219,7 +219,6 @@ describe('events', () => {
       'saboteurs-activation',
       'production-accident',
       'ammo-detonation',
-      'fair-fight',
       'peoples-donation',
       'mandatory-overtime',
       'hyper-gap',

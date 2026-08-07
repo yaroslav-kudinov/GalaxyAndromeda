@@ -14,9 +14,13 @@ import {
   formatCombatRoundDiceTotals,
   formatShieldContributionLabel,
   SHIP_LABELS,
+  SHIP_COMBAT_DICE,
   sumCombatSideDiceTotal,
   COMBAT_PREP_COUNTDOWN_MS,
   SHIP_DESTROY_COST,
+  PRIORITY_SKIP_DESTROY_SURCHARGE,
+  validateDestructionSelection,
+  type ShipUnit,
 } from '@galaxy/rules'
 import type { ShieldContribution } from '@galaxy/rules'
 import type { GameSnapshot } from '@galaxy/rules'
@@ -153,11 +157,10 @@ const attackerTypesPresent = computed(() => {
 })
 const defenderTypesPresent = computed(() => uniqueTypes(props.preview.defender.ships))
 
-const destructionOrderLabels = computed(() =>
-  (props.preview.destructionOrder.length ? props.preview.destructionOrder : DESTRUCTION_PRIORITY)
-    .map((t) => SHIP_LABELS[t])
-    .join(' → '),
+const attackerSupportShips = computed(() =>
+  isBombardment.value ? [] : props.preview.attacker.supportingShips,
 )
+const defenderSupportShips = computed(() => props.preview.defender.supportingShips)
 
 const needsDestructionSelection = computed(
   () => props.resolution?.needsDestructionSelection === true,
@@ -170,6 +173,18 @@ const loserSideShips = computed(() => {
   return props.resolution.attackerWon
     ? props.preview.defender.ships
     : props.preview.attacker.ships
+})
+
+const loserFleetOwnerId = computed(() =>
+  props.resolution?.attackerWon ? props.preview.defenderId : props.preview.attackerId,
+)
+
+const orderedLoserShips = computed(() => {
+  const order = props.resolution?.destructionState?.loserShipIds
+  const ships = loserSideShips.value
+  if (!order?.length) return ships
+  const byId = new Map(ships.map((s) => [s.shipId, s]))
+  return order.map((id) => byId.get(id)).filter((s): s is NonNullable<typeof s> => !!s)
 })
 
 const destructionBudget = computed(
@@ -188,6 +203,27 @@ const canSkipDestructionSelection = computed(
   () => needsDestructionSelection.value && selectableIdSet.value.size === 0,
 )
 
+const destructionSkipTypes = computed((): Set<ShipType> => {
+  const fromState = props.resolution?.destructionState?.prioritySkipTypes
+  if (fromState) return new Set(fromState)
+  const pending = props.snapshot.pendingCombat
+  const rs =
+    pending && (pending.phase === 'awaiting-destruction' || pending.phase === 'awaiting-continue')
+      ? pending.roundState
+      : undefined
+  if (!rs) return new Set()
+  const types = props.resolution?.attackerWon ? rs.attackerSkipTypes : rs.defenderSkipTypes
+  return new Set(types)
+})
+
+const loserUnitsForValidation = computed((): ShipUnit[] =>
+  loserSideShips.value.map((s) => ({
+    id: s.shipId,
+    type: s.type,
+    ownerId: loserFleetOwnerId.value,
+  })),
+)
+
 function destructionCost(shipId: string): number {
   return props.resolution?.destructionState?.destroyCostByShipId[shipId] ?? 0
 }
@@ -197,6 +233,33 @@ const selectedDestructionCost = computed(() =>
     return sum + destructionCost(id)
   }, 0),
 )
+
+function destructionSelectionErrors(ids: readonly string[]): string[] {
+  if (!ids.length) return []
+  const state = props.resolution?.destructionState
+  return validateDestructionSelection(
+    loserUnitsForValidation.value,
+    ids,
+    destructionBudget.value,
+    destructionSkipTypes.value,
+    {
+      ignoreDestructionPriority: state?.ignoreDestructionPriority ?? false,
+      destroyCostForType: (type) => {
+        const sample = loserSideShips.value.find((s) => s.type === type)
+        return sample ? destructionCost(sample.shipId) : SHIP_DESTROY_COST[type]
+      },
+    },
+  )
+}
+
+function pruneDestructionSelection(ids: readonly string[]): string[] {
+  const kept: string[] = []
+  for (const id of ids) {
+    const trial = [...kept, id]
+    if (destructionSelectionErrors(trial).length === 0) kept.push(id)
+  }
+  return kept
+}
 
 function resolutionReadyForRolling(): boolean {
   return props.resolution != null && props.prepPhase == null
@@ -298,8 +361,27 @@ function goToPostPhase() {
   }
 }
 
+/** После confirm-destruction / перехода к continue показываем итог, а не пустой экран выбора */
+watch(
+  () =>
+    [
+      props.resolution?.needsDestructionSelection === true,
+      props.snapshot.pendingCombat?.phase,
+    ] as const,
+  ([needsDestruction, pendingPhase]) => {
+    if (phase.value !== 'destruction') return
+    if (!needsDestruction || pendingPhase === 'awaiting-continue') {
+      phase.value = 'post'
+    }
+  },
+)
+
 function playerLabel(id: string): string {
   return props.playerNames?.[id] ?? id
+}
+
+function playerColor(id: string): string {
+  return props.snapshot.players.find((p) => p.id === id)?.color ?? '#94a3b8'
 }
 
 function rollLabel(entry: ShipCombatRollLog): string {
@@ -368,6 +450,12 @@ const destroyedShipsText = computed(() => {
 const continueStatusText = computed(() => {
   const pending = props.snapshot.pendingCombat
   if (pending?.phase === 'awaiting-continue') {
+    const mustContinue = pending.shipsDestroyedInCombat !== true
+    if (mustContinue) {
+      return pending.continueDecisions?.attacker !== true
+        ? 'Уничтожений ещё не было — отступление недоступно. Атакующий подтверждает продолжение.'
+        : 'Уничтожений ещё не было — отступление недоступно. Защитник подтверждает продолжение.'
+    }
     if (pending.continueDecisions?.attacker !== true) {
       return 'Бой продолжается: атакующий выбирает продолжение или отступление.'
     }
@@ -414,20 +502,35 @@ function submitPrepUnready() {
 }
 
 function toggleDestruction(shipId: string) {
+  if (selectedDestructionIds.value.includes(shipId)) {
+    selectedDestructionIds.value = pruneDestructionSelection(
+      selectedDestructionIds.value.filter((id) => id !== shipId),
+    )
+    return
+  }
   if (!canToggleDestruction(shipId)) return
-  const set = new Set(selectedDestructionIds.value)
-  if (set.has(shipId)) set.delete(shipId)
-  else set.add(shipId)
-  selectedDestructionIds.value = [...set]
+  selectedDestructionIds.value = [...selectedDestructionIds.value, shipId]
 }
 
 function canToggleDestruction(shipId: string): boolean {
-  if (!selectableIdSet.value.has(shipId)) return false
   if (selectedDestructionIds.value.includes(shipId)) return true
-  return selectedDestructionCost.value + destructionCost(shipId) <= destructionBudget.value
+  return (
+    destructionSelectionErrors([...selectedDestructionIds.value, shipId]).length === 0
+  )
+}
+
+function destructionBlockedReason(shipId: string): string | null {
+  if (selectedDestructionIds.value.includes(shipId) || canToggleDestruction(shipId)) return null
+  const cost = destructionCost(shipId)
+  if (selectedDestructionCost.value + cost > destructionBudget.value) {
+    return 'Не хватает бюджета'
+  }
+  const err = destructionSelectionErrors([...selectedDestructionIds.value, shipId])[0]
+  return err ?? 'Сначала корабли выше по приоритету'
 }
 
 function confirmDestructionChoice() {
+  if (destructionSelectionErrors(selectedDestructionIds.value).length) return
   emit('confirmDestruction', selectedDestructionIds.value)
 }
 
@@ -455,17 +558,64 @@ function countShipsOfType(side: 'attacker' | 'defender', type: ShipType): number
   return ships.filter((s) => s.type === type).length
 }
 
-function skipEffectLabel(side: 'attacker' | 'defender', type: ShipType): string {
-  const types = side === 'attacker' ? attackerTypesPresent.value : defenderTypesPresent.value
-  const index = DESTRUCTION_PRIORITY.indexOf(type)
-  const next = DESTRUCTION_PRIORITY.slice(index + 1).find((candidate) => types.includes(candidate))
-  const cost = SHIP_DESTROY_COST[type]
-  const skipped = (side === 'attacker' ? attackerSkipTypes.value : defenderSkipTypes.value).includes(type)
-  const nextText = next ? `открывает уровень N+1: ${SHIP_LABELS[next]}` : 'следующего уровня на этой стороне нет'
-  return skipped
-    ? `Пропуск активен: destroyCost ${cost} → ${cost + 1}; ${nextText}.`
-    : `Пропуск: ${nextText}; цена этого типа станет ${cost} → ${cost + 1}.`
+/** Skip на флот объявляет противоположная сторона. */
+function skipsAppliedToFleet(fleetSide: 'attacker' | 'defender'): ShipType[] {
+  return fleetSide === 'attacker' ? defenderSkipTypes.value : attackerSkipTypes.value
 }
+
+function isTypeSkippedOnFleet(fleetSide: 'attacker' | 'defender', type: ShipType): boolean {
+  return skipsAppliedToFleet(fleetSide).includes(type)
+}
+
+function canToggleSkipOnFleet(fleetSide: 'attacker' | 'defender'): boolean {
+  if (isThirdParty.value || isDefenderObserver.value) return false
+  if (fleetSide === 'defender') {
+    if (isBombardment.value && isOnlinePrep.value && !isLocalAttacker.value) return false
+    return !isOnlinePrep.value || isLocalAttacker.value
+  }
+  if (isBombardment.value) return false
+  return !isOnlinePrep.value || isLocalDefender.value
+}
+
+function toggleSkipOnFleet(fleetSide: 'attacker' | 'defender', type: ShipType) {
+  if (!canToggleSkipOnFleet(fleetSide)) return
+  const declarer = fleetSide === 'attacker' ? 'defender' : 'attacker'
+  toggleSkipType(declarer, type)
+}
+
+function destroyCostLabel(type: ShipType, skipped: boolean): string {
+  const base = SHIP_DESTROY_COST[type]
+  return skipped ? String(base + PRIORITY_SKIP_DESTROY_SURCHARGE) : String(base)
+}
+
+function diceForType(type: ShipType): number {
+  return SHIP_COMBAT_DICE[type] ?? 0
+}
+
+function fleetOwnerId(side: 'attacker' | 'defender'): string {
+  return side === 'attacker' ? props.preview.attackerId : props.preview.defenderId
+}
+
+function isLocalFleet(side: 'attacker' | 'defender'): boolean {
+  return fleetOwnerId(side) === props.localPlayerId
+}
+
+const priorityRailTypes = computed(() => {
+  const present = new Set([...attackerTypesPresent.value, ...defenderTypesPresent.value])
+  return DESTRUCTION_PRIORITY.filter((t) => present.has(t))
+})
+
+const enemyFleetSide = computed((): 'attacker' | 'defender' | null => {
+  if (isLocalAttacker.value) return 'defender'
+  if (isLocalDefender.value && !isBombardment.value) return 'attacker'
+  return null
+})
+
+const mySkipCount = computed(() => {
+  if (isLocalAttacker.value) return attackerSkipTypes.value.length
+  if (isLocalDefender.value) return defenderSkipTypes.value.length
+  return 0
+})
 
 onMounted(() => {
   window.addEventListener('keydown', onKeydown)
@@ -529,104 +679,203 @@ onUnmounted(() => {
           <p v-if="isDefenderObserver" class="observer-banner">
             Вы наблюдаете за обстрелом
           </p>
-          <h3>Приоритет уничтожения</h3>
-          <p class="priority-order">{{ destructionOrderLabels }}</p>
-          <p class="hint">
-            <template v-if="isBombardment">
-              При обстреле защитник не бросает кубики: очки уничтожения = сумма броска обстрела.
-              Щиты поглощают до {{ preview.shieldAbsorbTotal }} (4+2).
-            </template>
-            <template v-else>
-              При проигрыше раунда корабли уничтожаются в этом порядке (destroyCost). Очки уничтожения =
-              разница сумм кубиков (|атакующий − защитник|). Щиты поглощают до {{ preview.shieldAbsorbTotal }} (4+2).
-            </template>
-          </p>
 
-          <section v-if="shieldContributions.length" class="shield-roster">
-            <h3>Щиты защитника</h3>
-            <ul class="shield-roster-list">
-              <li v-for="sh in shieldContributions" :key="sh.shipId" class="shield-roster-item">
-                {{ shieldLabel(sh) }}
-                <span class="muted">({{ sh.fromCoord.q }}, {{ sh.fromCoord.r }})</span>
-              </li>
-            </ul>
-          </section>
-
-          <h3>Priority skip по типу корабля</h3>
-          <p class="hint">
-            Уничтожение идёт по уровням N → N+1. Отметьте тип на уровне N, чтобы временно
-            открыть следующую доступную цель N+1. Каждый пропуск добавляет +1 к destroyCost
-            всех кораблей пропущенного типа; фишки не тратятся.
-          </p>
-
-          <div class="skip-sides">
-            <section class="skip-side skip-side--attacker">
-              <h4>
-                {{ isBombardment ? 'Обстреливающие корабли' : 'Атакующий' }} ·
-                {{ playerLabel(preview.attackerId) }}
-              </h4>
-              <p v-if="isOnlinePrep" class="ready-badge" :class="{ 'ready-badge--on': attackerReady }">
-                {{ attackerReady ? 'Готов' : 'Не готов' }}
-              </p>
-              <ul v-if="attackerTypesPresent.length" class="skip-list">
-                <li v-for="t in attackerTypesPresent" :key="'att-' + t">
-                  <label :class="{ 'skip-label--readonly': !isLocalAttacker }">
-                    <input
-                      type="checkbox"
-                      :checked="attackerSkipTypes.includes(t)"
-                      :disabled="!isLocalAttacker"
-                      @change="toggleSkipType('attacker', t)"
-                    />
-                    {{ SHIP_LABELS[t] }}
-                    <span v-if="countShipsOfType('attacker', t) > 1" class="skip-count">
-                      ×{{ countShipsOfType('attacker', t) }}
-                    </span>
-                  </label>
-                  <p class="skip-effect" :class="{ 'skip-effect--active': attackerSkipTypes.includes(t) }">
-                    {{ skipEffectLabel('attacker', t) }}
-                  </p>
-                </li>
-              </ul>
-              <p v-else class="hint muted">
-                {{ isBombardment ? 'Нет кораблей обстрела' : 'Нет кораблей на гексе' }}
-              </p>
+          <div class="fleet-arena">
+            <section
+              class="fleet-col fleet-col--attacker"
+              :class="{
+                'fleet-col--mine': isLocalFleet('attacker'),
+                'fleet-col--target': canToggleSkipOnFleet('attacker'),
+              }"
+            >
+              <header class="fleet-col-head">
+                <span class="fleet-swatch" :style="{ background: playerColor(preview.attackerId) }" />
+                <div class="fleet-col-titles">
+                  <strong>{{ isBombardment ? 'Обстрел' : 'Атака' }}</strong>
+                  <span>{{ playerLabel(preview.attackerId) }}</span>
+                </div>
+                <span
+                  v-if="isOnlinePrep"
+                  class="ready-pill"
+                  :class="{ 'ready-pill--on': attackerReady }"
+                  :title="attackerReady ? 'Готов' : 'Не готов'"
+                />
+              </header>
+              <div v-if="attackerTypesPresent.length || attackerSupportShips.length" class="ship-cards">
+                <button
+                  v-for="t in attackerTypesPresent"
+                  :key="'att-' + t"
+                  type="button"
+                  class="ship-card"
+                  :class="{
+                    'ship-card--skipped': isTypeSkippedOnFleet('attacker', t),
+                    'ship-card--interactive': canToggleSkipOnFleet('attacker'),
+                    'ship-card--mine': isLocalFleet('attacker'),
+                  }"
+                  :disabled="!canToggleSkipOnFleet('attacker')"
+                  :title="
+                    canToggleSkipOnFleet('attacker')
+                      ? (isTypeSkippedOnFleet('attacker', t) ? 'Снять пропуск' : 'Пропустить приоритет (+1 цена)')
+                      : SHIP_LABELS[t]
+                  "
+                  @click="toggleSkipOnFleet('attacker', t)"
+                >
+                  <svg class="ship-card-glyph" viewBox="-14 -14 28 28" aria-hidden="true">
+                    <ShipGlyph :type="t" :player-color="playerColor(preview.attackerId)" :scale="0.9" />
+                  </svg>
+                  <span v-if="countShipsOfType('attacker', t) > 1" class="ship-card-count">
+                    ×{{ countShipsOfType('attacker', t) }}
+                  </span>
+                  <span class="ship-card-meta">
+                    <span v-if="diceForType(t)" class="meta-dice">{{ diceForType(t) }}d6</span>
+                    <span class="meta-cost">{{ destroyCostLabel(t, isTypeSkippedOnFleet('attacker', t)) }}</span>
+                  </span>
+                  <span v-if="isTypeSkippedOnFleet('attacker', t)" class="skip-badge">+1</span>
+                </button>
+                <div
+                  v-for="sup in attackerSupportShips"
+                  :key="'att-sup-' + sup.shipId"
+                  class="ship-card ship-card--support"
+                  :title="`Поддержка с (${sup.fromCoord.q}, ${sup.fromCoord.r})`"
+                >
+                  <svg class="ship-card-glyph" viewBox="-14 -14 28 28" aria-hidden="true">
+                    <ShipGlyph :type="sup.type" :player-color="playerColor(preview.attackerId)" :scale="0.9" />
+                  </svg>
+                  <span class="support-tag">поддержка</span>
+                  <span class="ship-card-meta">
+                    <span class="meta-dice">+{{ sup.supportDice }}d6</span>
+                  </span>
+                </div>
+              </div>
+              <p v-else class="fleet-empty">Нет кораблей</p>
             </section>
 
-            <section class="skip-side skip-side--defender">
-              <h4>Защитник · {{ playerLabel(preview.defenderId) }}</h4>
-              <p v-if="isBombardment && isOnlinePrep" class="hint muted observer-hint">
-                Пассивное наблюдение — skip и готовность не требуются
-              </p>
-              <template v-else>
-                <p v-if="isOnlinePrep" class="ready-badge" :class="{ 'ready-badge--on': defenderReady }">
-                  {{ defenderReady ? 'Готов' : 'Не готов' }}
-                </p>
-                <ul v-if="defenderTypesPresent.length" class="skip-list">
-                  <li v-for="t in defenderTypesPresent" :key="'def-' + t">
-                    <label :class="{ 'skip-label--readonly': !isLocalDefender }">
-                      <input
-                        type="checkbox"
-                        :checked="defenderSkipTypes.includes(t)"
-                        :disabled="!isLocalDefender"
-                        @change="toggleSkipType('defender', t)"
-                      />
-                      {{ SHIP_LABELS[t] }}
-                      <span v-if="countShipsOfType('defender', t) > 1" class="skip-count">
-                        ×{{ countShipsOfType('defender', t) }}
-                      </span>
-                    </label>
-                  <p class="skip-effect" :class="{ 'skip-effect--active': defenderSkipTypes.includes(t) }">
-                    {{ skipEffectLabel('defender', t) }}
-                  </p>
-                  </li>
-                </ul>
-                <p v-else class="hint muted">Нет кораблей на гексе</p>
-              </template>
+            <div class="fleet-vs" aria-hidden="true">
+              <span>VS</span>
+            </div>
+
+            <section
+              class="fleet-col fleet-col--defender"
+              :class="{
+                'fleet-col--mine': isLocalFleet('defender'),
+                'fleet-col--target': canToggleSkipOnFleet('defender'),
+              }"
+            >
+              <header class="fleet-col-head">
+                <span class="fleet-swatch" :style="{ background: playerColor(preview.defenderId) }" />
+                <div class="fleet-col-titles">
+                  <strong>Защита</strong>
+                  <span>{{ playerLabel(preview.defenderId) }}</span>
+                </div>
+                <span
+                  v-if="isOnlinePrep && !isBombardment"
+                  class="ready-pill"
+                  :class="{ 'ready-pill--on': defenderReady }"
+                  :title="defenderReady ? 'Готов' : 'Не готов'"
+                />
+              </header>
+              <div v-if="defenderTypesPresent.length || defenderSupportShips.length" class="ship-cards">
+                <button
+                  v-for="t in defenderTypesPresent"
+                  :key="'def-' + t"
+                  type="button"
+                  class="ship-card"
+                  :class="{
+                    'ship-card--skipped': isTypeSkippedOnFleet('defender', t),
+                    'ship-card--interactive': canToggleSkipOnFleet('defender'),
+                    'ship-card--mine': isLocalFleet('defender'),
+                  }"
+                  :disabled="!canToggleSkipOnFleet('defender')"
+                  :title="
+                    canToggleSkipOnFleet('defender')
+                      ? (isTypeSkippedOnFleet('defender', t) ? 'Снять пропуск' : 'Пропустить приоритет (+1 цена)')
+                      : SHIP_LABELS[t]
+                  "
+                  @click="toggleSkipOnFleet('defender', t)"
+                >
+                  <svg class="ship-card-glyph" viewBox="-14 -14 28 28" aria-hidden="true">
+                    <ShipGlyph :type="t" :player-color="playerColor(preview.defenderId)" :scale="0.9" />
+                  </svg>
+                  <span v-if="countShipsOfType('defender', t) > 1" class="ship-card-count">
+                    ×{{ countShipsOfType('defender', t) }}
+                  </span>
+                  <span class="ship-card-meta">
+                    <span v-if="diceForType(t)" class="meta-dice">{{ diceForType(t) }}d6</span>
+                    <span class="meta-cost">{{ destroyCostLabel(t, isTypeSkippedOnFleet('defender', t)) }}</span>
+                  </span>
+                  <span v-if="isTypeSkippedOnFleet('defender', t)" class="skip-badge">+1</span>
+                </button>
+                <div
+                  v-for="sup in defenderSupportShips"
+                  :key="'def-sup-' + sup.shipId"
+                  class="ship-card ship-card--support"
+                  :title="`Поддержка с (${sup.fromCoord.q}, ${sup.fromCoord.r})`"
+                >
+                  <svg class="ship-card-glyph" viewBox="-14 -14 28 28" aria-hidden="true">
+                    <ShipGlyph :type="sup.type" :player-color="playerColor(preview.defenderId)" :scale="0.9" />
+                  </svg>
+                  <span class="support-tag">поддержка</span>
+                  <span class="ship-card-meta">
+                    <span class="meta-dice">+{{ sup.supportDice }}d6</span>
+                  </span>
+                </div>
+              </div>
+              <p v-else class="fleet-empty">Нет кораблей</p>
             </section>
           </div>
 
+          <p v-if="enemyFleetSide && !isDefenderObserver" class="skip-cue">
+            Клик по кораблю
+            <em>{{ enemyFleetSide === 'defender' ? 'защиты' : 'атаки' }}</em>
+            — пропуск приоритета
+            <span v-if="mySkipCount" class="skip-cue-count">· {{ mySkipCount }}</span>
+          </p>
+
+          <ol v-if="priorityRailTypes.length" class="priority-rail" aria-label="Порядок уничтожения">
+            <li
+              v-for="(t, i) in priorityRailTypes"
+              :key="'rail-' + t"
+              class="priority-rail-item"
+              :class="{
+                'priority-rail-item--enemy-skip':
+                  enemyFleetSide != null && isTypeSkippedOnFleet(enemyFleetSide, t),
+              }"
+            >
+              <span v-if="i > 0" class="priority-rail-arrow" aria-hidden="true">→</span>
+              <svg class="priority-rail-glyph" viewBox="-12 -12 24 24" aria-hidden="true">
+                <ShipGlyph
+                  :type="t"
+                  :player-color="
+                    enemyFleetSide === 'defender'
+                      ? playerColor(preview.defenderId)
+                      : enemyFleetSide === 'attacker'
+                        ? playerColor(preview.attackerId)
+                        : '#94a3b8'
+                  "
+                  :scale="0.7"
+                  :show-plate="false"
+                />
+              </svg>
+              <span class="priority-rail-label">{{ SHIP_LABELS[t] }}</span>
+            </li>
+          </ol>
+
+          <div v-if="shieldContributions.length" class="shield-chips" title="Щиты защитника">
+            <span
+              v-for="sh in shieldContributions"
+              :key="sh.shipId"
+              class="shield-chip"
+            >
+              <svg class="shield-chip-glyph" viewBox="-12 -12 24 24" aria-hidden="true">
+                <ShipGlyph type="shield" player-color="#4ade80" :scale="0.65" :show-plate="false" />
+              </svg>
+              <span>{{ sh.absorbCapacity }}</span>
+            </span>
+            <span class="shield-chip-total">макс {{ preview.shieldAbsorbTotal }}</span>
+          </div>
+
           <p v-if="prepPhase === 'countdown' && countdownDisplay != null" class="countdown-banner">
-            {{ isBombardment ? 'Обстрел' : 'Бой' }} через {{ countdownDisplay || '…' }}
+            {{ countdownDisplay || '…' }}
           </p>
           </template>
         </section>
@@ -634,35 +883,96 @@ onUnmounted(() => {
         <template v-else-if="phase === 'destruction'">
           <section class="destruction-phase">
             <h3>Выберите корабли для уничтожения</h3>
+            <div class="destruction-budget" aria-live="polite">
+              <span class="destruction-budget__label">Бюджет урона</span>
+              <span class="destruction-budget__value">
+                <strong>{{ selectedDestructionCost }}</strong>
+                <span class="destruction-budget__sep">/</span>
+                {{ destructionBudget }}
+              </span>
+              <div class="destruction-budget__bar" aria-hidden="true">
+                <div
+                  class="destruction-budget__fill"
+                  :style="{
+                    width: `${destructionBudget > 0 ? Math.min(100, (selectedDestructionCost / destructionBudget) * 100) : 0}%`,
+                  }"
+                />
+              </div>
+            </div>
             <p class="hint">
-              Бюджет урона: <strong>{{ destructionBudget }}</strong>.
-              Выбрано: {{ selectedDestructionCost }} / {{ destructionBudget }}.
-              Подсветка — корабли первого доступного tier.
+              Порядок: {{ DESTRUCTION_PRIORITY.map((t) => SHIP_LABELS[t]).join(' → ') }}.
+              Нельзя взять следующий тип, пока не выбраны (или не пропущены priority skip) все корабли выше.
             </p>
             <p v-if="canSkipDestructionSelection" class="hint">
               Ни один корабль не помещается в бюджет. Раунд завершается без уничтожения.
             </p>
-            <ul class="destruction-list">
-              <li
-                v-for="s in loserSideShips"
-                :key="s.shipId"
-                class="destruction-item"
-                :class="{
-                  'destruction-item--immediate': immediatelyDestroyableIds.has(s.shipId),
-                  'destruction-item--disabled': !canToggleDestruction(s.shipId),
-                  'destruction-item--selected': selectedDestructionIds.includes(s.shipId),
-                }"
-              >
-                <label>
-                  <input
-                    type="checkbox"
-                    :checked="selectedDestructionIds.includes(s.shipId)"
-                    :disabled="!canToggleDestruction(s.shipId)"
-                    @change="toggleDestruction(s.shipId)"
-                  />
-                  {{ SHIP_LABELS[s.type] }} — destroyCost {{ destructionCost(s.shipId) }}
-                  <span v-if="immediatelyDestroyableIds.has(s.shipId)" class="immediate-tag">сразу</span>
-                </label>
+            <ul class="destruction-list" role="list">
+              <li v-for="s in orderedLoserShips" :key="s.shipId">
+                <button
+                  type="button"
+                  class="destruction-card"
+                  :class="{
+                    'destruction-card--immediate': immediatelyDestroyableIds.has(s.shipId),
+                    'destruction-card--selected': selectedDestructionIds.includes(s.shipId),
+                    'destruction-card--locked': !canToggleDestruction(s.shipId),
+                  }"
+                  :disabled="!canToggleDestruction(s.shipId)"
+                  :aria-pressed="selectedDestructionIds.includes(s.shipId)"
+                  :aria-label="`${SHIP_LABELS[s.type]}, стоимость ${destructionCost(s.shipId)}`"
+                  @click="toggleDestruction(s.shipId)"
+                >
+                  <span
+                    class="destruction-check"
+                    :class="{ 'destruction-check--on': selectedDestructionIds.includes(s.shipId) }"
+                    aria-hidden="true"
+                  >
+                    <svg
+                      v-if="selectedDestructionIds.includes(s.shipId)"
+                      viewBox="0 0 16 16"
+                      class="destruction-check__icon"
+                    >
+                      <path
+                        d="M3.2 8.4 6.5 11.6 12.8 4.4"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="2.2"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                      />
+                    </svg>
+                  </span>
+                  <span class="destruction-card__glyph">
+                    <ShipGlyph
+                      :type="s.type"
+                      :player-color="playerColor(loserFleetOwnerId)"
+                      :scale="0.85"
+                    />
+                  </span>
+                  <span class="destruction-card__meta">
+                    <strong>{{ SHIP_LABELS[s.type] }}</strong>
+                    <span class="destruction-card__cost">
+                      {{ destructionCost(s.shipId) }}
+                      <span class="destruction-card__cost-unit">очков</span>
+                    </span>
+                  </span>
+                  <span
+                    v-if="immediatelyDestroyableIds.has(s.shipId) && !selectedDestructionIds.includes(s.shipId)"
+                    class="destruction-badge destruction-badge--ready"
+                  >
+                    доступен
+                  </span>
+                  <span
+                    v-else-if="destructionBlockedReason(s.shipId)"
+                    class="destruction-badge destruction-badge--blocked"
+                    :title="destructionBlockedReason(s.shipId) ?? undefined"
+                  >
+                    {{
+                      destructionBlockedReason(s.shipId)?.includes('бюджет')
+                        ? 'бюджет'
+                        : 'приоритет'
+                    }}
+                  </span>
+                </button>
               </li>
             </ul>
           </section>
@@ -801,7 +1111,11 @@ onUnmounted(() => {
           v-else-if="phase === 'destruction'"
           type="button"
           class="btn-primary"
-          :disabled="resolving || selectedDestructionCost > destructionBudget"
+          :disabled="
+            resolving
+            || selectedDestructionCost > destructionBudget
+            || destructionSelectionErrors(selectedDestructionIds).length > 0
+          "
           @click="confirmDestructionChoice"
         >
           {{
@@ -833,13 +1147,15 @@ onUnmounted(() => {
   pointer-events: auto;
 }
 .battle-modal {
-  width: min(100%, 560px);
-  max-height: min(90vh, 720px);
+  width: min(100%, 720px);
+  max-height: min(90vh, 780px);
   display: flex;
   flex-direction: column;
   border-radius: 12px;
   border: 1px solid rgba(248, 113, 113, 0.5);
-  background: rgba(15, 23, 42, 0.98);
+  background:
+    radial-gradient(ellipse 80% 50% at 50% 0%, rgba(127, 29, 29, 0.22), transparent 55%),
+    rgba(15, 23, 42, 0.98);
   color: #e2e8f0;
   box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
 }
@@ -887,11 +1203,6 @@ onUnmounted(() => {
   font-size: 0.82rem;
   color: #94a3b8;
 }
-.priority-order {
-  margin: 0 0 0.5rem;
-  font-size: 0.8rem;
-  line-height: 1.35;
-}
 .hint {
   margin: 0 0 0.65rem;
   font-size: 0.76rem;
@@ -901,98 +1212,430 @@ onUnmounted(() => {
 .hint.muted {
   color: #64748b;
 }
-.skip-sides {
+.fleet-arena {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 0.5rem;
+  grid-template-columns: 1fr auto 1fr;
+  gap: 0.55rem;
+  align-items: stretch;
+  margin-bottom: 0.55rem;
 }
-.skip-side {
-  padding: 0.45rem;
-  border-radius: 8px;
-  font-size: 0.78rem;
-}
-.skip-side h4 {
-  margin: 0 0 0.35rem;
-  font-size: 0.72rem;
-}
-.skip-side--attacker {
-  background: rgba(127, 29, 29, 0.35);
-  border: 1px solid rgba(248, 113, 113, 0.35);
-}
-.skip-side--defender {
-  background: rgba(30, 58, 138, 0.35);
-  border: 1px solid rgba(96, 165, 250, 0.35);
-}
-.skip-list {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-.skip-list li {
-  margin-bottom: 0.35rem;
-}
-.skip-list label {
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  gap: 0.35rem;
-  flex-wrap: wrap;
-}
-.skip-label--readonly {
-  opacity: 0.75;
-  cursor: default;
-}
-.skip-count {
-  font-size: 0.7rem;
-  color: #94a3b8;
-}
-.skip-effect {
-  margin: 0.2rem 0 0 1.4rem;
-  font-size: 0.68rem;
-  line-height: 1.3;
-  color: #94a3b8;
-}
-.skip-effect--active {
-  color: #fde68a;
-}
-.destruction-list {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-.destruction-item {
-  margin-bottom: 0.35rem;
-  padding: 0.35rem 0.45rem;
-  border-radius: 6px;
+.fleet-col {
+  padding: 0.55rem;
+  border-radius: 10px;
   border: 1px solid transparent;
-  font-size: 0.8rem;
+  min-width: 0;
+  transition: border-color 0.2s, box-shadow 0.2s;
 }
-.destruction-item label {
-  cursor: pointer;
+.fleet-col--attacker {
+  background: rgba(127, 29, 29, 0.28);
+  border-color: rgba(248, 113, 113, 0.35);
+}
+.fleet-col--defender {
+  background: rgba(30, 58, 138, 0.28);
+  border-color: rgba(96, 165, 250, 0.35);
+}
+.fleet-col--target {
+  box-shadow: inset 0 0 0 1px rgba(251, 191, 36, 0.35);
+}
+.fleet-col--mine {
+  opacity: 0.95;
+}
+.fleet-col-head {
   display: flex;
   align-items: center;
   gap: 0.4rem;
+  margin-bottom: 0.5rem;
 }
-.destruction-item--immediate {
-  border-color: rgba(234, 179, 8, 0.55);
-  background: rgba(234, 179, 8, 0.12);
+.fleet-swatch {
+  width: 0.65rem;
+  height: 0.65rem;
+  border-radius: 999px;
+  flex-shrink: 0;
+  box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.6);
 }
-.destruction-item--selected {
-  border-color: rgba(248, 113, 113, 0.6);
-  background: rgba(127, 29, 29, 0.25);
+.fleet-col-titles {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
 }
-.destruction-item--disabled {
-  opacity: 0.45;
+.fleet-col-titles strong {
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #cbd5e1;
 }
-.destruction-item--disabled label {
-  cursor: not-allowed;
+.fleet-col-titles span {
+  font-size: 0.78rem;
+  color: #e2e8f0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
-.immediate-tag {
+.ready-pill {
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 999px;
+  background: #64748b;
+  flex-shrink: 0;
+}
+.ready-pill--on {
+  background: #4ade80;
+  box-shadow: 0 0 8px rgba(74, 222, 128, 0.55);
+}
+.fleet-vs {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  color: #64748b;
+  padding-top: 1.6rem;
+}
+.ship-cards {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+.ship-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.15rem;
+  width: 4.4rem;
+  padding: 0.4rem 0.25rem 0.35rem;
+  border-radius: 8px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  background: rgba(2, 6, 23, 0.45);
+  color: inherit;
+  cursor: default;
+  transition: transform 0.15s, border-color 0.15s, background 0.15s, opacity 0.15s;
+}
+.ship-card:disabled {
+  opacity: 1;
+}
+.ship-card--interactive {
+  cursor: pointer;
+}
+.ship-card--interactive:hover {
+  transform: translateY(-2px);
+  border-color: rgba(251, 191, 36, 0.7);
+  background: rgba(120, 53, 15, 0.25);
+}
+.ship-card--interactive:active {
+  transform: translateY(0);
+}
+.ship-card--skipped {
+  border-color: rgba(251, 191, 36, 0.75);
+  background: rgba(120, 53, 15, 0.35);
+}
+.ship-card--skipped .ship-card-glyph {
+  opacity: 0.55;
+  filter: grayscale(0.35);
+}
+.ship-card--mine:not(.ship-card--interactive) {
+  border-style: dashed;
+}
+.ship-card--support {
+  border-color: rgba(167, 139, 250, 0.55);
+  background: rgba(76, 29, 149, 0.25);
+}
+.support-tag {
+  font-size: 0.55rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: #ddd6fe;
+}
+.ship-card-glyph {
+  width: 2.4rem;
+  height: 2.4rem;
+  overflow: visible;
+}
+.ship-card-count {
+  position: absolute;
+  top: 0.2rem;
+  right: 0.25rem;
   font-size: 0.65rem;
-  padding: 0.1rem 0.3rem;
+  font-weight: 700;
+  color: #f8fafc;
+  background: rgba(15, 23, 42, 0.85);
   border-radius: 4px;
-  background: rgba(234, 179, 8, 0.25);
+  padding: 0 0.2rem;
+}
+.ship-card-meta {
+  display: flex;
+  gap: 0.25rem;
+  font-size: 0.62rem;
+  color: #94a3b8;
+  font-variant-numeric: tabular-nums;
+}
+.meta-dice { color: #fbbf24; }
+.meta-cost::before { content: '¤'; margin-right: 0.05rem; opacity: 0.7; }
+.skip-badge {
+  position: absolute;
+  bottom: 0.15rem;
+  left: 0.2rem;
+  font-size: 0.58rem;
+  font-weight: 800;
+  color: #0f172a;
+  background: #fbbf24;
+  border-radius: 3px;
+  padding: 0 0.2rem;
+  line-height: 1.2;
+}
+.fleet-empty {
+  margin: 0.35rem 0 0;
+  font-size: 0.72rem;
+  color: #64748b;
+}
+.skip-cue {
+  margin: 0 0 0.55rem;
+  text-align: center;
+  font-size: 0.72rem;
+  color: #94a3b8;
+}
+.skip-cue em {
+  font-style: normal;
   color: #fde68a;
+}
+.skip-cue-count {
+  color: #fbbf24;
+  font-weight: 700;
+}
+.priority-rail {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 0.15rem;
+  margin: 0 0 0.55rem;
+  padding: 0.35rem 0.45rem;
+  list-style: none;
+  border-radius: 8px;
+  background: rgba(2, 6, 23, 0.4);
+  border: 1px solid rgba(51, 65, 85, 0.8);
+}
+.priority-rail-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  opacity: 0.85;
+}
+.priority-rail-item--enemy-skip {
+  opacity: 1;
+}
+.priority-rail-item--enemy-skip .priority-rail-label {
+  text-decoration: line-through;
+  color: #fde68a;
+}
+.priority-rail-arrow {
+  color: #475569;
+  font-size: 0.7rem;
+  margin-right: 0.15rem;
+}
+.priority-rail-glyph {
+  width: 1.35rem;
+  height: 1.35rem;
+  overflow: visible;
+}
+.priority-rail-label {
+  font-size: 0.65rem;
+  color: #cbd5e1;
+}
+.shield-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  margin: 0 0 0.5rem;
+}
+.shield-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.15rem;
+  padding: 0.15rem 0.4rem 0.15rem 0.2rem;
+  border-radius: 999px;
+  background: rgba(20, 83, 45, 0.4);
+  border: 1px solid rgba(74, 222, 128, 0.4);
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: #bbf7d0;
+  font-variant-numeric: tabular-nums;
+}
+.shield-chip-glyph {
+  width: 1.1rem;
+  height: 1.1rem;
+  overflow: visible;
+}
+.shield-chip-total {
+  font-size: 0.68rem;
+  color: #86efac;
+}
+.destruction-budget {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.2rem 0.75rem;
+  align-items: baseline;
+  margin: 0 0 0.65rem;
+  padding: 0.55rem 0.7rem;
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.65);
+  border: 1px solid rgba(71, 85, 105, 0.7);
+}
+.destruction-budget__label {
+  font-size: 0.72rem;
+  color: #94a3b8;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.destruction-budget__value {
+  font-size: 1rem;
+  color: #e2e8f0;
+  font-variant-numeric: tabular-nums;
+}
+.destruction-budget__value strong {
+  color: #fca5a5;
+  font-size: 1.15rem;
+}
+.destruction-budget__sep {
+  margin: 0 0.15rem;
+  color: #64748b;
+}
+.destruction-budget__bar {
+  grid-column: 1 / -1;
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(51, 65, 85, 0.9);
+  overflow: hidden;
+}
+.destruction-budget__fill {
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #f87171, #fb923c);
+  transition: width 0.2s ease;
+}
+.destruction-list {
+  margin: 0.55rem 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.destruction-card {
+  width: 100%;
+  display: grid;
+  grid-template-columns: auto auto 1fr auto;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.55rem 0.65rem;
+  border-radius: 12px;
+  border: 1px solid rgba(71, 85, 105, 0.75);
+  background: rgba(30, 41, 59, 0.72);
+  color: #e2e8f0;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color 0.15s ease,
+    background 0.15s ease,
+    transform 0.12s ease,
+    opacity 0.15s ease;
+}
+.destruction-card:hover:not(:disabled) {
+  border-color: rgba(148, 163, 184, 0.85);
+  background: rgba(51, 65, 85, 0.85);
+}
+.destruction-card:focus-visible {
+  outline: 2px solid #93c5fd;
+  outline-offset: 2px;
+}
+.destruction-card--immediate:not(.destruction-card--selected) {
+  border-color: rgba(250, 204, 21, 0.55);
+  background: rgba(120, 53, 15, 0.22);
+  box-shadow: inset 0 0 0 1px rgba(250, 204, 21, 0.12);
+}
+.destruction-card--selected {
+  border-color: rgba(248, 113, 113, 0.75);
+  background: linear-gradient(135deg, rgba(127, 29, 29, 0.45), rgba(69, 10, 10, 0.55));
+  box-shadow: 0 0 0 1px rgba(248, 113, 113, 0.2);
+}
+.destruction-card--locked {
+  opacity: 0.48;
+  cursor: not-allowed;
+  filter: grayscale(0.25);
+}
+.destruction-check {
+  width: 1.35rem;
+  height: 1.35rem;
+  border-radius: 7px;
+  border: 2px solid rgba(148, 163, 184, 0.75);
+  background: rgba(15, 23, 42, 0.55);
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  transition:
+    border-color 0.15s ease,
+    background 0.15s ease,
+    transform 0.12s ease;
+}
+.destruction-check--on {
+  border-color: #f87171;
+  background: #dc2626;
+  color: #fff;
+  transform: scale(1.05);
+}
+.destruction-check__icon {
+  width: 0.85rem;
+  height: 0.85rem;
+}
+.destruction-card__glyph {
+  width: 1.75rem;
+  height: 1.75rem;
+  display: grid;
+  place-items: center;
+}
+.destruction-card__meta {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+}
+.destruction-card__meta strong {
+  font-size: 0.88rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+.destruction-card__cost {
+  font-size: 0.75rem;
+  color: #fca5a5;
+  font-variant-numeric: tabular-nums;
+}
+.destruction-card__cost-unit {
+  color: #94a3b8;
+  margin-left: 0.15rem;
+}
+.destruction-badge {
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  padding: 0.2rem 0.4rem;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.destruction-badge--ready {
+  background: rgba(250, 204, 21, 0.2);
+  color: #fde68a;
+  border: 1px solid rgba(250, 204, 21, 0.35);
+}
+.destruction-badge--blocked {
+  background: rgba(71, 85, 105, 0.45);
+  color: #94a3b8;
+  border: 1px solid rgba(100, 116, 139, 0.45);
 }
 .totals-bar {
   display: flex;

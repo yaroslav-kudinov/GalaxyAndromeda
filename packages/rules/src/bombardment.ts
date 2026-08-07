@@ -420,6 +420,7 @@ export function executeMarkerBombardment(
             shipId: p.shipId,
             target: { ...p.target },
           })),
+          shipsDestroyedInCombat: false,
         },
       )
       return { errors: [], combatResult: combatResult ?? undefined }

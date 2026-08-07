@@ -4,6 +4,18 @@ export default defineNuxtConfig({
   ssr: false,
   devtools: { enabled: true },
   modules: ['@pinia/nuxt'],
+  app: {
+    head: {
+      link: [
+        { rel: 'preconnect', href: 'https://fonts.googleapis.com' },
+        { rel: 'preconnect', href: 'https://fonts.gstatic.com', crossorigin: 'anonymous' },
+        {
+          rel: 'stylesheet',
+          href: 'https://fonts.googleapis.com/css2?family=Orbitron:wght@600;700;800&display=swap',
+        },
+      ],
+    },
+  },
   devServer: {
     host: '0.0.0.0',
     port: 3000,

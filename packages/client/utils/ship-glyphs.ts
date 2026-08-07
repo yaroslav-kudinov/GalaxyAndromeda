@@ -1,9 +1,9 @@
 import type { ShipType } from '@galaxy/rules'
 
 export interface ShipGlyphDef {
-  /** Main silhouette; use evenodd subpaths for slits, windows, and notches */
+  /** Main silhouette (closed path), centered at origin in ~24×24 space */
   body: string
-  /** Optional stroke-only accent (antenna, ring highlight) */
+  /** Optional stroke-only marks (diagonal strikes); same stroke weight as hull border */
   accent?: string
 }
 
@@ -12,75 +12,54 @@ export interface BoardShip {
   player: number
 }
 
+/** Rhombus (diamond) with half-diagonal `r` */
+function diamond(r: number): string {
+  return `M0,${-r} L${r},0 L0,${r} L${-r},0 Z`
+}
+
 /**
  * SVG shapes in ~24×24 viewBox, centered at origin.
- * Each type has a distinct silhouette readable at board scale (~0.5).
+ * Bright player fill + black borders; type identity via simple geometry.
  */
 export const SHIP_GLYPHS: Record<ShipType, ShipGlyphDef> = {
-  /** Narrow wedge — smallest hull, side engine slits */
+  /** Small diamond */
   destroyer: {
-    body: [
-      'M0,-11 L5.5,8 L-5.5,8 Z',
-      'M-3.5,3 L-1.5,6.5 L-0.5,3 L-2.5,0.5 Z',
-      'M3.5,3 L1.5,6.5 L0.5,3 L2.5,0.5 Z',
-    ].join(' '),
+    body: diamond(6.2),
   },
 
-  /** Medium hull — bridge block + deck slit */
+  /** Medium diamond + one diagonal strike (edge to edge) */
   cruiser: {
-    body: [
-      'M0,-10.5 L8.5,8 L-8.5,8 Z',
-      'M-2.5,-6 L2.5,-6 L2.5,-3.5 L-2.5,-3.5 Z',
-      'M-4,2 L4,2 L4,4 L-4,4 Z',
-    ].join(' '),
+    body: diamond(7.8),
+    accent: 'M-3.9,-3.9 L3.9,3.9',
   },
 
-  /** Broad hull — twin turrets + double deck slits */
+  /** Larger diamond + two parallel diagonal strikes */
   battleship: {
-    body: [
-      'M0,-10 L10,8 L-10,8 Z',
-      'M-7.5,-5.5 L-4.5,-5.5 L-4.5,-2.5 L-7.5,-2.5 Z',
-      'M7.5,-5.5 L4.5,-5.5 L4.5,-2.5 L7.5,-2.5 Z',
-      'M-5.5,1.5 L5.5,1.5 L5.5,3.5 L-5.5,3.5 Z',
-      'M-3.5,5.5 L3.5,5.5 L3.5,7 L-3.5,7 Z',
-    ].join(' '),
+    body: diamond(9.4),
+    accent: 'M-5.6,-2.8 L2.8,5.6 M-2.8,-5.6 L5.6,2.8',
   },
 
-  /** Hull with shield-generator ring (evenodd donut) */
+  /** Downward triangle */
   shield: {
-    body: [
-      'M0,-10 L8,7.5 L-8,7.5 Z',
-      'M0,-5.5 m-4.5,0 a4.5,4.5 0 1,0 9,0 a4.5,4.5 0 1,0 -9,0',
-      'M0,-3.5 m-2.5,0 a2.5,2.5 0 1,0 5,0 a2.5,2.5 0 1,0 -5,0',
-    ].join(' '),
+    body: 'M0,9 L9,-6.5 L-9,-6.5 Z',
   },
 
-  /** Four-point star — wing notches + central diamond slit */
+  /** Four-pointed star */
   hyper: {
-    body: [
-      'M0,-10 L3,-2 L10,0 L3,2 L0,10 L-3,2 L-10,0 L-3,-2 Z',
-      'M0,-6 L1.2,-0.5 L0,5 L-1.2,-0.5 Z',
-      'M-6,-1 L-4,0 L-6,1 L-7,0 Z',
-      'M6,-1 L4,0 L6,1 L7,0 Z',
-    ].join(' '),
+    body: 'M0,-10.5 L2.4,-2.4 L10.5,0 L2.4,2.4 L0,10.5 L-2.4,2.4 L-10.5,0 L-2.4,-2.4 Z',
   },
 
-  /** Boxy freighter — cargo bays + crane notch (non-triangle silhouette) */
+  /** Square */
   supply: {
-    body: [
-      'M-7.5,-6.5 L7.5,-6.5 L7.5,8.5 L-7.5,8.5 Z',
-      'M-1.5,-6.5 L1.5,-6.5 L1.5,-4 L-1.5,-4 Z',
-      'M-4.5,-2.5 L4.5,-2.5 L4.5,1.5 L-4.5,1.5 Z',
-      'M-3,4 L3,4 L3,6.5 L-3,6.5 Z',
-    ].join(' '),
+    body: 'M-7,-7 L7,-7 L7,7 L-7,7 Z',
   },
 }
 
 /** Editor / single-player cluster (up to 4 ships) */
-export const SHIP_BOARD_SCALE = 0.58
+export const SHIP_BOARD_SCALE = 0.81
 
 /** Compact scale when two players share a hex (up to 8 ships) */
-export const SHIP_BOARD_SCALE_COMPACT = 0.46
+export const SHIP_BOARD_SCALE_COMPACT = 0.65
 
 const SINGLE_PLAYER_SLOTS: Record<number, { x: number; y: number }[]> = {
   1: [{ x: 0, y: 12 }],
@@ -188,7 +167,7 @@ export function layoutShipPositionsOverview(ships: BoardShip[]): { x: number; y:
 export function shipBoardScale(ships: BoardShip[]): number {
   const players = new Set(ships.map((ship) => ship.player)).size
   if (players > 1 || ships.length > 4) return SHIP_BOARD_SCALE_COMPACT
-  if (ships.length >= 4) return 0.52
+  if (ships.length >= 4) return 0.73
   return SHIP_BOARD_SCALE
 }
 

@@ -3,7 +3,15 @@
  * Нужен только для ручной отладки — рестарт `tsx watch` больше не убивает живые партии.
  * В production выключен: комнаты остаются in-memory.
  */
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs'
 import { mkdir, rename, writeFile } from 'node:fs/promises'
 import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -37,6 +45,8 @@ interface PersistedRoomFile {
   maxPlayers: number
   playerIds: string[]
   observationRevision: number
+  /** epoch ms; для чистки пустых лобби после рестарта */
+  lastActivityAt?: number
   lastCombatResult?: Room['lastCombatResult']
   /** Карта + снимок партии в формате обычного сохранения — переиспользуем миграции `@galaxy/rules`. */
   save: GalaxySaveFile
@@ -93,6 +103,7 @@ function serializeRoom(room: Room): string {
     maxPlayers: room.maxPlayers,
     playerIds: [...room.playerIds],
     observationRevision: room.observationRevision,
+    lastActivityAt: room.lastActivityAt,
     lastCombatResult: room.lastCombatResult,
     save: {
       format: GALAXY_SAVE_FORMAT,
@@ -220,6 +231,14 @@ function readPersistedRoom(path: string): Room | null {
     })
   }
 
+  const savedAtMs = Date.parse(typeof record.savedAt === 'string' ? record.savedAt : '')
+  const activityFromFile =
+    typeof record.lastActivityAt === 'number' && Number.isFinite(record.lastActivityAt)
+      ? record.lastActivityAt
+      : Number.isFinite(savedAtMs)
+        ? savedAtMs
+        : Date.now()
+
   const room: Room = {
     id: record.roomId,
     code: typeof record.code === 'string' && record.code ? record.code : record.roomId.slice(0, 6).toUpperCase(),
@@ -233,6 +252,7 @@ function readPersistedRoom(path: string): Room | null {
       : save.game.players.length,
     lastCombatResult: record.lastCombatResult,
     observationRevision: typeof record.observationRevision === 'number' ? record.observationRevision : 0,
+    lastActivityAt: activityFromFile,
   }
 
   debugLog('rooms.restore.room', {
@@ -244,6 +264,20 @@ function readPersistedRoom(path: string): Room | null {
     pendingCombat: room.state.pendingCombat?.phase ?? null,
   })
   return room
+}
+
+/** Удаляет файл комнаты с диска (и снимает её из очереди dirty). */
+export function deletePersistedRoom(roomId: string): void {
+  dirtyRooms.delete(roomId)
+  if (!roomPersistenceEnabled) return
+  const target = roomFilePath(roomId)
+  for (const path of [target, `${target}.tmp`]) {
+    try {
+      unlinkSync(path)
+    } catch {
+      // Файла могло не быть — нормально для комнат до первого flush.
+    }
+  }
 }
 
 /** Читает все комнаты из `.dev-rooms/`. Битый файл пропускается, сервер стартует. */

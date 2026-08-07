@@ -15,6 +15,7 @@ const props = withDefaults(
     contestedKeys?: string[]
     supplyChainKeys?: string[]
     myTerritoryKeys?: string[]
+    hideTerritoryPlayers?: number[]
     movementSourceKey?: string | null
     previewMoves?: { from: { q: number; r: number }; to: { q: number; r: number }; combat?: boolean }[]
     territoryLabelPlayers?: TerritoryLabelPlayer[]
@@ -35,6 +36,7 @@ const props = withDefaults(
     contestedKeys: () => [],
     supplyChainKeys: () => [],
     myTerritoryKeys: () => [],
+    hideTerritoryPlayers: () => [],
     movementSourceKey: null,
     previewMoves: () => [],
     territoryLabelPlayers: () => [],
@@ -68,6 +70,7 @@ const markerKeys = computed(() => boardMarkerKeys(props.cells))
     :contested-keys="contestedKeys"
     :supply-chain-keys="supplyChainKeys"
     :my-territory-keys="myTerritoryKeys"
+    :hide-territory-players="hideTerritoryPlayers"
     :movement-source-key="movementSourceKey"
     :preview-moves="previewMoves"
     :territory-label-players="territoryLabelPlayers"

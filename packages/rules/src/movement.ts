@@ -32,17 +32,16 @@ import {
 import {
   abortPendingCombat,
   applyCombatResultToSnapshot,
+  beginOrAwaitCombatContinuation,
   buildCombatPreview,
   combatPrepOf,
   combatRoundStateOf,
-  combatShouldContinueWithIncomingShips,
   confirmCombatDestruction,
   continuePendingCombat,
   getCombatDestinationKeys,
   getCombatDestinationKeysFromMoves,
   isCombatDestination,
   resolveCombatAtCell,
-  setupPendingCombat,
   setupPendingCombatDestruction,
   setupCombatPrepForMovement,
   stopPendingCombat,
@@ -446,7 +445,11 @@ export function executeMarkerMovement(
       .map((m) => fromCell.ships.find((s) => s.id === m.shipId))
       .filter((s): s is ShipUnit => !!s)
 
-    const preview = buildCombatPreview(game, combatCoord, playerId, incomingShips, combatOptions)
+    const previewOptions = {
+      ...(combatOptions ?? {}),
+      attackerMovementPlans: moves,
+    }
+    const preview = buildCombatPreview(game, combatCoord, playerId, incomingShips, previewOptions)
     if (preview) {
       if (!combatOptions) {
         const prepErrors = setupCombatPrepForMovement(
@@ -496,6 +499,7 @@ export function executeMarkerMovement(
             incomingAttackerShipIds: incomingShips.map((s) => s.id),
             movementFrom: from,
             movementPlans: moves,
+            shipsDestroyedInCombat: false,
           },
         )
         return { errors: [], combatResult }
@@ -508,20 +512,28 @@ export function executeMarkerMovement(
         preview.defenderId,
       )
 
-      if (
-        combatShouldContinueWithIncomingShips(
-          game,
-          combatCoord,
-          playerId,
-          incomingShips.map((ship) => ship.id),
-        )
-      ) {
-        setupPendingCombat(game, combatCoord, playerId, 1, 'movement', {
+      const followUp = beginOrAwaitCombatContinuation(game, {
+        coord: combatCoord,
+        attackerId: playerId,
+        completedRoundNumber: 1,
+        trigger: 'movement',
+        continuation: {
           movementFrom: { ...from },
           movementPlans: moves.map((move) => ({ ...move, to: { ...move.to } })),
           incomingAttackerShipIds: incomingShips.map((ship) => ship.id),
-        })
-        return { errors: [], combatResult: combatResult ?? undefined }
+        },
+        combatOptions,
+        shipsDestroyedInCombat: combatResult.destroyedShipIds.length > 0,
+      })
+      if (followUp.errors.length) {
+        return { errors: followUp.errors, combatResult: combatResult ?? undefined }
+      }
+      // Бой продолжается (awaiting-*) или сразу брошен следующий раунд.
+      if (game.pendingCombat || followUp.combatResult || followUp.combatVanished) {
+        return {
+          errors: [],
+          combatResult: followUp.combatResult ?? combatResult ?? undefined,
+        }
       }
     }
   }

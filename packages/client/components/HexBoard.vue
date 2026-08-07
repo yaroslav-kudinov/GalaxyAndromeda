@@ -14,6 +14,7 @@ import {
 import { layoutShipPositions, shipBoardScale } from '~/utils/ship-glyphs'
 import { effectiveGlyphScale, overlayContentScale } from '~/utils/board-glyphs'
 import { STRATEGIC_ZOOM_THRESHOLD } from '~/utils/board-overview'
+import { buildTerritoryOverlay } from '~/utils/hex-territory'
 import type { TerritoryLabelPlayer } from '~/composables/usePlayerTerritoryLabels'
 
 const props = withDefaults(
@@ -31,6 +32,8 @@ const props = withDefaults(
     contestedKeys?: string[]
     supplyChainKeys?: string[]
     myTerritoryKeys?: string[]
+    /** Слоты игроков (1–6), чьи территории не рисуем на карте */
+    hideTerritoryPlayers?: number[]
     movementSourceKey?: string | null
     previewMoves?: { from: { q: number; r: number }; to: { q: number; r: number }; combat?: boolean }[]
     territoryLabelPlayers?: TerritoryLabelPlayer[]
@@ -59,6 +62,7 @@ const props = withDefaults(
     contestedKeys: () => [],
     supplyChainKeys: () => [],
     myTerritoryKeys: () => [],
+    hideTerritoryPlayers: () => [],
     movementSourceKey: null,
     previewMoves: () => [],
     territoryLabelPlayers: () => [],
@@ -121,11 +125,42 @@ function points(q: number, r: number) {
 
 const NEUTRAL_CELL_FILL = '#6a7483'
 
-function cellFill(cell: MapCellDefinition): string {
-  if (cell.startPlayer != null && PLAYER_COLORS[cell.startPlayer]) {
-    return PLAYER_COLORS[cell.startPlayer]
+const territoryOverlay = computed(() =>
+  buildTerritoryOverlay(
+    props.cells,
+    size,
+    orientation.value,
+    0.42,
+    props.hideTerritoryPlayers,
+  ),
+)
+
+function cellOutlineClass(cell: MapCellDefinition): Record<string, boolean> {
+  const key = hexKey(cell.q, cell.r)
+  return {
+    hex: true,
+    'hex-outline': true,
+    selected: props.selectedKey === key,
+    'movement-source': isMovementSource(key),
+    reachable: isReachable(key) && !isContested(key),
+    contested: isContested(key),
+    'supply-chain': isSupplyChain(key),
+    destination: isDestination(key),
+    symmetric: isSymmetricMate(key),
   }
-  return NEUTRAL_CELL_FILL
+}
+
+function hasCellOutline(cell: MapCellDefinition): boolean {
+  const c = cellOutlineClass(cell)
+  return !!(
+    c.selected ||
+    c['movement-source'] ||
+    c.reachable ||
+    c.contested ||
+    c['supply-chain'] ||
+    c.destination ||
+    c.symmetric
+  )
 }
 
 function shipPositions(cell: MapCellDefinition): { x: number; y: number }[] {
@@ -146,10 +181,6 @@ function isSymmetricMate(key: string): boolean {
   if (!props.symmetryOrbitKeys.length) return false
   if (key === props.selectedKey) return false
   return props.symmetryOrbitKeys.includes(key)
-}
-
-function shipOnOwnedCell(cell: MapCellDefinition, player: number): boolean {
-  return cell.startPlayer != null && cell.startPlayer === player
 }
 
 function insetHexPoints(q: number, r: number, factor: number): string {
@@ -193,10 +224,6 @@ function isContested(key: string): boolean {
 
 function isSupplyChain(key: string): boolean {
   return props.supplyChainKeys.includes(key)
-}
-
-function isMyTerritory(key: string): boolean {
-  return props.mode === 'game' && props.myTerritoryKeys.includes(key)
 }
 
 function isMovementSource(key: string): boolean {
@@ -412,8 +439,37 @@ function onPointerUp(e: PointerEvent) {
         >
           <path d="M0,0 L8,4 L0,8 Z" fill="rgba(248, 113, 113, 0.95)" />
         </marker>
+        <linearGradient
+          v-for="band in territoryOverlay.bands"
+          :id="band.gradientId"
+          :key="band.gradientId"
+          gradientUnits="userSpaceOnUse"
+          :x1="band.gx1"
+          :y1="band.gy1"
+          :x2="band.gx2"
+          :y2="band.gy2"
+        >
+          <stop offset="0%" :stop-color="PLAYER_COLORS[band.player] ?? '#888'" stop-opacity="0.72" />
+          <stop offset="55%" :stop-color="PLAYER_COLORS[band.player] ?? '#888'" stop-opacity="0.28" />
+          <stop offset="100%" :stop-color="NEUTRAL_CELL_FILL" stop-opacity="0" />
+        </linearGradient>
+        <linearGradient
+          v-for="corner in territoryOverlay.corners"
+          :id="corner.gradientId"
+          :key="corner.gradientId"
+          gradientUnits="userSpaceOnUse"
+          :x1="corner.gx1"
+          :y1="corner.gy1"
+          :x2="corner.gx2"
+          :y2="corner.gy2"
+        >
+          <stop offset="0%" :stop-color="PLAYER_COLORS[corner.player] ?? '#888'" stop-opacity="0.72" />
+          <stop offset="55%" :stop-color="PLAYER_COLORS[corner.player] ?? '#888'" stop-opacity="0.28" />
+          <stop offset="100%" :stop-color="NEUTRAL_CELL_FILL" stop-opacity="0" />
+        </linearGradient>
       </defs>
 
+      <!-- SVG paint order (bottom → top): fills → territory → content → outlines -->
       <PlayerTerritoryLabels
         :cells="cells"
         :players="territoryLabelPlayers"
@@ -421,21 +477,18 @@ function onPointerUp(e: PointerEvent) {
         :orientation="orientation"
       />
 
-      <g v-for="arrow in previewArrowPaths" :key="arrow.key" pointer-events="none">
-        <path
-          :d="arrow.d"
-          class="move-preview-line"
-          :class="{ 'move-preview-line--combat': arrow.combat }"
-          :marker-end="arrow.combat ? 'url(#move-arrow-combat)' : 'url(#move-arrow-normal)'"
-        />
-      </g>
-
       <g v-for="g in ghosts" :key="'g' + hexKey(g.q, g.r)">
         <polygon :points="points(g.q, g.r)" class="ghost" @click="emit('addGhost', g.q, g.r)" />
         <text :x="center(g.q, g.r).x" :y="center(g.q, g.r).y" class="ghost-label">+</text>
       </g>
 
       <g v-for="cell in cells" :key="hexKey(cell.q, cell.r)">
+        <polygon
+          :points="points(cell.q, cell.r)"
+          :class="{ hex: true, owned: cell.startPlayer != null }"
+          :fill="NEUTRAL_CELL_FILL"
+          @click="emit('select', cell.q, cell.r)"
+        />
         <polygon
           v-if="isReachable(hexKey(cell.q, cell.r))"
           :points="points(cell.q, cell.r)"
@@ -454,36 +507,32 @@ function onPointerUp(e: PointerEvent) {
           class="hex-overlay hex-overlay--destination"
           pointer-events="none"
         />
-        <polygon
-          :points="points(cell.q, cell.r)"
-          :class="{
-            hex: true,
-            selected: selectedKey === hexKey(cell.q, cell.r),
-            'movement-source': isMovementSource(hexKey(cell.q, cell.r)),
-            reachable: isReachable(hexKey(cell.q, cell.r)) && !isContested(hexKey(cell.q, cell.r)),
-            contested: isContested(hexKey(cell.q, cell.r)),
-            'supply-chain': isSupplyChain(hexKey(cell.q, cell.r)),
-            destination: isDestination(hexKey(cell.q, cell.r)),
-            symmetric: isSymmetricMate(hexKey(cell.q, cell.r)),
-            owned: cell.startPlayer != null,
-          }"
-          :fill="cellFill(cell)"
-          @click="emit('select', cell.q, cell.r)"
-        />
+      </g>
 
+      <!-- Contiguous control: soft edge bands, concave corner wedges, perimeter path -->
+      <g class="territory-edges" pointer-events="none" aria-hidden="true">
         <polygon
-          v-if="isMyTerritory(hexKey(cell.q, cell.r))"
-          :points="insetHexPoints(cell.q, cell.r, 0.9)"
-          class="hex-my-territory-ring hex-my-territory-ring--underlay"
-          pointer-events="none"
+          v-for="band in territoryOverlay.bands"
+          :key="band.key + '-fill'"
+          :points="band.points"
+          :fill="`url(#${band.gradientId})`"
         />
         <polygon
-          v-if="isMyTerritory(hexKey(cell.q, cell.r))"
-          :points="insetHexPoints(cell.q, cell.r, 0.9)"
-          class="hex-my-territory-ring"
-          pointer-events="none"
+          v-for="corner in territoryOverlay.corners"
+          :key="corner.key"
+          :points="corner.points"
+          :fill="`url(#${corner.gradientId})`"
         />
+        <path
+          v-for="perimeter in territoryOverlay.paths"
+          :key="perimeter.key"
+          :d="perimeter.d"
+          class="territory-perimeter"
+          :stroke="PLAYER_COLORS[perimeter.player] ?? '#888'"
+        />
+      </g>
 
+      <g v-for="cell in cells" :key="'decor-' + hexKey(cell.q, cell.r)">
         <polygon
           v-if="hasProductionMarker(hexKey(cell.q, cell.r))"
           :points="insetHexPoints(cell.q, cell.r, 0.93)"
@@ -538,11 +587,31 @@ function onPointerUp(e: PointerEvent) {
                 :type="ship.type"
                 :player-color="PLAYER_COLORS[ship.player] ?? '#888'"
                 :scale="cellShipScale(cell)"
-                :on-owned-cell="shipOnOwnedCell(cell, ship.player)"
               />
             </g>
           </g>
         </g>
+      </g>
+
+      <g v-for="arrow in previewArrowPaths" :key="arrow.key" pointer-events="none">
+        <path
+          :d="arrow.d"
+          class="move-preview-line"
+          :class="{ 'move-preview-line--combat': arrow.combat }"
+          :marker-end="arrow.combat ? 'url(#move-arrow-combat)' : 'url(#move-arrow-normal)'"
+        />
+      </g>
+
+      <!-- Selection / combat / retreat outlines above territory, ships, markers -->
+      <g class="hex-outlines-layer" pointer-events="none" aria-hidden="true">
+        <template v-for="cell in cells" :key="'outline-' + hexKey(cell.q, cell.r)">
+          <polygon
+            v-if="hasCellOutline(cell)"
+            :points="points(cell.q, cell.r)"
+            :class="cellOutlineClass(cell)"
+            fill="none"
+          />
+        </template>
       </g>
     </svg>
   </div>
@@ -660,7 +729,20 @@ function onPointerUp(e: PointerEvent) {
   opacity: 0.95;
 }
 .hex.owned {
-  stroke: rgba(15, 23, 42, 0.55);
+  stroke: rgba(15, 23, 42, 0.4);
+}
+.territory-perimeter {
+  fill: none;
+  stroke-width: 2.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0.92;
+}
+.territory-edges {
+  pointer-events: none;
+}
+.hex-outlines-layer .hex-outline {
+  fill: none;
 }
 .hex.selected {
   stroke: #fbbf24;
@@ -709,21 +791,6 @@ function onPointerUp(e: PointerEvent) {
 }
 .move-preview-line--combat {
   stroke: rgba(248, 113, 113, 0.9);
-}
-.hex-my-territory-ring {
-  fill: none;
-  pointer-events: none;
-  vector-effect: non-scaling-stroke;
-}
-.hex-my-territory-ring--underlay {
-  stroke: rgba(15, 23, 42, 0.7);
-  stroke-width: 4.5;
-}
-.hex-my-territory-ring:not(.hex-my-territory-ring--underlay) {
-  stroke: rgba(255, 255, 255, 0.72);
-  stroke-width: 2;
-  stroke-dasharray: 5 3;
-  filter: drop-shadow(0 0 2px rgba(255, 255, 255, 0.25));
 }
 .hex-marker-ring {
   fill: none;

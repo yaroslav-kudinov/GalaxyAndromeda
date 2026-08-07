@@ -3,8 +3,8 @@ import { STRATEGIC_ZOOM_THRESHOLD } from '~/utils/board-overview'
 /** Compensate SVG glyph scale when viewBox zoom changes (screen-stable icon size) */
 export function effectiveGlyphScale(baseScale: number, zoom: number, mode: 'editor' | 'game' = 'editor'): number {
   const clampedZoom = Math.min(3, Math.max(0.35, zoom))
-  const min = mode === 'game' ? 0.32 : 0.35
-  const max = mode === 'game' ? 0.62 : 0.66
+  const min = mode === 'game' ? 0.38 : 0.4
+  const max = mode === 'game' ? 0.88 : 0.92
   return Math.min(max, Math.max(min, baseScale / clampedZoom))
 }
 

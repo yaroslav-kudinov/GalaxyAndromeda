@@ -19,7 +19,6 @@ export type EventCardId =
   | 'saboteurs-activation'
   | 'production-accident'
   | 'ammo-detonation'
-  | 'fair-fight'
   | 'peoples-donation'
   | 'mandatory-overtime'
   | 'hyper-gap'
@@ -66,7 +65,6 @@ export const EVENT_CARDS: readonly GameEventCard[] = [
   { id: 'saboteurs-activation', name: 'Активация диверсантов', description: 'В каждом контролируемом регионе все фишки ресурсов переворачиваются рубашкой вверх.', effectSummary: 'Фишки в ваших регионах — рубашкой вверх' },
   { id: 'production-accident', name: 'Авария на производстве', description: 'Нельзя строить корабли снабжения в этом ходу.', effectSummary: 'Постройка supply запрещена' },
   { id: 'ammo-detonation', name: 'Детонация склада боеприпасов', description: 'Нельзя строить эсминец, крейсер, линкор в этом ходу.', effectSummary: 'Постройка destroyer/cruiser/battleship запрещена' },
-  { id: 'fair-fight', name: 'Честный бой', description: 'Все броски кубиков в этом ходу = 3.', effectSummary: 'Все d6 = 3' },
   { id: 'peoples-donation', name: 'Народное пожертвование', description: 'Немедленно все фишки ресурсов переворачиваются лицом вверх.', effectSummary: 'Все фишки лицом вверх' },
   { id: 'mandatory-overtime', name: 'Обязательные сверхурочные', description: 'Любое число фишек производства в одном регионе (не больше числа клеток региона).', effectSummary: 'Сверхурочные в одном регионе' },
   { id: 'hyper-gap', name: 'Просвет в гиперпространстве', description: 'Все корабли +1 ход; у Г.О. fireRange = 4.', effectSummary: 'Ход +1; Г.О. fireRange 4' },
@@ -78,6 +76,13 @@ export const EVENT_CARDS: readonly GameEventCard[] = [
 ] as const
 
 export const ALL_EVENT_IDS: EventCardId[] = EVENT_CARDS.map((c) => c.id)
+
+/** Устаревшие id из сохранений → актуальная карта (или no-op). */
+export function migrateLegacyEventId(eventId: string): EventCardId {
+  if (eventId === 'fair-fight') return 'empty-void'
+  if ((ALL_EVENT_IDS as readonly string[]).includes(eventId)) return eventId as EventCardId
+  return 'empty-void'
+}
 
 export function getEventCard(id: EventCardId): GameEventCard {
   const card = EVENT_CARDS.find((c) => c.id === id)
@@ -95,13 +100,13 @@ export function drawRandomEvent(rng: () => number = Math.random): EventCardId {
 
 function drawnEventId(game: GameSnapshot): EventCardId | null {
   if (!game.turnEvent || game.turnEvent.turnNumber !== game.turnNumber) return null
-  return game.turnEvent.eventId
+  return migrateLegacyEventId(game.turnEvent.eventId)
 }
 
 function activeModifierEventId(game: GameSnapshot): EventCardId | null {
   if (!game.turnEvent || game.turnEvent.turnNumber !== game.turnNumber) return null
   if (!game.turnEvent.resolvedAt) return null
-  return game.turnEvent.eventId
+  return migrateLegacyEventId(game.turnEvent.eventId)
 }
 
 export function getTurnModifiers(game: GameSnapshot): TurnModifiers {
@@ -123,7 +128,6 @@ export function getTurnModifiers(game: GameSnapshot): TurnModifiers {
     case 'stand-to-death': return { ...empty, cannotRetreat: true }
     case 'production-accident': return { ...empty, cannotBuildShipTypes: ['supply'] }
     case 'ammo-detonation': return { ...empty, cannotBuildShipTypes: [...COMBAT_SHIP_TYPES] }
-    case 'fair-fight': return { ...empty, fixedDiceValue: 3 }
     case 'mandatory-overtime': return { ...empty, unlimitedProductionInOneRegion: true }
     case 'hyper-gap': return { ...empty, moveRangeDelta: 1, hyperFireRange: 4 }
     case 'all-for-front': return { ...empty, maxProductionTokensPerPlayer: 3 }
@@ -202,9 +206,11 @@ export function resolveTurnEvent(game: GameSnapshot): string[] {
     return ['Нет активного события для этого хода']
   }
   if (game.turnEvent.resolvedAt) return []
-  applyEventImmediateEffects(game, game.turnEvent.eventId)
+  const eventId = migrateLegacyEventId(String(game.turnEvent.eventId))
+  game.turnEvent.eventId = eventId
+  applyEventImmediateEffects(game, eventId)
   game.turnEvent.resolvedAt = new Date().toISOString()
-  const card = getEventCard(game.turnEvent.eventId)
+  const card = getEventCard(eventId)
   appendEventLog(game, `Применено: «${card.name}»`)
   return []
 }
