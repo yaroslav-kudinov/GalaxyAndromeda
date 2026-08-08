@@ -157,8 +157,53 @@ function applyTurnState(game: GameSnapshot, state: GameState, prevPhase: Phase, 
   syncProductionMarkerTurnTracking(game, prevPhase, prevActivePlayerId)
 }
 
+/**
+ * Если в фазе действий/производства ещё есть маркеры — начинаем новый круг с первого
+ * игрока по порядку, не закрывая фазу.
+ * @returns true если круг продолжен
+ */
+function continuePhaseWhileMarkersRemain(
+  game: GameSnapshot,
+  state: GameState,
+  prevPhase: Phase,
+  prevActivePlayerId: string | null,
+): boolean {
+  const remaining =
+    state.phase === 'actions'
+      ? game.actionMarkers.length > 0
+      : state.phase === 'production'
+        ? game.productionMarkers.length > 0
+        : false
+  if (!remaining) return false
+
+  const order = activePlayerOrder(
+    state.players,
+    game.participatingPlayerIds,
+    turnOrderContext(state),
+  )
+  const firstId = order[0]
+  if (!firstId) return false
+
+  state.activePlayerId = firstId
+  appendPhaseEvent(
+    state,
+    `Фаза «${PHASE_LABELS[state.phase]}», ход ${playerDisplayName(state, firstId)} (остались маркеры)`,
+  )
+  applyTurnState(game, state, prevPhase, prevActivePlayerId)
+  // Новый круг маркеров: снова разрешаем одно исполнение за круг (даже если
+  // activePlayerId не сменился — один игрок с оставшимися маркерами).
+  if (state.phase === 'actions') game.actionMarkerResolvedThisTurn = false
+  if (state.phase === 'production') game.productionMarkerResolvedThisTurn = false
+  return true
+}
+
 /** Передаёт ход только игрокам, у которых в фазе есть не-pass действие. */
-function skipPlayersWithoutPhaseActions(game: GameSnapshot, mapId: string): string[] {
+function skipPlayersWithoutPhaseActions(
+  game: GameSnapshot,
+  mapId: string,
+  options?: { allowMarkerWrap?: boolean },
+): string[] {
+  const allowMarkerWrap = options?.allowMarkerWrap !== false
   const state = gameStateFromSnapshot(game, mapId)
   if (state.phase === 'events' || !state.activePlayerId) return []
   if (canPlayerActInPhase(game, state, state.activePlayerId)) return []
@@ -179,9 +224,14 @@ function skipPlayersWithoutPhaseActions(game: GameSnapshot, mapId: string): stri
     return []
   }
 
-  // В этой фазе больше некому ходить: завершаем только её, не пропуская следующую автоматически.
+  // Впереди никто не ходит — если маркеры остались, новый круг; иначе закрываем фазу.
   const prevPhase = game.phase
   const prevActivePlayerId = game.activePlayerId
+  if (allowMarkerWrap && continuePhaseWhileMarkersRemain(game, state, prevPhase, prevActivePlayerId)) {
+    // Один wrap: после сброса tracking снова ищем, кто может ходить (без повторного wrap).
+    return skipPlayersWithoutPhaseActions(game, mapId, { allowMarkerWrap: false })
+  }
+
   state.activePlayerId = order.at(-1) ?? state.activePlayerId
   const errors = advanceGamePhase(state, game.participatingPlayerIds)
   if (errors.length) return errors
@@ -323,48 +373,14 @@ export function advanceGameSnapshot(game: GameSnapshot, mapId: string): string[]
   const prevActivePlayerId = game.activePlayerId
   const participating = game.participatingPlayerIds
   const state = gameStateFromSnapshot(game, mapId)
-  const ctx = turnOrderContext(state)
 
   if (
-    state.phase === 'actions'
+    (state.phase === 'actions' || state.phase === 'production')
     && isLastPlayerInPhase(state, participating)
-    && game.actionMarkers.length > 0
   ) {
-    const order = activePlayerOrder(state.players, participating, ctx)
-    const firstId = order[0]
-    if (!firstId) return ['Нет активных игроков']
-    state.activePlayerId = firstId
-    appendPhaseEvent(
-      state,
-      `Фаза «${PHASE_LABELS.actions}», ход ${playerDisplayName(state, firstId)} (остались маркеры)`,
-    )
-    game.phase = state.phase
-    game.activePlayerId = state.activePlayerId
-    game.eventLog = state.eventLog
-    syncActionMarkerTurnTracking(game, prevPhase, prevActivePlayerId)
-    syncProductionMarkerTurnTracking(game, prevPhase, prevActivePlayerId)
-    return skipPlayersWithoutPhaseActions(game, mapId)
-  }
-
-  if (
-    state.phase === 'production'
-    && isLastPlayerInPhase(state, participating)
-    && game.productionMarkers.length > 0
-  ) {
-    const order = activePlayerOrder(state.players, participating, ctx)
-    const firstId = order[0]
-    if (!firstId) return ['Нет активных игроков']
-    state.activePlayerId = firstId
-    appendPhaseEvent(
-      state,
-      `Фаза «${PHASE_LABELS.production}», ход ${playerDisplayName(state, firstId)} (остались маркеры)`,
-    )
-    game.phase = state.phase
-    game.activePlayerId = state.activePlayerId
-    game.eventLog = state.eventLog
-    syncActionMarkerTurnTracking(game, prevPhase, prevActivePlayerId)
-    syncProductionMarkerTurnTracking(game, prevPhase, prevActivePlayerId)
-    return skipPlayersWithoutPhaseActions(game, mapId)
+    if (continuePhaseWhileMarkersRemain(game, state, prevPhase, prevActivePlayerId)) {
+      return skipPlayersWithoutPhaseActions(game, mapId)
+    }
   }
 
   const errors = advanceGamePhase(state, participating)

@@ -24,6 +24,7 @@ import {
   ACTION_MARKER_ALREADY_RESOLVED_MSG,
   ACTION_MARKER_MUST_RESOLVE_BEFORE_ADVANCE_MSG,
   ACTION_MARKER_REMOVE_BLOCKED_MSG,
+  actionMarkerAdvanceBlockMessage,
   mustResolveActionMarkerBeforeAdvance,
   getLegalActionsForSnapshot,
   applyGameActionOnSnapshot,
@@ -39,6 +40,7 @@ import {
   PRODUCTION_MARKER_ALREADY_RESOLVED_MSG,
   PRODUCTION_MARKER_MUST_RESOLVE_BEFORE_ADVANCE_MSG,
   PRODUCTION_MARKER_REMOVE_BLOCKED_MSG,
+  productionMarkerAdvanceBlockMessage,
   removeProductionMarker,
   syncParticipatingPlayerIds,
   ensureActivePlayerParticipating,
@@ -154,6 +156,7 @@ const markerActionHint = ref<string | null>(null)
 const markerActionBusy = ref(false)
 const battleModalOpen = ref(false)
 const rulesHelpOpen = ref(false)
+const bugReportOpen = ref(false)
 
 const RULES_NEWBIE_TIP_STORAGE_KEY = 'galaxy-rules-newbie-tip-dismissed'
 const showRulesNewbieTip = ref(
@@ -445,12 +448,15 @@ const needsBattleModal = computed(() => {
   }
 })
 
-/** Сейчас ваш ход решить: продолжить бой или отступить (после просмотра итогов) */
+/**
+ * Сейчас ваш ход решить: продолжить бой или отступить (после просмотра итогов).
+ * Не завязано на battleModalOpen: иначе гонка reopen модалки прячет баннер (soft-lock).
+ */
 const showCombatContinueDecision = computed(
   () =>
     combatPhase.value === 'awaiting-continue'
     && combatDecisionRole.value != null
-    && !battleModalOpen.value,
+    && !roundResultsPendingView.value,
 )
 
 /** Идёт бой, в котором вы сейчас ничего не решаете */
@@ -517,22 +523,36 @@ const retreatDestinationKeys = computed(() =>
 const retreatHoverKey = ref<string | null>(null)
 
 watch(showCombatContinueDecision, (active) => {
-  if (!active) retreatHoverKey.value = null
+  if (!active) {
+    retreatHoverKey.value = null
+    return
+  }
+  // Баннер решения важнее модалки: если итог уже закрыт, не держим модалку поверх.
+  if (battleModalOpen.value) {
+    battleModalOpen.value = false
+  }
 })
 
 watch(
   battleResolutionKey,
   (key, prev) => {
-    // Новый результат снова показывается, но не затираем намеренный dismiss именно
-    // этого ключа (confirm-destruction ставит его синхронно до flush watcher-ов).
-    if (key && key !== prev && dismissedCombatResultKey.value !== key) {
-      dismissedCombatResultKey.value = null
-    }
+    if (!key || key === prev) return
+    // Уже закрывали именно этот итог — не сбрасываем (poll/null→key мерцание).
+    if (dismissedCombatResultKey.value === key) return
+    dismissedCombatResultKey.value = null
   },
 )
 
 function openBattleModalFromPending() {
   if (!needsBattleModal.value || !snapshot.value) return
+  // Жёсткий инвариант: после dismiss этого итога в awaiting-continue модалку не открываем.
+  if (
+    combatPhase.value === 'awaiting-continue'
+    && battleResolutionKey.value != null
+    && dismissedCombatResultKey.value === battleResolutionKey.value
+  ) {
+    return
+  }
   const preview = buildCombatPreviewFromPending(snapshot.value)
   if (!preview) {
     // Нельзя показать итоги — не блокируем баннер continue/retreat.
@@ -571,6 +591,23 @@ watch(
   [needsBattleModal, battleResolutionKey],
   () => {
     openBattleModalFromPending()
+  },
+)
+
+/** После нового раунда без модалки — подтянуть observation (страховка от «нужен F5»). */
+watch(
+  () =>
+    [
+      combatPhase.value,
+      battleResolutionKey.value,
+      pendingCombatState.value?.roundNumber,
+    ] as const,
+  ([phase, key], [prevPhase, prevKey]) => {
+    if (phase !== 'awaiting-destruction' && phase !== 'awaiting-continue') return
+    if (!key || key === prevKey) return
+    if (battleModalOpen.value || needsBattleModal.value) return
+    if (phase === prevPhase && key === dismissedCombatResultKey.value) return
+    void resyncAfterCombatCountdown()
   },
 )
 
@@ -674,9 +711,11 @@ const mustResolveProductionMarker = computed(() =>
 )
 
 const phaseAdvanceBlockedReason = computed(() => {
-  if (mustResolveActionMarker.value) return ACTION_MARKER_MUST_RESOLVE_BEFORE_ADVANCE_MSG
-  if (mustResolveProductionMarker.value) return PRODUCTION_MARKER_MUST_RESOLVE_BEFORE_ADVANCE_MSG
-  return null
+  if (!saveFile.value?.game) return null
+  return (
+    actionMarkerAdvanceBlockMessage(saveFile.value.game, playerId.value)
+    ?? productionMarkerAdvanceBlockMessage(saveFile.value.game, playerId.value)
+  )
 })
 
 const canAdvancePhase = computed(() => !phaseAdvanceBlockedReason.value)
@@ -1457,6 +1496,7 @@ async function continuePendingCombatAction() {
   const role = combatDecisionRole.value
   if (!pendingCombatState.value || !role) return
   retreatHoverKey.value = null
+  const prevResultKey = battleResolutionKey.value
   bumpObservationEpoch()
   try {
     const obs = await submitGameAction(roomId.value, playerId.value, 'continue-combat')
@@ -1466,8 +1506,13 @@ async function continuePendingCombatAction() {
     const nextResult =
       (obs.mechanics as { lastCombatResult?: CombatResolutionResult }).lastCombatResult ?? null
     if (nextResult) {
+      const nextKey = combatResolutionFingerprint(nextResult)
       battleResolution.value = nextResult
-      dismissedCombatResultKey.value = null
+      // Сбрасываем dismiss только при новом итоге (раунд 2+), не при том же fingerprint
+      // после «продолжить» атакующего — иначе модалка снова перекроет баннер защитника.
+      if (nextKey && nextKey !== prevResultKey) {
+        dismissedCombatResultKey.value = null
+      }
     }
     markerActionHint.value = role === 'attacker'
       ? 'Вы продолжили бой — ждём решения защитника'
@@ -2096,6 +2141,45 @@ function confirmRemoveProductionMarker(): boolean {
   )
 }
 
+function removeMarkerAtSourceFromModal() {
+  if (!saveFile.value?.game || !markerActionSource.value) return
+  const key = hexKey(markerActionSource.value.q, markerActionSource.value.r)
+  const cell = saveFile.value.game.cells.find((c) => hexKey(c.coord.q, c.coord.r) === key)
+  if (!cell?.actionMarkerId) return
+
+  if (serverStatus.value === 'online' && !roomId.value.startsWith('local-')) {
+    bumpObservationEpoch()
+    submitGameAction(roomId.value, playerId.value, 'remove-marker', {
+      markerId: cell.actionMarkerId,
+      kind: 'action',
+    })
+      .then((obs) => {
+        applyObservation(obs)
+        persistLocal()
+        closeMarkerActionModal()
+        markerHint.value = 'Маркер действия снят'
+      })
+      .catch((e) => {
+        markerHint.value = actionErrorMessage(e, 'Не удалось снять маркер')
+      })
+    return
+  }
+
+  const errors = removeActionMarker(
+    saveFile.value.game,
+    cell.actionMarkerId,
+    playerId.value,
+  )
+  if (errors.length) {
+    markerHint.value = errors[0]
+    return
+  }
+  closeMarkerActionModal()
+  markerHint.value = 'Маркер действия снят'
+  persistLocal()
+  refreshLocalLegalActions()
+}
+
 function removeSelectedActionMarker() {
   if (!saveFile.value?.game || !selectedKey.value) return
   if (!confirmRemoveActionMarker()) return
@@ -2424,6 +2508,7 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
       :source="markerActionSource"
       @close="closeMarkerActionModal"
       @start-pick="startMarkerMapPick"
+      @remove-marker="removeMarkerAtSourceFromModal"
     />
 
     <ProductionModal
@@ -2461,6 +2546,9 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
       :remote-attacker-skips="combatPrepAttackerSkips"
       :remote-defender-skips="combatPrepDefenderSkips"
       :countdown-started-at="combatPrepState?.countdownStartedAt"
+      :continue-decision-role="combatDecisionRole"
+      :retreat-allowed="combatRetreatAllowed"
+      :retreat-destinations="retreatDestinations"
       @close="closeBattleModal"
       @resolve="resolveBattleWithOptions"
       @confirm-destruction="confirmBattleDestruction"
@@ -2469,6 +2557,8 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
       @support-side="submitCombatSupportSide"
       @cancel-prep="cancelCombatPrepAction"
       @countdown-complete="resyncAfterCombatCountdown"
+      @continue-combat="continuePendingCombatAction"
+      @stop-combat="stopPendingCombatAction"
     />
 
     <div v-if="markerMapPickActive" class="map-pick-banner" role="status">
@@ -2566,6 +2656,14 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
           <span class="server-pill" :class="serverStatus">
             {{ serverStatus === 'online' ? 'Сервер' : serverStatus === 'offline' ? 'Offline' : '…' }}
           </span>
+          <button
+            type="button"
+            class="bug-report-btn"
+            title="Сообщить о баге"
+            @click="bugReportOpen = true"
+          >
+            Баг
+          </button>
           <div class="rules-help-wrap">
             <button
               type="button"
@@ -2608,6 +2706,13 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
       </header>
 
       <RulesHelpModal :open="rulesHelpOpen" @close="rulesHelpOpen = false" />
+      <BugReportModal
+        :open="bugReportOpen"
+        :room-id="roomId"
+        :player-id="playerId"
+        :player-name="myPlayerName"
+        @close="bugReportOpen = false"
+      />
 
       <div class="you-plaque-slot" aria-live="polite">
         <div
@@ -3860,6 +3965,22 @@ button,
   color: #dbeafe;
   font-size: 0.75rem;
   cursor: pointer;
+}
+
+.bug-report-btn {
+  padding: 0.25rem 0.55rem;
+  border-radius: 6px;
+  border: 1px solid #b45309;
+  background: #7c2d12;
+  color: #ffedd5;
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.bug-report-btn:hover {
+  border-color: #f59e0b;
+  background: #9a3412;
 }
 
 .rules-help-wrap {

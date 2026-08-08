@@ -7,6 +7,7 @@ HTTP base: `http://127.0.0.1:3001` (env `GAME_SERVER_URL` for MCP).
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/health` | Health check |
+| POST | `/bug-reports` | Body: `{ description, screenshotBase64?, screenshotMime?, roomId?, playerId?, playerName? }` → `{ ok, id, expiresAt, hasScreenshot }`. Хранение в `.bug-reports/`, TTL 60 дней |
 | POST | `/rooms` | Body: `{ map, maxPlayers? }` or `{ save, maxPlayers? }` → `{ roomId, code }` |
 | POST | `/rooms/:id/join` | Body: `{ playerName }` → `{ playerId, code }` |
 | GET | `/rooms/:id/state?playerId=` | `GameObservation` |

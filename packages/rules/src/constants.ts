@@ -48,7 +48,7 @@ export const SHIP_TYPES: ShipType[] = [
 ]
 
 export const SHIP_LABELS: Record<ShipType, string> = {
-  supply: 'Снабжение',
+  supply: 'Корабль снабжения',
   destroyer: 'Эсминец',
   cruiser: 'Крейсер',
   battleship: 'Линкор',

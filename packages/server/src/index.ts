@@ -1,5 +1,6 @@
 import Fastify from 'fastify'
 import websocket from '@fastify/websocket'
+import { bugReportsDir, registerBugReportRoutes } from './bug-reports.js'
 import { registerHttpRoutes, restoreRoomsFromDisk } from './room.js'
 import { devRoomsDir, roomPersistenceEnabled } from './room-persistence.js'
 
@@ -17,6 +18,8 @@ if (roomPersistenceEnabled) {
 }
 
 registerHttpRoutes(app)
+registerBugReportRoutes(app)
+console.log(`@galaxy/server bug-reports: ${bugReportsDir} (хранение 60 дней)`)
 
 app.register(async (instance) => {
   instance.get('/ws', { websocket: true }, (socket) => {

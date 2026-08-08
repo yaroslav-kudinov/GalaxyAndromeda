@@ -211,3 +211,24 @@ export async function updateCombatPrepAction(
 ): Promise<GameObservation> {
   return submitGameAction(roomId, playerId, 'update-combat-prep', { ready, prioritySkips })
 }
+
+export interface BugReportSubmitResult {
+  ok: boolean
+  id: string
+  expiresAt: string
+  hasScreenshot: boolean
+}
+
+export async function submitBugReport(payload: {
+  description: string
+  screenshotBase64?: string
+  screenshotMime?: string
+  roomId?: string
+  playerId?: string
+  playerName?: string
+}): Promise<BugReportSubmitResult> {
+  return apiFetch<BugReportSubmitResult>('/bug-reports', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}

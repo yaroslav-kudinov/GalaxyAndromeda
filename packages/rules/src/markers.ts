@@ -21,6 +21,16 @@ export const ACTION_MARKER_REMOVE_BLOCKED_MSG =
 export const ACTION_MARKER_MUST_RESOLVE_BEFORE_ADVANCE_MSG =
   'Используйте маркер действия или снимите его с карты'
 
+export function actionMarkerAdvanceBlockMessage(
+  game: GameSnapshot,
+  ownerId: string,
+): string | null {
+  if (!mustResolveActionMarkerBeforeAdvance(game, ownerId)) return null
+  const n = countActionMarkersForPlayer(game, ownerId)
+  if (n <= 1) return ACTION_MARKER_MUST_RESOLVE_BEFORE_ADVANCE_MSG
+  return `Осталось маркеров действия: ${n}. Исполните один или снимите все, чтобы передать ход`
+}
+
 export const PRODUCTION_MARKER_ALREADY_RESOLVED_MSG =
   'За этот ход в фазе «Производство» можно построить только по одному маркеру'
 
@@ -29,6 +39,16 @@ export const PRODUCTION_MARKER_REMOVE_BLOCKED_MSG =
 
 export const PRODUCTION_MARKER_MUST_RESOLVE_BEFORE_ADVANCE_MSG =
   'Используйте маркер производства, перезарядите ресурсы или снимите его с карты'
+
+export function productionMarkerAdvanceBlockMessage(
+  game: GameSnapshot,
+  ownerId: string,
+): string | null {
+  if (!mustResolveProductionMarkerBeforeAdvance(game, ownerId)) return null
+  const n = countProductionMarkersForPlayer(game, ownerId)
+  if (n <= 1) return PRODUCTION_MARKER_MUST_RESOLVE_BEFORE_ADVANCE_MSG
+  return `Осталось маркеров производства: ${n}. Исполните один или снимите все, чтобы передать ход`
+}
 
 export function hasResolvedActionMarkerThisTurn(game: GameSnapshot): boolean {
   return !!game.actionMarkerResolvedThisTurn
@@ -62,10 +82,8 @@ export function mustResolveActionMarkerBeforeAdvance(game: GameSnapshot, ownerId
 
 export function validateActionMarkerBeforeAdvance(game: GameSnapshot): string[] {
   if (!game.activePlayerId) return []
-  if (mustResolveActionMarkerBeforeAdvance(game, game.activePlayerId)) {
-    return [ACTION_MARKER_MUST_RESOLVE_BEFORE_ADVANCE_MSG]
-  }
-  return []
+  const msg = actionMarkerAdvanceBlockMessage(game, game.activePlayerId)
+  return msg ? [msg] : []
 }
 
 export function markActionMarkerResolvedThisTurn(game: GameSnapshot): void {
@@ -117,10 +135,8 @@ export function mustResolveProductionMarkerBeforeAdvance(
 
 export function validateProductionMarkerBeforeAdvance(game: GameSnapshot): string[] {
   if (!game.activePlayerId) return []
-  if (mustResolveProductionMarkerBeforeAdvance(game, game.activePlayerId)) {
-    return [PRODUCTION_MARKER_MUST_RESOLVE_BEFORE_ADVANCE_MSG]
-  }
-  return []
+  const msg = productionMarkerAdvanceBlockMessage(game, game.activePlayerId)
+  return msg ? [msg] : []
 }
 
 export function markProductionMarkerResolvedThisTurn(game: GameSnapshot): void {

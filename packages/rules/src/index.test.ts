@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { GameSnapshot } from './save-file.js'
 import type { ShipType } from './types.js'
+import { hexKey } from './types.js'
 
 function addTestShip(
   game: GameSnapshot,
@@ -126,9 +127,10 @@ import {
   getMovableShipsAtMarker,
   getReachableHexKeys,
   hexPathDistance,
+  validateDestinationForMove,
   validateMarkerMovement,
 } from './movement.js'
-import { ONE_BATTLE_PER_MARKER_MSG } from './combat.js'
+import { isCombatDestination, ONE_BATTLE_PER_MARKER_MSG } from './combat.js'
 import {
   autoAllocateTokens,
   executeProductionBatch,
@@ -1247,6 +1249,74 @@ describe('movement', () => {
     expect(getReachableHexKeys(bridgeMap, { q: 0, r: 0 }, 'destroyer')).toContain('2,0')
   })
 
+  it('cannot path through enemy ships; can end move on them for combat', () => {
+    const lineMap = {
+      id: 'enemy-block',
+      name: 'enemy-block',
+      cells: [
+        { q: 0, r: 0 },
+        { q: 1, r: 0 },
+        { q: 2, r: 0 },
+      ],
+    }
+    const game = gameSnapshotFromMap(lineMap)
+    game.phase = 'actions'
+    game.activePlayerId = 'player-1'
+    game.cells.find((c) => c.coord.q === 0 && c.coord.r === 0)!.ships = [
+      { id: 'p1-dd', type: 'destroyer', ownerId: 'player-1' },
+    ]
+    game.cells.find((c) => c.coord.q === 1 && c.coord.r === 0)!.ships = [
+      { id: 'p2-dd', type: 'destroyer', ownerId: 'player-2' },
+    ]
+
+    const keys = new Set(game.cells.map((c) => hexKey(c.coord.q, c.coord.r)))
+    const blocks = (key: string) => {
+      const [q, r] = key.split(',').map(Number)
+      return isCombatDestination(game, 'player-1', { q: q!, r: r! })
+    }
+
+    // Через врага на B к C — нельзя
+    expect(
+      hexPathDistance(keys, { q: 0, r: 0 }, { q: 2, r: 0 }, 3, { blocksTransit: blocks }),
+    ).toBeNull()
+    expect(getReachableHexKeys(lineMap, { q: 0, r: 0 }, 'destroyer', game, 'player-1')).not.toContain(
+      '2,0',
+    )
+    // На клетку с врагом — можно (бой)
+    expect(
+      hexPathDistance(keys, { q: 0, r: 0 }, { q: 1, r: 0 }, 3, { blocksTransit: blocks }),
+    ).toBe(1)
+    expect(getReachableHexKeys(lineMap, { q: 0, r: 0 }, 'destroyer', game, 'player-1')).toContain(
+      '1,0',
+    )
+
+    const ship = game.cells.find((c) => c.coord.q === 0 && c.coord.r === 0)!.ships[0]!
+    expect(
+      validateDestinationForMove(
+        game,
+        lineMap,
+        'player-1',
+        ship,
+        { q: 0, r: 0 },
+        { q: 2, r: 0 },
+        false,
+        [],
+      ).length,
+    ).toBeGreaterThan(0)
+    expect(
+      validateDestinationForMove(
+        game,
+        lineMap,
+        'player-1',
+        ship,
+        { q: 0, r: 0 },
+        { q: 1, r: 0 },
+        false,
+        [],
+      ),
+    ).toEqual([])
+  })
+
   it('treats absent player territory as neutral for movement', () => {
     const map = movementTestMap()
     const game = gameSnapshotFromMap(map)
@@ -1443,6 +1513,48 @@ describe('movement', () => {
     placeActionMarkerForTest(game, 'player-2', { q: 0, r: 0 })
 
     expect(advanceGameSnapshot(game, map.id)).toEqual([])
+    expect(game.activePlayerId).toBe('player-2')
+    expect(game.actionMarkerResolvedThisTurn).toBe(false)
+  })
+
+  it('does not leave actions while markers remain after mid-order player resolves one', () => {
+    const map = createEmptyMap('wrap-markers', 'wrap')
+    map.cells = [
+      { q: 0, r: 0, startPlayer: 1 },
+      { q: 1, r: 0, startPlayer: 2 },
+      { q: 2, r: 0, startPlayer: 2 },
+      { q: 3, r: 0, startPlayer: 3 },
+    ]
+    const game = gameSnapshotFromMap(map)
+    ensurePlayerSlots(game, 3)
+    game.participatingPlayerIds = ['player-1', 'player-2', 'player-3']
+    game.phase = 'actions'
+    // Равный контроль регионов → порядок слотов player-1,2,3
+    for (const cell of game.cells) cell.controlOwnerId = null
+    game.cells.find((c) => c.coord.q === 0 && c.coord.r === 0)!.ships = [
+      { id: 'p1', type: 'destroyer', ownerId: 'player-1' },
+    ]
+    game.cells.find((c) => c.coord.q === 1 && c.coord.r === 0)!.ships = [
+      { id: 'p2a', type: 'destroyer', ownerId: 'player-2' },
+    ]
+    game.cells.find((c) => c.coord.q === 2 && c.coord.r === 0)!.ships = [
+      { id: 'p2b', type: 'destroyer', ownerId: 'player-2' },
+    ]
+    game.cells.find((c) => c.coord.q === 3 && c.coord.r === 0)!.ships = [
+      { id: 'p3', type: 'destroyer', ownerId: 'player-3' },
+    ]
+    placeActionMarkerForTest(game, 'player-2', { q: 1, r: 0 })
+    placeActionMarkerForTest(game, 'player-2', { q: 2, r: 0 })
+
+    game.activePlayerId = 'player-2'
+    // Уже исполнил один маркер за круг; второй ещё на карте
+    game.actionMarkerResolvedThisTurn = true
+    expect(game.actionMarkers.filter((m) => m.ownerId === 'player-2')).toHaveLength(2)
+
+    // player-2 передаёт ход; player-3 без маркеров → wrap, не production
+    expect(advanceGameSnapshot(game, map.id)).toEqual([])
+    expect(game.phase).toBe('actions')
+    expect(game.actionMarkers.length).toBe(2)
     expect(game.activePlayerId).toBe('player-2')
     expect(game.actionMarkerResolvedThisTurn).toBe(false)
   })

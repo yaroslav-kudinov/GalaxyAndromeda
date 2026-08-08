@@ -13,3 +13,5 @@ coverage/
 .turbo/
 # Dev-персист комнат сервера (@galaxy/server, только локальная отладка)
 .dev-rooms/
+# Временные баг-репорты сервера (TTL 60 дней)
+.bug-reports/

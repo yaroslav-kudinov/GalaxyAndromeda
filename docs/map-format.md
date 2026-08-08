@@ -58,6 +58,7 @@ Older maps may use `resourceTokens` (array). The editor and `normalizeMapDefinit
 ## Bundled maps
 
 - `maps/default.json` — minimal dev stub
+- `maps/duel-2p.json` — compact symmetric 2-player duel
 - `maps/tts-reference.json` — approximate 3-player layout from TTS screenshot (`docs/visual-reference.png`)
 
 ## Validation

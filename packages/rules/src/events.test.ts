@@ -17,7 +17,13 @@ import {
   resolveTurnEvent,
   type EventCardId,
 } from './events.js'
-import { rollCombatRound, selectShipsToDestroy, getEffectiveDestroyCost, buildCombatPreview } from './combat.js'
+import {
+  rollCombatRound,
+  selectShipsToDestroy,
+  getEffectiveDestroyCost,
+  buildCombatPreview,
+  getEffectiveFireRangeBounds,
+} from './combat.js'
 import { gameSnapshotFromMap, type GameSnapshot } from './save-file.js'
 import { createEmptyMap } from './map.js'
 import type { ShipUnit } from './types.js'
@@ -164,10 +170,11 @@ describe('events', () => {
     expect(getEffectiveMoveRange(game, 'battleship')).toBe(1)
   })
 
-  it('hyper gap: +1 move and hyper fireRange via modifiers', () => {
+  it('hyper gap: +1 move and hyper fireRange becomes 2–4', () => {
     const game = gameWithEvent('hyper-gap')
     expect(getEffectiveMoveRange(game, 'destroyer')).toBe(4)
     expect(getTurnModifiers(game).hyperFireRange).toBe(4)
+    expect(getEffectiveFireRangeBounds(game, 'hyper')).toEqual({ min: 2, max: 4 })
   })
 
   it('rollCombatRound can fix all d6 via override', () => {

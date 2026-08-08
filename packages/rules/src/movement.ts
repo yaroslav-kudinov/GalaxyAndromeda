@@ -135,14 +135,30 @@ function countIncomingMoves(
 }
 
 /**
+ * Клетка блокирует проход (вражеские корабли или вражеский контроль),
+ * но может быть конечной точкой хода → бой.
+ */
+function blocksMovementTransit(
+  game: GameSnapshot,
+  playerId: string,
+  cellKey: string,
+): boolean {
+  const [q, r] = cellKey.split(',').map(Number)
+  return isCombatDestination(game, playerId, { q: q!, r: r! })
+}
+
+/**
  * Клетки в пределах moveRange по **пути по существующим гексам** (BFS).
  * «Пустые» дыры карты (гекса нет) нельзя пересекать — осевое hexDistance не подходит.
+ * Клетки с врагами / вражеским контролем достижимы как конечная точка (бой),
+ * но через них путь дальше не идёт.
  */
 export function getReachableHexKeys(
   map: MapDefinition,
   from: HexCoord,
   shipType: ShipType,
   game?: GameSnapshot,
+  playerId?: string,
 ): string[] {
   const range = game ? getEffectiveMoveRange(game, shipType) : getShipMoveRange(shipType)
   const fromKey = hexKey(from.q, from.r)
@@ -168,8 +184,10 @@ export function getReachableHexKeys(
       if (!candidateKeys.has(nk) || dist.has(nk)) continue
       const nd = d + 1
       dist.set(nk, nd)
-      queue.push(nk)
       if (nd >= 1 && nd <= range) reachable.push(nk)
+      // Через клетку боя путь не продолжаем
+      if (game && playerId && blocksMovementTransit(game, playerId, nk)) continue
+      queue.push(nk)
     }
   }
 
@@ -182,6 +200,10 @@ export function hexPathDistance(
   from: HexCoord,
   to: HexCoord,
   maxSteps: number,
+  options?: {
+    /** true = клетка непроходима как промежуточная (конечная `to` всегда допускается) */
+    blocksTransit?: (cellKey: string) => boolean
+  },
 ): number | null {
   const fromKey = hexKey(from.q, from.r)
   const toKey = hexKey(to.q, to.r)
@@ -200,6 +222,7 @@ export function hexPathDistance(
       if (!existingKeys.has(nk) || dist.has(nk)) continue
       const nd = d + 1
       if (nk === toKey) return nd
+      if (options?.blocksTransit?.(nk)) continue
       dist.set(nk, nd)
       queue.push(nk)
     }
@@ -238,7 +261,9 @@ export function validateDestinationForMove(
 
   const range = game ? getEffectiveMoveRange(game, ship.type) : getShipMoveRange(ship.type)
   const existingKeys = new Set(game.cells.map((c) => hexKey(c.coord.q, c.coord.r)))
-  const pathDist = hexPathDistance(existingKeys, from, to, range)
+  const pathDist = hexPathDistance(existingKeys, from, to, range, {
+    blocksTransit: (key) => blocksMovementTransit(game, playerId, key),
+  })
   if (pathDist == null || pathDist < 1) {
     return [`Нет пути по клеткам карты в пределах дальности ${range}`]
   }
@@ -247,7 +272,7 @@ export function validateDestinationForMove(
   }
 
   if (game && isMovementIntoCellBlocked(game, dest, fromKey, toKey)) {
-    return ['Местная самооборона: нельзя входить в клетку с ресурсами или энергоцентром']
+    return ['Местная самооборона: нельзя входить в клетку с ресурсами или центром власти']
   }
 
   if (effectiveControlOwnerId(game, dest.controlOwnerId) != null
@@ -305,7 +330,7 @@ export function getMovableShipsAtMarker(
     .filter((s) => s.ownerId === playerId)
     .map((ship) => {
       const moveRange = getEffectiveMoveRange(game, ship.type)
-      const rangeCandidates = getReachableHexKeys(map, from, ship.type, game)
+      const rangeCandidates = getReachableHexKeys(map, from, ship.type, game, playerId)
       const reachableKeys = rangeCandidates.filter((key) => {
         const [q, r] = key.split(',').map(Number)
         return (

@@ -36,6 +36,8 @@ const emit = defineEmits<{
 
   startPick: [payload: { shipIds: string[]; mode: MarkerActionMode }]
 
+  removeMarker: []
+
 }>()
 
 
@@ -187,6 +189,17 @@ function onStartPick() {
 
   })
 
+}
+
+function onRemoveMarker() {
+  if (
+    !window.confirm(
+      'Снять маркер действия с этой клетки?\n\nПлан на эту клетку будет отменён. Это нельзя отменить.',
+    )
+  ) {
+    return
+  }
+  emit('removeMarker')
 }
 
 
@@ -416,6 +429,10 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
 
 
       <footer class="modal-footer">
+
+        <button type="button" class="btn-danger-ghost" @click="onRemoveMarker">
+          Снять маркер без действия
+        </button>
 
         <button type="button" class="btn-secondary" @click="emit('close')">Отмена</button>
 
@@ -813,7 +830,9 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
 
 .btn-primary,
 
-.btn-secondary {
+.btn-secondary,
+
+.btn-danger-ghost {
 
   padding: 0.45rem 0.75rem;
 
@@ -822,6 +841,24 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
   font-size: 0.82rem;
 
   cursor: pointer;
+
+}
+
+.btn-danger-ghost {
+
+  margin-right: auto;
+
+  border: 1px solid #7f1d1d;
+
+  background: transparent;
+
+  color: #fca5a5;
+
+}
+
+.btn-danger-ghost:hover {
+
+  background: rgba(127, 29, 29, 0.35);
 
 }
 

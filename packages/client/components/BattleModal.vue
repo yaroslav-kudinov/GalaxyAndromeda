@@ -45,6 +45,10 @@ const props = defineProps<{
   remoteAttackerSkips?: ShipType[]
   remoteDefenderSkips?: ShipType[]
   countdownStartedAt?: number
+  /** Fallback: решение continue/retreat прямо в модалке (если баннер скрыт гонкой) */
+  continueDecisionRole?: 'attacker' | 'defender' | null
+  retreatAllowed?: boolean
+  retreatDestinations?: { q: number; r: number }[]
 }>()
 
 const emit = defineEmits<{
@@ -56,6 +60,8 @@ const emit = defineEmits<{
   supportSide: [side: 'attacker' | 'defender' | null]
   cancelPrep: []
   countdownComplete: []
+  continueCombat: []
+  stopCombat: [{ q: number; r: number }]
 }>()
 
 const {
@@ -520,6 +526,13 @@ const continueStatusText = computed(() => {
     ? 'Раунд завершён без уничтожений.'
     : 'Раунд завершён.'
 })
+
+const showModalContinueActions = computed(
+  () =>
+    phase.value === 'post'
+    && props.snapshot.pendingCombat?.phase === 'awaiting-continue'
+    && props.continueDecisionRole != null,
+)
 
 function presentTypesOnFleet(fleetSide: 'attacker' | 'defender'): ShipType[] {
   return fleetSide === 'attacker' ? attackerTypesPresent.value : defenderTypesPresent.value
@@ -1362,6 +1375,37 @@ onUnmounted(() => {
                 : 'Подтвердить уничтожение'
           }}
         </button>
+        <template v-else-if="showModalContinueActions">
+          <button
+            type="button"
+            class="btn-primary"
+            :disabled="resolving"
+            @click="emit('continueCombat')"
+          >
+            Продолжить бой
+          </button>
+          <template v-if="retreatAllowed">
+            <button
+              v-for="coord in retreatDestinations ?? []"
+              :key="`${coord.q},${coord.r}`"
+              type="button"
+              class="btn-secondary"
+              :disabled="resolving"
+              @click="emit('stopCombat', coord)"
+            >
+              Отступить в ({{ coord.q }}, {{ coord.r }})
+            </button>
+            <span
+              v-if="!(retreatDestinations ?? []).length"
+              class="post-retreat-empty"
+            >
+              Нет клетки для отступления
+            </span>
+          </template>
+          <button type="button" class="btn-close" @click="emit('close')">
+            Закрыть
+          </button>
+        </template>
         <button v-else-if="phase === 'post'" type="button" class="btn-close" @click="emit('close')">
           Закрыть (Esc)
         </button>
@@ -2281,5 +2325,10 @@ onUnmounted(() => {
   border: 1px solid #475569;
   background: #334155;
   color: #f8fafc;
+}
+.post-retreat-empty {
+  font-size: 0.8rem;
+  color: #fca5a5;
+  align-self: center;
 }
 </style>
