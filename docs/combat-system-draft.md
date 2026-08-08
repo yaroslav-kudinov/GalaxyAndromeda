@@ -87,12 +87,12 @@ destructionPriority:
 
 - **combatDice** — участвуют в бою на **своей** клетке (гекс боя).
 - **supportDice** — поддержка с **дальности** `fireRange` (корабль **не** на гексе боя):
-  - Крейсер: +1d6, range 1
-  - Линкор: +2d6, range 2
-  - Г.О.: +3d6, range 3 (max из `[2,3]` в yaml)
+  - Крейсер: +1d4, range 1
+  - Линкор: +2d4, range 2
+  - Г.О.: +3d4, range 3 (max из `[2,3]` в yaml)
 - Щитоносец **не бросает** кубики; даёт поглощение урона.
 
-**Реализация (MVP):** `collectSupportShips` + `rollCombatRound` в `combat.ts`; каждый корабль бросает свои d6 отдельно; UI показывает журнал бросков.
+**Реализация (MVP):** `collectSupportShips` + `rollCombatRound` в `combat.ts`; `combatDice` на гексе — d6, а `supportDice` с дистанции — d4; UI показывает журнал бросков.
 
 ### 2.4. Щиты (shield absorb 4+2)
 

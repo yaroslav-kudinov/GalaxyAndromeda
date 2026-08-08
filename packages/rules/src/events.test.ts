@@ -191,7 +191,7 @@ describe('events', () => {
 
   it('hold formation: destroyCost +2', () => {
     const game = gameWithEvent('hold-formation')
-    expect(getEffectiveDestroyCost(game, 'destroyer')).toBe(5)
+    expect(getEffectiveDestroyCost(game, 'destroyer')).toBe(6)
   })
 
   it('production accident blocks supply build', () => {

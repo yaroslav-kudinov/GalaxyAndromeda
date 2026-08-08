@@ -14,6 +14,7 @@ import {
   selectShipsToDestroy,
   SHIELD_ABSORB_NEIGHBOR,
   SHIELD_ABSORB_SELF,
+  SHIP_SUPPORT_DIE_FACES,
   validateBombardmentTarget,
   validateMarkerBombardment,
 } from './index.js'
@@ -74,12 +75,21 @@ describe('По правилам (PDF / rulebook compliance)', () => {
       { id: 'bb', type: 'battleship' as ShipType, ownerId: 'p2' },
       { id: 'dd', type: 'destroyer' as ShipType, ownerId: 'p2' },
     ]
-    // Бюджет 10: без skip хватает на dd(3)+bb(9)=12 → только dd; со skip bb=10 → только dd
+    // Бюджет 10: без skip хватает на dd(4)+bb(9)=13 → только dd; со skip bb=10 → только dd
     expect(selectShipsToDestroy(ships, 10, new Set(['battleship']))).toEqual(['dd'])
-    // Бюджет 10 без skip: dd(3) затем bb(9) — после dd остаётся 7 < 9 → только dd
+    // Бюджет 10 без skip: dd(4) затем bb(9) — после dd остаётся 6 < 9 → только dd
     expect(selectShipsToDestroy(ships, 10, new Set())).toEqual(['dd'])
-    // Бюджет 12 со skip bb: dd(3)+bb(10)=13 → только dd; бюджет 13 → оба
-    expect(selectShipsToDestroy(ships, 13, new Set(['battleship']))).toEqual(['dd', 'bb'])
+    // Бюджет 13 со skip bb: dd(4)+bb(10)=14 → только dd; бюджет 14 → оба
+    expect(selectShipsToDestroy(ships, 14, new Set(['battleship']))).toEqual(['dd', 'bb'])
+  })
+
+  it('баланс B+F: destroyCost эсминца 4, все support-кубики d4', () => {
+    expect(getDestroyCost('destroyer')).toBe(4)
+    expect(SHIP_SUPPORT_DIE_FACES).toMatchObject({
+      cruiser: 4,
+      battleship: 4,
+      hyper: 4,
+    })
   })
 
   it('Г.О. fireRange 2–3: соседняя клетка запрещена', () => {

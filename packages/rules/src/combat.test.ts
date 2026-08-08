@@ -516,7 +516,6 @@ describe('combat sketch', () => {
     expect(selectShipsToDestroy(defenderShips, grossAfterShields.remainingDamage, new Set())).toEqual([
       'dd-1',
       'dd-2',
-      'dd-3',
     ])
   })
 
@@ -732,7 +731,7 @@ describe('combat sketch', () => {
       { id: 'bb1', type: 'battleship' as ShipType, ownerId: 'p2' },
       { id: 'dd1', type: 'destroyer' as ShipType, ownerId: 'p2' },
     ]
-    const destroyed = selectShipsToDestroy(ships, 3, new Set(['battleship']))
+    const destroyed = selectShipsToDestroy(ships, 4, new Set(['battleship']))
     expect(destroyed).toEqual(['dd1'])
   })
 
@@ -742,9 +741,9 @@ describe('combat sketch', () => {
       { id: 'dd-2', type: 'destroyer' as ShipType, ownerId: 'p2' },
       { id: 'dd-3', type: 'destroyer' as ShipType, ownerId: 'p2' },
     ]
-    // skip: destroyCost 3+1=4; бюджет 6 → один эсминец; бюджет 8 → два
+    // skip: destroyCost 4+1=5; бюджет 6 → один эсминец; бюджет 10 → два
     expect(selectShipsToDestroy(ships, 6, new Set(['destroyer']))).toEqual(['dd-1'])
-    expect(selectShipsToDestroy(ships, 8, new Set(['destroyer']))).toEqual(['dd-1', 'dd-2'])
+    expect(selectShipsToDestroy(ships, 10, new Set(['destroyer']))).toEqual(['dd-1', 'dd-2'])
   })
 
   it('getImmediatelyDestroyableShipIds highlights front tier within budget', () => {
@@ -778,8 +777,8 @@ describe('combat sketch', () => {
     ]
     // Раньше сравнение шло по позиции в отсортированном списке (id),
     // и выбор dd-2 без dd-1 давал «Эсминец раньше Эсминец».
-    expect(validateDestructionSelection(ships, ['dd-2'], 3, new Set())).toEqual([])
-    expect(validateDestructionSelection(ships, ['dd-3', 'dd-1'], 6, new Set())).toEqual([])
+    expect(validateDestructionSelection(ships, ['dd-2'], 4, new Set())).toEqual([])
+    expect(validateDestructionSelection(ships, ['dd-3', 'dd-1'], 8, new Set())).toEqual([])
   })
 
   it('validateDestructionSelection still blocks lower type while higher type remains', () => {
@@ -792,7 +791,7 @@ describe('combat sketch', () => {
       .toMatch(/Эсминец/)
     expect(validateDestructionSelection(ships, ['dd-2', 'cr-1'], 9, new Set()).join(' '))
       .toMatch(/Эсминец/)
-    expect(validateDestructionSelection(ships, ['dd-1', 'dd-2', 'cr-1'], 12, new Set())).toEqual([])
+    expect(validateDestructionSelection(ships, ['dd-1', 'dd-2', 'cr-1'], 14, new Set())).toEqual([])
   })
 
   it('buildDestructionSelectionState does not list cruiser as initially selectable ahead of destroyers', () => {
@@ -1395,9 +1394,9 @@ describe('bombardment', () => {
     expect(round.shipRolls.every((r) => r.side === 'attacker')).toBe(true)
     expect(round.defenderTotal).toBe(0)
     expect(round.winner).toBe('attacker')
-    // battleship supportDice = 2, fixed high rolls → 6+6
-    expect(round.attackerTotal).toBe(12)
-    expect(computeRoundDamage(round)).toBe(12)
+    // battleship supportDice = 2 d4, fixed high rolls → 4+4
+    expect(round.attackerTotal).toBe(8)
+    expect(computeRoundDamage(round)).toBe(8)
 
     const result = resolveCombatAtCell(
       game,
@@ -1409,7 +1408,7 @@ describe('bombardment', () => {
       preview!,
     )
     expect(result.attackerWon).toBe(true)
-    expect(result.rawDamage).toBe(12)
+    expect(result.rawDamage).toBe(8)
     expect(result.roundOne!.defenderTotal).toBe(0)
     expect(result.roundOne!.shipRolls.filter((r) => r.side === 'defender')).toHaveLength(0)
   })
@@ -1728,8 +1727,8 @@ describe('покрытие непокрытых боевых путей', () => 
     game.participatingPlayerIds = ['player-1', 'player-2']
     game.turnNumber = 2
 
-    // 7 эсминцев атаки vs 4 защиты, d6=3 → 21 vs 12, урон 9 = ровно 3 эсминца (не full wipe).
-    for (let i = 0; i < 7; i++) {
+    // 8 эсминцев атаки vs 4 защиты, d6=3 → 24 vs 12, урон 12 = ровно 3 эсминца (не full wipe).
+    for (let i = 0; i < 8; i++) {
       addShip(game, 0, 0, 'player-1', 'destroyer', `att-dd-${i}`)
     }
     for (let i = 1; i <= 4; i++) {
@@ -1747,7 +1746,7 @@ describe('покрытие непокрытых боевых путей', () => 
     )
     expect(result.attackerWon).toBe(true)
     expect(result.needsDestructionSelection).toBe(true)
-    expect(result.rawDamage).toBe(9)
+    expect(result.rawDamage).toBe(12)
 
     setupPendingCombatDestruction(
       game,

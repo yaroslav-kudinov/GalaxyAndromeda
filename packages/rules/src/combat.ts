@@ -37,7 +37,7 @@ export const SHIELD_ABSORB_NEIGHBOR = 2
 
 export const SHIP_DESTROY_COST: Record<ShipType, number> = {
 
-  destroyer: 3,
+  destroyer: 4,
 
   cruiser: 6,
 
@@ -76,6 +76,17 @@ export const SHIP_SUPPORT_DICE: Partial<Record<ShipType, number>> = {
   battleship: 2,
 
   hyper: 3,
+
+}
+
+/** Число граней кубика supportDice по ships.yaml (бой на гексе остаётся d6). */
+export const SHIP_SUPPORT_DIE_FACES: Partial<Record<ShipType, number>> = {
+
+  cruiser: 4,
+
+  battleship: 4,
+
+  hyper: 4,
 
 }
 
@@ -1369,10 +1380,20 @@ export function detectCombatsFromMoves(
 
 
 export function rollD6(count = 1, rng: () => number = Math.random, fixedValue?: number): number[] {
+  return rollDice(count, 6, rng, fixedValue)
+}
+
+/** Бросает count кубиков с указанным числом граней. */
+export function rollDice(
+  count: number,
+  faces: number,
+  rng: () => number = Math.random,
+  fixedValue?: number,
+): number[] {
   if (fixedValue != null) {
     return Array.from({ length: count }, () => fixedValue)
   }
-  return Array.from({ length: count }, () => Math.floor(rng() * 6) + 1)
+  return Array.from({ length: count }, () => Math.floor(rng() * faces) + 1)
 }
 
 
@@ -1455,7 +1476,12 @@ export function rollCombatRound(
     }
 
     for (const support of side.supportingShips) {
-      const rolls = rollD6(support.supportDice, rng, fixedDiceValue)
+      const rolls = rollDice(
+        support.supportDice,
+        SHIP_SUPPORT_DIE_FACES[support.type] ?? 6,
+        rng,
+        fixedDiceValue,
+      )
       const total = rolls.reduce((a, b) => a + b, 0)
       shipRolls.push({
         shipId: support.shipId,
