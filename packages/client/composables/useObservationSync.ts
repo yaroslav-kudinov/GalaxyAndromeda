@@ -2,6 +2,8 @@ import { debugLog } from './useDebugLog'
 
 type ObservationSource = 'action' | 'poll' | 'resync' | 'initial'
 
+export type SyncWarningKind = 'revision' | 'ui-mismatch' | null
+
 interface UseObservationSyncOptions {
   enabled: () => boolean
   fetchAndApply: () => Promise<boolean>
@@ -18,10 +20,12 @@ function sleep(ms: number): Promise<void> {
 /**
  * Следит за monotonic observationRevision и восстанавливает authoritative state.
  * Локальное состояние меняется только через переданный fetchAndApply.
+ * Также принимает явные сигналы рассинхрона UI ↔ сервер (например бой без баннера).
  */
 export function useObservationSync(options: UseObservationSyncOptions) {
   const warningVisible = ref(false)
   const warningReason = ref<string | null>(null)
+  const warningKind = ref<SyncWarningKind>(null)
   const resyncing = ref(false)
 
   let lastRevision = 0
@@ -29,10 +33,33 @@ export function useObservationSync(options: UseObservationSyncOptions) {
   let consecutivePollFailures = 0
   let resyncPromise: Promise<boolean> | null = null
 
-  function showWarning(reason: string) {
+  function showWarning(reason: string, kind: SyncWarningKind = 'revision') {
     warningReason.value = reason
+    warningKind.value = kind
     warningVisible.value = true
-    debugLog('sync.warning', { reason, lastRevision })
+    debugLog('sync.warning', { reason, kind, lastRevision })
+  }
+
+  function clearWarning() {
+    warningVisible.value = false
+    warningReason.value = null
+    warningKind.value = null
+  }
+
+  /** Сервер ждёт действие, а нужный UI не виден — явный рассинхрон интерфейса. */
+  function reportUiMismatch(reason: string) {
+    if (!options.enabled()) return
+    if (warningVisible.value && warningKind.value === 'ui-mismatch' && warningReason.value === reason) {
+      return
+    }
+    showWarning(reason, 'ui-mismatch')
+    debugLog('sync.ui-mismatch', { reason, lastRevision })
+  }
+
+  function clearUiMismatch() {
+    if (warningKind.value !== 'ui-mismatch') return
+    clearWarning()
+    debugLog('sync.ui-mismatch-cleared', { lastRevision })
   }
 
   async function resync(reason: string): Promise<boolean> {
@@ -47,8 +74,10 @@ export function useObservationSync(options: UseObservationSyncOptions) {
         try {
           if (await options.fetchAndApply()) {
             consecutivePollFailures = 0
-            warningVisible.value = false
-            warningReason.value = null
+            // Не гасим ui-mismatch сразу: watcher UI сам снимет после появления контролов.
+            if (warningKind.value !== 'ui-mismatch') {
+              clearWarning()
+            }
             debugLog('sync.resync-success', { reason, attempt: attempt + 1, lastRevision })
             return true
           }
@@ -60,7 +89,7 @@ export function useObservationSync(options: UseObservationSyncOptions) {
           })
         }
       }
-      showWarning(reason)
+      showWarning(reason, 'revision')
       return false
     })().finally(() => {
       resyncing.value = false
@@ -120,11 +149,15 @@ export function useObservationSync(options: UseObservationSyncOptions) {
   return {
     warningVisible,
     warningReason,
+    warningKind,
     resyncing,
     expectNextRevision,
     observe,
     recordPollSuccess,
     recordPollFailure,
     resync,
+    reportUiMismatch,
+    clearUiMismatch,
+    clearWarning,
   }
 }

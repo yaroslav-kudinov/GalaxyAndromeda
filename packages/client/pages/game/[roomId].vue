@@ -61,6 +61,12 @@ import { bootstrapToLobbySlots, defaultSlotForRoom, roomHasFreeSlot } from '~/ut
 import { useGamePresence } from '~/composables/useGamePresence'
 import { usePlayerProfile } from '~/composables/usePlayerProfile'
 import { useObservationSync } from '~/composables/useObservationSync'
+import {
+  combatUiMatchesExpectation,
+  combatUiMismatchMessage,
+  type CombatUiExpectation,
+  type CombatUiPresentation,
+} from '~/composables/useCombatUiConsistency'
 import type { LobbyPlayerSlot } from '~/components/LobbyPlayerList.vue'
 import { useMarkerMapPick, type MarkerOrderConfirmResult } from '~/composables/useMarkerMapPick'
 import { useProductionShipPick } from '~/composables/useProductionShipPick'
@@ -127,6 +133,7 @@ const observationSync = useObservationSync({
 const {
   warningVisible: syncWarningVisible,
   warningReason: syncWarningReason,
+  warningKind: syncWarningKind,
   resyncing: syncResyncing,
 } = observationSync
 
@@ -459,6 +466,29 @@ const showCombatContinueDecision = computed(
     && !roundResultsPendingView.value,
 )
 
+/** Что сервер ожидает от этого игрока в UI боя */
+const combatUiExpectation = computed((): CombatUiExpectation => {
+  if (serverStatus.value !== 'online' || roomId.value.startsWith('local-')) return null
+  if (!hasActivePendingCombat.value) return null
+  if (combatDecisionRole.value != null) return 'continue-decision'
+  if (isCombatDestructionChooser.value) return 'destruction'
+  if (combatPhase.value === 'prep' && combatParticipantRole.value != null) return 'prep'
+  return null
+})
+
+/** Что реально показано игроку */
+const combatUiPresentation = computed((): CombatUiPresentation => {
+  if (showCombatContinueDecision.value) return 'continue-banner'
+  if (!battleModalOpen.value) return 'none'
+  if (combatPhase.value === 'prep') return 'prep-modal'
+  if (combatPhase.value === 'awaiting-destruction') return 'destruction-modal'
+  if (combatPhase.value === 'awaiting-continue') {
+    if (combatDecisionRole.value != null && !roundResultsPendingView.value) return 'continue-modal'
+    return 'results-modal'
+  }
+  return 'none'
+})
+
 /** Идёт бой, в котором вы сейчас ничего не решаете */
 const showForeignCombatBanner = computed(
   () =>
@@ -564,6 +594,55 @@ function openBattleModalFromPending() {
   battlePreviewSnapshot.value = preview
   battleModalOpen.value = true
 }
+
+function recoverCombatUiForExpectation(expectation: CombatUiExpectation) {
+  if (expectation === 'continue-decision') {
+    if (battleResolutionKey.value) {
+      dismissedCombatResultKey.value = battleResolutionKey.value
+    }
+    battleModalOpen.value = false
+    battlePreviewSnapshot.value = null
+    return
+  }
+  if (expectation === 'destruction' || expectation === 'prep') {
+    openBattleModalFromPending()
+  }
+}
+
+let combatUiMismatchTimer: ReturnType<typeof setTimeout> | null = null
+watch(
+  [combatUiExpectation, combatUiPresentation],
+  () => {
+    if (combatUiMismatchTimer) {
+      clearTimeout(combatUiMismatchTimer)
+      combatUiMismatchTimer = null
+    }
+    const expectation = combatUiExpectation.value
+    const presentation = combatUiPresentation.value
+    if (!expectation || combatUiMatchesExpectation(expectation, presentation)) {
+      observationSync.clearUiMismatch()
+      return
+    }
+    // Короткая пауза: не орём на переходные кадры (закрытие модалки → баннер).
+    combatUiMismatchTimer = setTimeout(() => {
+      combatUiMismatchTimer = null
+      const exp = combatUiExpectation.value
+      const pres = combatUiPresentation.value
+      if (!exp || combatUiMatchesExpectation(exp, pres)) {
+        observationSync.clearUiMismatch()
+        return
+      }
+      const msg = combatUiMismatchMessage(exp)
+      observationSync.reportUiMismatch(msg)
+      recoverCombatUiForExpectation(exp)
+      void observationSync.resync(msg)
+    }, 500)
+  },
+)
+
+onUnmounted(() => {
+  if (combatUiMismatchTimer) clearTimeout(combatUiMismatchTimer)
+})
 
 watch(
   pendingCombatState,
@@ -2414,15 +2493,30 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
     <section
       v-if="syncWarningVisible && !roomId.startsWith('local-')"
       class="sync-warning"
+      :class="{ 'sync-warning--ui-mismatch': syncWarningKind === 'ui-mismatch' }"
       role="alert"
     >
-      <strong>Состояние могло рассинхронизироваться</strong>
+      <strong>
+        {{
+          syncWarningKind === 'ui-mismatch'
+            ? 'Рассинхрон с сервером'
+            : 'Состояние могло рассинхронизироваться'
+        }}
+      </strong>
       <p>{{ syncWarningReason ?? 'Не удалось подтвердить актуальность данных.' }}</p>
       <div class="sync-warning-actions">
         <button
+          v-if="syncWarningKind === 'ui-mismatch' && combatUiExpectation"
           type="button"
           :disabled="syncResyncing"
-          @click="observationSync.resync('Игрок запросил синхронизацию.')"
+          @click="recoverCombatUiForExpectation(combatUiExpectation)"
+        >
+          Показать нужный UI боя
+        </button>
+        <button
+          type="button"
+          :disabled="syncResyncing"
+          @click="observationSync.resync(syncWarningReason ?? 'Игрок запросил синхронизацию.')"
         >
           {{ syncResyncing ? 'Синхронизация…' : 'Синхронизировать' }}
         </button>
@@ -3033,6 +3127,14 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
   text-align: center;
   pointer-events: auto;
 }
+.sync-warning--ui-mismatch {
+  border-color: rgba(248, 113, 113, 0.9);
+  background: rgba(127, 29, 29, 0.97);
+  color: #fee2e2;
+}
+.sync-warning--ui-mismatch p {
+  color: #fecaca;
+}
 .sync-warning p {
   margin: 0.35rem 0 0;
   font-size: 0.8rem;
@@ -3040,6 +3142,7 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
 }
 .sync-warning-actions {
   display: flex;
+  flex-wrap: wrap;
   justify-content: center;
   gap: 0.5rem;
   margin-top: 0.65rem;
@@ -3047,6 +3150,10 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
 .sync-warning-actions button:first-child {
   border-color: #fbbf24;
   background: #b45309;
+}
+.sync-warning--ui-mismatch .sync-warning-actions button:first-child {
+  border-color: #fca5a5;
+  background: #991b1b;
 }
 .map-pick-banner--combat {
   border-color: rgba(248, 113, 113, 0.6);
