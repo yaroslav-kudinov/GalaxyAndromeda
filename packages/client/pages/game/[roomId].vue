@@ -496,7 +496,11 @@ watch(showCombatContinueDecision, (active) => {
 watch(
   battleResolutionKey,
   (key, prev) => {
-    if (key && key !== prev) dismissedCombatResultKey.value = null
+    // Новый результат снова показывается, но не затираем намеренный dismiss именно
+    // этого ключа (confirm-destruction ставит его синхронно до flush watcher-ов).
+    if (key && key !== prev && dismissedCombatResultKey.value !== key) {
+      dismissedCombatResultKey.value = null
+    }
   },
 )
 
@@ -751,7 +755,6 @@ function applyObservation(
       battleResolution.value = next
     }
   }
-
   if (saveFile.value) {
     saveFile.value = {
       ...saveFile.value,
@@ -1328,7 +1331,7 @@ async function submitCombatPrepUnready() {
   }
 }
 
-async function submitCombatSupportSide(side: 'attacker' | 'defender') {
+async function submitCombatSupportSide(side: 'attacker' | 'defender' | null) {
   if (battleResolving.value) return
   battleResolving.value = true
   try {
@@ -1339,7 +1342,7 @@ async function submitCombatSupportSide(side: 'attacker' | 'defender') {
     })
     applyObservation(obs)
     persistLocal()
-    markerActionHint.value = 'Поддержка выбрана'
+    markerActionHint.value = side == null ? 'Вы не поддерживаете никого в этом бою' : 'Поддержка выбрана'
   } catch (e) {
     markerActionHint.value = actionErrorMessage(e, 'Не удалось выбрать поддержку')
   } finally {
@@ -1401,13 +1404,11 @@ async function confirmBattleDestruction(destructionSelection: string[]) {
 
     pendingOrderAfterBattle.value = null
     markerActionSource.value = null
-    // После выбора уничтожения: показать итог (post), не dismiss — после закрытия модалки
-    // появится баннер continue/retreat. Раньше сразу dismiss+close прятал и итог, и баннер
-    // при гонке с watch(pendingCombat).
+    // Подтверждающий уже видел итог на экране выбора потерь — сразу закрываем модалку,
+    // чтобы показался баннер continue/retreat (он скрыт, пока модалка открыта).
     if (combatPhase.value === 'awaiting-continue') {
-      dismissedCombatResultKey.value = null
-      battleModalOpen.value = true
-      markerActionHint.value = 'Уничтожение применено — закройте итог, затем выберите: продолжить или отступить'
+      closeBattleModal()
+      markerActionHint.value = 'Уничтожение применено — выберите: продолжить бой или отступить'
     } else if (!hasActivePendingCombat.value) {
       battleModalOpen.value = false
       if (battleResolutionKey.value) {

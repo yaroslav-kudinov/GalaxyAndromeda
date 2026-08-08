@@ -12,7 +12,6 @@ import {
   DESTRUCTION_PRIORITY,
   applyPrioritySkipToggle,
   canTogglePrioritySkipType,
-  combatResolutionFingerprint,
   estimateRoundOneOutcome,
   formatCombatRoundDiceTotals,
   formatShieldContributionLabel,
@@ -54,7 +53,7 @@ const emit = defineEmits<{
   confirmDestruction: [string[]]
   prepReady: [CombatOptions]
   prepUnready: []
-  supportSide: [side: 'attacker' | 'defender']
+  supportSide: [side: 'attacker' | 'defender' | null]
   cancelPrep: []
   countdownComplete: []
 }>()
@@ -301,9 +300,21 @@ function resolutionReadyForRolling(): boolean {
   return props.resolution != null && props.prepPhase == null
 }
 
+/**
+ * Ключ анимации — только броски текущего раунда. Применение уничтожения меняет
+ * fingerprint результата (destroyed/needsSelection), но броски те же — повторно
+ * проигрывать анимацию и показывать «старый» состав флота нельзя.
+ */
+function combatAnimationKey(): string | null {
+  if (!props.resolution) return null
+  const rolls = roundResult.value?.shipRolls ?? []
+  const roundsLen = props.resolution.rounds?.length ?? 1
+  return `${roundsLen}:${rolls.map((r) => `${r.shipId}:${r.side}:${r.total}`).join('|')}`
+}
+
 function tryStartRollingAnimation() {
   if (!resolutionReadyForRolling()) return
-  const key = combatResolutionFingerprint(props.resolution)
+  const key = combatAnimationKey()
   if (!key) return
 
   if (key === lastAnimatedResolutionKey.value) {
@@ -317,7 +328,7 @@ function tryStartRollingAnimation() {
 }
 
 watch(
-  () => [combatResolutionFingerprint(props.resolution), props.prepPhase] as const,
+  () => [combatAnimationKey(), props.prepPhase] as const,
   ([fp, prepPhase]) => {
     if (!fp) {
       lastAnimatedResolutionKey.value = null
@@ -1246,6 +1257,9 @@ onUnmounted(() => {
 
       <footer class="battle-foot">
         <template v-if="phase === 'pre' && isThirdParty && localSupportCandidate">
+          <button type="button" class="btn-secondary" :disabled="resolving" @click="emit('supportSide', null)">
+            Не поддерживать
+          </button>
           <button type="button" class="btn-secondary" :disabled="resolving" @click="emit('supportSide', 'attacker')">
             Поддержать атакующего
           </button>
