@@ -10,7 +10,10 @@ import type {
 } from '@galaxy/rules'
 import {
   DESTRUCTION_PRIORITY,
+  applyPrioritySkipToggle,
+  canTogglePrioritySkipType,
   combatResolutionFingerprint,
+  estimateRoundOneOutcome,
   formatCombatRoundDiceTotals,
   formatShieldContributionLabel,
   SHIP_LABELS,
@@ -19,6 +22,9 @@ import {
   COMBAT_PREP_COUNTDOWN_MS,
   SHIP_DESTROY_COST,
   PRIORITY_SKIP_DESTROY_SURCHARGE,
+  presentDestructionPriorityChain,
+  primaryDestructionType,
+  selectableDestructionTypes,
   validateDestructionSelection,
   type ShipUnit,
 } from '@galaxy/rules'
@@ -153,9 +159,39 @@ const attackerTypesPresent = computed(() => {
   if (isBombardment.value) {
     return uniqueTypes(props.preview.attacker.supportingShips.map((s) => ({ type: s.type })))
   }
+  // При показе бросков — состав из фактических shipRolls раунда (не устаревший preview).
+  if (allRolls.value.length) {
+    return uniqueTypes(
+      allRolls.value
+        .filter((r) => r.side === 'attacker' && !r.supportRolls?.length)
+        .map((r) => ({ type: r.shipType })),
+    )
+  }
   return uniqueTypes(props.preview.attacker.ships)
 })
-const defenderTypesPresent = computed(() => uniqueTypes(props.preview.defender.ships))
+const defenderTypesPresent = computed(() => {
+  if (allRolls.value.length) {
+    return uniqueTypes(
+      allRolls.value
+        .filter((r) => r.side === 'defender' && !r.supportRolls?.length)
+        .map((r) => ({ type: r.shipType })),
+    )
+  }
+  return uniqueTypes(props.preview.defender.ships)
+})
+
+function countShipsOfType(side: 'attacker' | 'defender', type: ShipType): number {
+  if (side === 'attacker' && isBombardment.value) {
+    return props.preview.attacker.supportingShips.filter((s) => s.type === type).length
+  }
+  if (allRolls.value.length) {
+    return allRolls.value.filter(
+      (r) => r.side === side && r.shipType === type && !r.supportRolls?.length,
+    ).length
+  }
+  const ships = side === 'attacker' ? props.preview.attacker.ships : props.preview.defender.ships
+  return ships.filter((s) => s.type === type).length
+}
 
 const attackerSupportShips = computed(() =>
   isBombardment.value ? [] : props.preview.attacker.supportingShips,
@@ -469,15 +505,30 @@ const continueStatusText = computed(() => {
     : 'Раунд завершён.'
 })
 
-function toggleSkipType(side: 'attacker' | 'defender', type: ShipType) {
-  const refVal = side === 'attacker' ? attackerSkipTypes : defenderSkipTypes
-  const set = new Set(refVal.value)
-  if (set.has(type)) {
-    set.delete(type)
-  } else {
-    set.add(type)
+function presentTypesOnFleet(fleetSide: 'attacker' | 'defender'): ShipType[] {
+  return fleetSide === 'attacker' ? attackerTypesPresent.value : defenderTypesPresent.value
+}
+
+function skipTitleOnFleet(fleetSide: 'attacker' | 'defender', type: ShipType): string {
+  if (!canToggleSkipOnFleet(fleetSide)) return SHIP_LABELS[type]
+  if (isTypeSkippedOnFleet(fleetSide, type)) return 'Снять пропуск (снимет и следующие)'
+  if (canInteractSkipOnCard(fleetSide, type)) return 'Пропустить приоритет (+1 цена)'
+  const chain = presentDestructionPriorityChain(presentTypesOnFleet(fleetSide))
+  if (chain.length <= 1 || chain[chain.length - 1] === type) {
+    return 'Пропуск бессмысленен: уже можно атаковать любой корабль этого флота'
   }
-  refVal.value = [...set]
+  return 'Сначала пропустите предыдущий тип в порядке приоритета'
+}
+
+function canInteractSkipOnCard(fleetSide: 'attacker' | 'defender', type: ShipType): boolean {
+  if (!canToggleSkipOnFleet(fleetSide)) return false
+  return canTogglePrioritySkipType(type, skipsAppliedToFleet(fleetSide), presentTypesOnFleet(fleetSide))
+}
+
+function toggleSkipType(side: 'attacker' | 'defender', type: ShipType) {
+  const fleetSide: 'attacker' | 'defender' = side === 'attacker' ? 'defender' : 'attacker'
+  const refVal = side === 'attacker' ? attackerSkipTypes : defenderSkipTypes
+  refVal.value = applyPrioritySkipToggle(type, refVal.value, presentTypesOnFleet(fleetSide))
 }
 
 function buildCombatOptions(): CombatOptions {
@@ -550,14 +601,6 @@ function logEntries(step: BattleLogEntry['step']): BattleLogEntry[] {
   return props.resolution?.log.filter((e) => e.step === step) ?? []
 }
 
-function countShipsOfType(side: 'attacker' | 'defender', type: ShipType): number {
-  if (side === 'attacker' && isBombardment.value) {
-    return props.preview.attacker.supportingShips.filter((s) => s.type === type).length
-  }
-  const ships = side === 'attacker' ? props.preview.attacker.ships : props.preview.defender.ships
-  return ships.filter((s) => s.type === type).length
-}
-
 /** Skip на флот объявляет противоположная сторона. */
 function skipsAppliedToFleet(fleetSide: 'attacker' | 'defender'): ShipType[] {
   return fleetSide === 'attacker' ? defenderSkipTypes.value : attackerSkipTypes.value
@@ -600,22 +643,98 @@ function isLocalFleet(side: 'attacker' | 'defender'): boolean {
   return fleetOwnerId(side) === props.localPlayerId
 }
 
-const priorityRailTypes = computed(() => {
-  const present = new Set([...attackerTypesPresent.value, ...defenderTypesPresent.value])
-  return DESTRUCTION_PRIORITY.filter((t) => present.has(t))
-})
-
 const enemyFleetSide = computed((): 'attacker' | 'defender' | null => {
   if (isLocalAttacker.value) return 'defender'
   if (isLocalDefender.value && !isBombardment.value) return 'attacker'
   return null
 })
 
-const mySkipCount = computed(() => {
-  if (isLocalAttacker.value) return attackerSkipTypes.value.length
-  if (isLocalDefender.value) return defenderSkipTypes.value.length
-  return 0
+/** Рейка приоритета — флот противника, по которому объявляем skip. */
+const priorityRailTypes = computed(() => {
+  if (!enemyFleetSide.value) {
+    const present = new Set([...attackerTypesPresent.value, ...defenderTypesPresent.value])
+    return DESTRUCTION_PRIORITY.filter((t) => present.has(t))
+  }
+  return presentDestructionPriorityChain(presentTypesOnFleet(enemyFleetSide.value))
 })
+
+const mySkipTypes = computed((): ShipType[] => {
+  if (isLocalAttacker.value) return attackerSkipTypes.value
+  if (isLocalDefender.value) return defenderSkipTypes.value
+  return []
+})
+
+const mySkipCount = computed(() => mySkipTypes.value.length)
+
+const attackableEnemyTypes = computed((): ShipType[] => {
+  if (!enemyFleetSide.value) return []
+  return selectableDestructionTypes(presentTypesOnFleet(enemyFleetSide.value), mySkipTypes.value)
+})
+
+const primaryEnemyTargetType = computed((): ShipType | null => {
+  if (!enemyFleetSide.value) return null
+  return primaryDestructionType(presentTypesOnFleet(enemyFleetSide.value), mySkipTypes.value)
+})
+
+const attackableEnemyLabels = computed(() =>
+  attackableEnemyTypes.value.map((t) => SHIP_LABELS[t]).join(', '),
+)
+
+const nextSkippableType = computed((): ShipType | null => {
+  if (!enemyFleetSide.value) return null
+  const present = presentTypesOnFleet(enemyFleetSide.value)
+  const chain = presentDestructionPriorityChain(present)
+  for (const t of chain) {
+    if (canTogglePrioritySkipType(t, mySkipTypes.value, present) && !mySkipTypes.value.includes(t)) {
+      return t
+    }
+  }
+  return null
+})
+
+const prepDiceSummary = computed(() => {
+  const a =
+    props.preview.attacker.combatDiceTotal + props.preview.attacker.supportDiceTotal
+  const d =
+    props.preview.defender.combatDiceTotal + props.preview.defender.supportDiceTotal
+  const edge = (a - d) * 3.5
+  return { attackerDice: a, defenderDice: d, expectedEdge: edge }
+})
+
+const prepOdds = computed(() =>
+  estimateRoundOneOutcome(props.preview, { samples: 160 }),
+)
+
+function pct(n: number): string {
+  return `${Math.round(n * 100)}%`
+}
+
+function railItemClass(t: ShipType): Record<string, boolean> {
+  if (!enemyFleetSide.value) return {}
+  const skipped = isTypeSkippedOnFleet(enemyFleetSide.value, t)
+  const skippable =
+    canInteractSkipOnCard(enemyFleetSide.value, t) && !skipped
+  const primary = primaryEnemyTargetType.value === t
+  const locked =
+    canToggleSkipOnFleet(enemyFleetSide.value)
+    && !skipped
+    && !skippable
+    && !primary
+  return {
+    'priority-rail-item--enemy-skip': skipped,
+    'priority-rail-item--skippable': skippable,
+    'priority-rail-item--primary': primary && !skipped,
+    'priority-rail-item--locked': locked,
+  }
+}
+
+function isEnemyShipAttackable(fleetSide: 'attacker' | 'defender', type: ShipType): boolean {
+  return enemyFleetSide.value === fleetSide && attackableEnemyTypes.value.includes(type)
+}
+
+function isEnemyShipPrimary(fleetSide: 'attacker' | 'defender', type: ShipType): boolean {
+  return enemyFleetSide.value === fleetSide && primaryEnemyTargetType.value === type
+}
 
 onMounted(() => {
   window.addEventListener('keydown', onKeydown)
@@ -709,15 +828,18 @@ onUnmounted(() => {
                   class="ship-card"
                   :class="{
                     'ship-card--skipped': isTypeSkippedOnFleet('attacker', t),
-                    'ship-card--interactive': canToggleSkipOnFleet('attacker'),
+                    'ship-card--interactive': canInteractSkipOnCard('attacker', t),
+                    'ship-card--pulse': canInteractSkipOnCard('attacker', t) && !isTypeSkippedOnFleet('attacker', t),
+                    'ship-card--attackable': isEnemyShipAttackable('attacker', t),
+                    'ship-card--primary-target': isEnemyShipPrimary('attacker', t),
+                    'ship-card--dim':
+                      canToggleSkipOnFleet('attacker')
+                      && !canInteractSkipOnCard('attacker', t)
+                      && !isTypeSkippedOnFleet('attacker', t),
                     'ship-card--mine': isLocalFleet('attacker'),
                   }"
-                  :disabled="!canToggleSkipOnFleet('attacker')"
-                  :title="
-                    canToggleSkipOnFleet('attacker')
-                      ? (isTypeSkippedOnFleet('attacker', t) ? 'Снять пропуск' : 'Пропустить приоритет (+1 цена)')
-                      : SHIP_LABELS[t]
-                  "
+                  :disabled="!canInteractSkipOnCard('attacker', t)"
+                  :title="skipTitleOnFleet('attacker', t)"
                   @click="toggleSkipOnFleet('attacker', t)"
                 >
                   <svg class="ship-card-glyph" viewBox="-14 -14 28 28" aria-hidden="true">
@@ -726,6 +848,7 @@ onUnmounted(() => {
                   <span v-if="countShipsOfType('attacker', t) > 1" class="ship-card-count">
                     ×{{ countShipsOfType('attacker', t) }}
                   </span>
+                  <span v-if="isEnemyShipPrimary('attacker', t)" class="target-badge">цель</span>
                   <span class="ship-card-meta">
                     <span v-if="diceForType(t)" class="meta-dice">{{ diceForType(t) }}d6</span>
                     <span class="meta-cost">{{ destroyCostLabel(t, isTypeSkippedOnFleet('attacker', t)) }}</span>
@@ -782,15 +905,18 @@ onUnmounted(() => {
                   class="ship-card"
                   :class="{
                     'ship-card--skipped': isTypeSkippedOnFleet('defender', t),
-                    'ship-card--interactive': canToggleSkipOnFleet('defender'),
+                    'ship-card--interactive': canInteractSkipOnCard('defender', t),
+                    'ship-card--pulse': canInteractSkipOnCard('defender', t) && !isTypeSkippedOnFleet('defender', t),
+                    'ship-card--attackable': isEnemyShipAttackable('defender', t),
+                    'ship-card--primary-target': isEnemyShipPrimary('defender', t),
+                    'ship-card--dim':
+                      canToggleSkipOnFleet('defender')
+                      && !canInteractSkipOnCard('defender', t)
+                      && !isTypeSkippedOnFleet('defender', t),
                     'ship-card--mine': isLocalFleet('defender'),
                   }"
-                  :disabled="!canToggleSkipOnFleet('defender')"
-                  :title="
-                    canToggleSkipOnFleet('defender')
-                      ? (isTypeSkippedOnFleet('defender', t) ? 'Снять пропуск' : 'Пропустить приоритет (+1 цена)')
-                      : SHIP_LABELS[t]
-                  "
+                  :disabled="!canInteractSkipOnCard('defender', t)"
+                  :title="skipTitleOnFleet('defender', t)"
                   @click="toggleSkipOnFleet('defender', t)"
                 >
                   <svg class="ship-card-glyph" viewBox="-14 -14 28 28" aria-hidden="true">
@@ -799,6 +925,7 @@ onUnmounted(() => {
                   <span v-if="countShipsOfType('defender', t) > 1" class="ship-card-count">
                     ×{{ countShipsOfType('defender', t) }}
                   </span>
+                  <span v-if="isEnemyShipPrimary('defender', t)" class="target-badge">цель</span>
                   <span class="ship-card-meta">
                     <span v-if="diceForType(t)" class="meta-dice">{{ diceForType(t) }}d6</span>
                     <span class="meta-cost">{{ destroyCostLabel(t, isTypeSkippedOnFleet('defender', t)) }}</span>
@@ -824,39 +951,97 @@ onUnmounted(() => {
             </section>
           </div>
 
-          <p v-if="enemyFleetSide && !isDefenderObserver" class="skip-cue">
-            Клик по кораблю
-            <em>{{ enemyFleetSide === 'defender' ? 'защиты' : 'атаки' }}</em>
-            — пропуск приоритета
-            <span v-if="mySkipCount" class="skip-cue-count">· {{ mySkipCount }}</span>
-          </p>
+          <div v-if="!isDefenderObserver" class="prep-outlook">
+            <p class="prep-odds" title="Оценка по среднему броску 3.5 и симуляции раунда">
+              <span class="prep-odds-dice">
+                {{ prepDiceSummary.attackerDice }}d6 vs {{ prepDiceSummary.defenderDice }}d6
+              </span>
+              <span
+                class="prep-odds-edge"
+                :class="{
+                  'prep-odds-edge--att': prepDiceSummary.expectedEdge > 0.5,
+                  'prep-odds-edge--def': prepDiceSummary.expectedEdge < -0.5,
+                }"
+              >
+                ожид. перевес
+                {{ prepDiceSummary.expectedEdge > 0 ? '+' : '' }}{{ prepDiceSummary.expectedEdge.toFixed(1) }}
+              </span>
+              <span class="prep-odds-pct">
+                атака {{ pct(prepOdds.win) }} · ничья {{ pct(prepOdds.draw) }} · защита {{ pct(prepOdds.defeat) }}
+              </span>
+            </p>
+            <p v-if="enemyFleetSide" class="skip-cue">
+              Можно выбрать
+              <em>пропуск приоритета</em>
+              кликом по
+              <template v-if="nextSkippableType">
+                мигающему типу
+                <strong>{{ SHIP_LABELS[nextSkippableType] }}</strong>
+              </template>
+              <template v-else>флоту противника</template>
+              — только на этот раунд
+              <span v-if="mySkipCount" class="skip-cue-count">· пропущено: {{ mySkipCount }}</span>
+            </p>
+            <p v-if="enemyFleetSide && attackableEnemyLabels" class="attackable-cue">
+              При победе можно уничтожать:
+              <strong>{{ attackableEnemyLabels }}</strong>
+              <span v-if="primaryEnemyTargetType" class="attackable-cue-primary">
+                · основная цель: {{ SHIP_LABELS[primaryEnemyTargetType] }}
+              </span>
+            </p>
+          </div>
 
-          <ol v-if="priorityRailTypes.length" class="priority-rail" aria-label="Порядок уничтожения">
+          <ol
+            v-if="priorityRailTypes.length"
+            class="priority-rail"
+            aria-label="Порядок уничтожения / пропуск приоритета"
+          >
             <li
               v-for="(t, i) in priorityRailTypes"
               :key="'rail-' + t"
               class="priority-rail-item"
-              :class="{
-                'priority-rail-item--enemy-skip':
-                  enemyFleetSide != null && isTypeSkippedOnFleet(enemyFleetSide, t),
-              }"
+              :class="railItemClass(t)"
             >
               <span v-if="i > 0" class="priority-rail-arrow" aria-hidden="true">→</span>
-              <svg class="priority-rail-glyph" viewBox="-12 -12 24 24" aria-hidden="true">
-                <ShipGlyph
-                  :type="t"
-                  :player-color="
-                    enemyFleetSide === 'defender'
-                      ? playerColor(preview.defenderId)
-                      : enemyFleetSide === 'attacker'
-                        ? playerColor(preview.attackerId)
-                        : '#94a3b8'
-                  "
-                  :scale="0.7"
-                  :show-plate="false"
-                />
-              </svg>
-              <span class="priority-rail-label">{{ SHIP_LABELS[t] }}</span>
+              <button
+                v-if="enemyFleetSide && canToggleSkipOnFleet(enemyFleetSide)"
+                type="button"
+                class="priority-rail-btn"
+                :disabled="!canInteractSkipOnCard(enemyFleetSide, t)"
+                :title="skipTitleOnFleet(enemyFleetSide, t)"
+                @click="toggleSkipOnFleet(enemyFleetSide, t)"
+              >
+                <svg class="priority-rail-glyph" viewBox="-12 -12 24 24" aria-hidden="true">
+                  <ShipGlyph
+                    :type="t"
+                    :player-color="
+                      enemyFleetSide === 'defender'
+                        ? playerColor(preview.defenderId)
+                        : playerColor(preview.attackerId)
+                    "
+                    :scale="0.7"
+                    :show-plate="false"
+                  />
+                </svg>
+                <span class="priority-rail-label">{{ SHIP_LABELS[t] }}</span>
+              </button>
+              <template v-else>
+                <svg class="priority-rail-glyph" viewBox="-12 -12 24 24" aria-hidden="true">
+                  <ShipGlyph
+                    :type="t"
+                    :player-color="
+                      enemyFleetSide === 'defender'
+                        ? playerColor(preview.defenderId)
+                        : enemyFleetSide === 'attacker'
+                          ? playerColor(preview.attackerId)
+                          : '#94a3b8'
+                    "
+                    :scale="0.7"
+                    :show-plate="false"
+                  />
+                </svg>
+                <span class="priority-rail-label">{{ SHIP_LABELS[t] }}</span>
+              </template>
             </li>
           </ol>
 
@@ -1327,6 +1512,21 @@ onUnmounted(() => {
 .ship-card--interactive:active {
   transform: translateY(0);
 }
+.ship-card--pulse {
+  animation: skip-pulse 1.35s ease-in-out infinite;
+}
+.ship-card--dim:disabled,
+.ship-card--dim {
+  opacity: 0.38;
+  filter: grayscale(0.45);
+}
+.ship-card--attackable:not(.ship-card--skipped) {
+  border-color: rgba(74, 222, 128, 0.55);
+}
+.ship-card--primary-target:not(.ship-card--skipped) {
+  border-color: rgba(74, 222, 128, 0.85);
+  box-shadow: 0 0 0 1px rgba(74, 222, 128, 0.35);
+}
 .ship-card--skipped {
   border-color: rgba(251, 191, 36, 0.75);
   background: rgba(120, 53, 15, 0.35);
@@ -1334,6 +1534,20 @@ onUnmounted(() => {
 .ship-card--skipped .ship-card-glyph {
   opacity: 0.55;
   filter: grayscale(0.35);
+}
+.target-badge {
+  position: absolute;
+  top: 0.2rem;
+  left: 0.2rem;
+  font-size: 0.52rem;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: #052e16;
+  background: #4ade80;
+  border-radius: 3px;
+  padding: 0 0.2rem;
+  line-height: 1.25;
 }
 .ship-card--mine:not(.ship-card--interactive) {
   border-style: dashed;
@@ -1391,19 +1605,74 @@ onUnmounted(() => {
   font-size: 0.72rem;
   color: #64748b;
 }
-.skip-cue {
+.prep-outlook {
   margin: 0 0 0.55rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+.prep-odds {
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem 0.65rem;
+  padding: 0.35rem 0.5rem;
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.55);
+  border: 1px solid rgba(71, 85, 105, 0.7);
+  font-size: 0.7rem;
+  color: #94a3b8;
+}
+.prep-odds-dice {
+  font-weight: 700;
+  color: #e2e8f0;
+  font-variant-numeric: tabular-nums;
+}
+.prep-odds-edge {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: #cbd5e1;
+}
+.prep-odds-edge--att { color: #fca5a5; }
+.prep-odds-edge--def { color: #93c5fd; }
+.prep-odds-pct {
+  font-variant-numeric: tabular-nums;
+  color: #64748b;
+}
+.skip-cue {
+  margin: 0;
   text-align: center;
   font-size: 0.72rem;
   color: #94a3b8;
+  line-height: 1.35;
 }
 .skip-cue em {
   font-style: normal;
   color: #fde68a;
 }
+.skip-cue strong {
+  color: #fbbf24;
+  font-weight: 700;
+}
 .skip-cue-count {
   color: #fbbf24;
   font-weight: 700;
+}
+.attackable-cue {
+  margin: 0;
+  text-align: center;
+  font-size: 0.74rem;
+  color: #86efac;
+  line-height: 1.35;
+}
+.attackable-cue strong {
+  color: #bbf7d0;
+  font-weight: 700;
+}
+.attackable-cue-primary {
+  color: #4ade80;
 }
 .priority-rail {
   display: flex;
@@ -1422,7 +1691,22 @@ onUnmounted(() => {
   display: inline-flex;
   align-items: center;
   gap: 0.2rem;
-  opacity: 0.85;
+  opacity: 0.9;
+}
+.priority-rail-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  margin: 0;
+  padding: 0.15rem 0.25rem;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+.priority-rail-btn:disabled {
+  cursor: default;
 }
 .priority-rail-item--enemy-skip {
   opacity: 1;
@@ -1430,6 +1714,19 @@ onUnmounted(() => {
 .priority-rail-item--enemy-skip .priority-rail-label {
   text-decoration: line-through;
   color: #fde68a;
+}
+.priority-rail-item--skippable .priority-rail-btn {
+  animation: skip-pulse 1.35s ease-in-out infinite;
+  border-color: rgba(251, 191, 36, 0.55);
+  background: rgba(120, 53, 15, 0.28);
+}
+.priority-rail-item--primary .priority-rail-label {
+  color: #86efac;
+  font-weight: 700;
+}
+.priority-rail-item--locked {
+  opacity: 0.32;
+  filter: grayscale(0.4);
 }
 .priority-rail-arrow {
   color: #475569;
@@ -1444,6 +1741,23 @@ onUnmounted(() => {
 .priority-rail-label {
   font-size: 0.65rem;
   color: #cbd5e1;
+}
+@keyframes skip-pulse {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(251, 191, 36, 0.15);
+    filter: brightness(1);
+  }
+  50% {
+    box-shadow: 0 0 0 3px rgba(251, 191, 36, 0.28);
+    filter: brightness(1.12);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ship-card--pulse,
+  .priority-rail-item--skippable .priority-rail-btn {
+    animation: none;
+  }
 }
 .shield-chips {
   display: flex;

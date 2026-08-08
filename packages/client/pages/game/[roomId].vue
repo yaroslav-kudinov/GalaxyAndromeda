@@ -423,7 +423,7 @@ const showCombatContinueDecision = computed(
   () =>
     combatPhase.value === 'awaiting-continue'
     && combatDecisionRole.value != null
-    && !needsBattleModal.value,
+    && !battleModalOpen.value,
 )
 
 /** Идёт бой, в котором вы сейчас ничего не решаете */
@@ -503,7 +503,13 @@ watch(
 function openBattleModalFromPending() {
   if (!needsBattleModal.value || !snapshot.value) return
   const preview = buildCombatPreviewFromPending(snapshot.value)
-  if (!preview) return
+  if (!preview) {
+    // Нельзя показать итоги — не блокируем баннер continue/retreat.
+    if (combatPhase.value === 'awaiting-continue' && battleResolutionKey.value) {
+      dismissedCombatResultKey.value = battleResolutionKey.value
+    }
+    return
+  }
   battlePreviewSnapshot.value = preview
   battleModalOpen.value = true
 }
@@ -517,6 +523,12 @@ watch(
         void resyncAfterCombatCountdown()
       }
       return
+    }
+
+    // Пока идёт бой — модалка маркера не должна перекрывать continue/retreat.
+    if (markerActionOpen.value) {
+      markerActionOpen.value = false
+      markerActionSource.value = null
     }
 
     openBattleModalFromPending()
@@ -1133,6 +1145,10 @@ async function confirmProductionRecharge(markerId: string) {
 }
 
 function openMarkerActionModal(q: number, r: number) {
+  if (hasActivePendingCombat.value) {
+    markerHint.value = 'Сначала завершите текущий бой (продолжить или отступить)'
+    return
+  }
   markerActionSource.value = { q, r }
   markerActionOpen.value = true
   markerActionHint.value = null
@@ -1385,7 +1401,22 @@ async function confirmBattleDestruction(destructionSelection: string[]) {
 
     pendingOrderAfterBattle.value = null
     markerActionSource.value = null
-    markerActionHint.value = 'Уничтожение применено'
+    // После выбора уничтожения: показать итог (post), не dismiss — после закрытия модалки
+    // появится баннер continue/retreat. Раньше сразу dismiss+close прятал и итог, и баннер
+    // при гонке с watch(pendingCombat).
+    if (combatPhase.value === 'awaiting-continue') {
+      dismissedCombatResultKey.value = null
+      battleModalOpen.value = true
+      markerActionHint.value = 'Уничтожение применено — закройте итог, затем выберите: продолжить или отступить'
+    } else if (!hasActivePendingCombat.value) {
+      battleModalOpen.value = false
+      if (battleResolutionKey.value) {
+        dismissedCombatResultKey.value = battleResolutionKey.value
+      }
+      markerActionHint.value = 'Уничтожение применено'
+    } else {
+      markerActionHint.value = 'Уничтожение применено'
+    }
   } catch (e) {
     markerActionHint.value = actionErrorMessage(e, 'Не удалось подтвердить уничтожение')
   } finally {
@@ -1401,9 +1432,19 @@ async function continuePendingCombatAction() {
   try {
     const obs = await submitGameAction(roomId.value, playerId.value, 'continue-combat')
     applyObservation(obs)
+    persistLocal()
+    // Новый раунд / конец боя — показать актуальный lastCombatResult (не старый флот).
+    const nextResult =
+      (obs.mechanics as { lastCombatResult?: CombatResolutionResult }).lastCombatResult ?? null
+    if (nextResult) {
+      battleResolution.value = nextResult
+      dismissedCombatResultKey.value = null
+    }
     markerActionHint.value = role === 'attacker'
       ? 'Вы продолжили бой — ждём решения защитника'
-      : 'Бой продолжен'
+      : (combatPhase.value === 'awaiting-continue' || combatPhase.value === 'awaiting-destruction'
+        ? 'Бой продолжен'
+        : 'Бой завершён')
   } catch (e) {
     markerActionHint.value = actionErrorMessage(e, 'Не удалось продолжить бой')
   }
@@ -1901,6 +1942,10 @@ async function selectCell(q: number, r: number) {
   const phase = snapshot.value?.phase
 
   if (isMyTurn.value && phase === 'actions' && hasMyActionMarkerAt(q, r)) {
+    if (hasActivePendingCombat.value) {
+      markerHint.value = 'Сначала завершите текущий бой (продолжить или отступить)'
+      return
+    }
     if (!canOpenMovementModal.value) {
       markerHint.value = ACTION_MARKER_ALREADY_RESOLVED_MSG
       return

@@ -124,6 +124,8 @@ import {
   executeMarkerMovement,
   getLegalActionsForSnapshot,
   getMovableShipsAtMarker,
+  getReachableHexKeys,
+  hexPathDistance,
   validateMarkerMovement,
 } from './movement.js'
 import { ONE_BATTLE_PER_MARKER_MSG } from './combat.js'
@@ -1178,6 +1180,7 @@ describe('movement', () => {
       name: 'Move test',
       cells: [
         { q: 0, r: -7, startPlayer: 1, startingShips: [{ type: 'destroyer', player: 1 }] },
+        { q: 0, r: -6 },
         { q: 1, r: -6 },
         { q: 1, r: -7, startPlayer: 2 },
         { q: 0, r: -5 },
@@ -1215,6 +1218,33 @@ describe('movement', () => {
     expect(options.length).toBeGreaterThan(0)
     expect(options[0]?.reachableKeys.length).toBeGreaterThan(0)
     expect(options[0]?.disabledReason).toBeUndefined()
+  })
+
+  it('getReachableHexKeys cannot cross map holes (missing hexes)', () => {
+    const gapMap = {
+      id: 'gap',
+      name: 'gap',
+      cells: [
+        { q: 0, r: 0 },
+        { q: 2, r: 0 },
+      ],
+    }
+    // Осевое расстояние 2, но гекса 1,0 нет — пути нет
+    expect(hexDistance({ q: 0, r: 0 }, { q: 2, r: 0 })).toBe(2)
+    expect(hexPathDistance(new Set(['0,0', '2,0']), { q: 0, r: 0 }, { q: 2, r: 0 }, 3)).toBeNull()
+    expect(getReachableHexKeys(gapMap, { q: 0, r: 0 }, 'destroyer')).not.toContain('2,0')
+
+    const bridgeMap = {
+      id: 'bridge',
+      name: 'bridge',
+      cells: [
+        { q: 0, r: 0 },
+        { q: 1, r: 0 },
+        { q: 2, r: 0 },
+      ],
+    }
+    expect(hexPathDistance(new Set(['0,0', '1,0', '2,0']), { q: 0, r: 0 }, { q: 2, r: 0 }, 3)).toBe(2)
+    expect(getReachableHexKeys(bridgeMap, { q: 0, r: 0 }, 'destroyer')).toContain('2,0')
   })
 
   it('treats absent player territory as neutral for movement', () => {
@@ -1315,7 +1345,7 @@ describe('movement', () => {
       validateMarkerMovement(game, map, 'player-1', { q: 0, r: -7 }, [
         { shipId, to: { q: 0, r: -3 } },
       ])[0],
-    ).toMatch(/дальность/i)
+    ).toMatch(/дальност|нет пути/i)
   })
 
   it('validateMarkerMovement rejects two combat destinations in one order', () => {

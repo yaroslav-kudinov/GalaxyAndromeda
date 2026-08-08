@@ -137,7 +137,104 @@ export const DESTRUCTION_PRIORITY: ShipType[] = [
 
 ]
 
+/** Типы противника в бою, упорядоченные по destructionPriority. */
+export function presentDestructionPriorityChain(
+  presentTypes: Iterable<ShipType>,
+): ShipType[] {
+  const set = new Set(presentTypes)
+  return DESTRUCTION_PRIORITY.filter((t) => set.has(t))
+}
 
+/** Skip-типы, отсортированные по цепочке приоритета среди присутствующих. */
+export function normalizePrioritySkipTypes(
+  skippedTypes: Iterable<ShipType>,
+  presentTypes: Iterable<ShipType>,
+): ShipType[] {
+  const skipped = new Set(skippedTypes)
+  return presentDestructionPriorityChain(presentTypes).filter((t) => skipped.has(t))
+}
+
+/**
+ * Допустимый набор priority skip: префикс цепочки присутствующих типов,
+ * без последнего типа (его skip бессмысленен — после пропуска предыдущих
+ * уже можно атаковать любой оставшийся корабль).
+ */
+export function isValidPrioritySkipSet(
+  skippedTypes: Iterable<ShipType>,
+  presentTypes: Iterable<ShipType>,
+): boolean {
+  const chain = presentDestructionPriorityChain(presentTypes)
+  const maxUseful = Math.max(0, chain.length - 1)
+  const skippedSet = new Set(skippedTypes)
+  for (const t of skippedSet) {
+    if (!chain.includes(t)) return false
+  }
+  const normalized = normalizePrioritySkipTypes(skippedTypes, presentTypes)
+  if (normalized.length !== skippedSet.size) return false
+  if (normalized.length > maxUseful) return false
+  for (let i = 0; i < normalized.length; i++) {
+    if (normalized[i] !== chain[i]) return false
+  }
+  return true
+}
+
+/** Можно ли кликнуть skip/unskip по типу (с учётом порядка). */
+export function canTogglePrioritySkipType(
+  type: ShipType,
+  currentlySkipped: readonly ShipType[],
+  presentTypes: Iterable<ShipType>,
+): boolean {
+  const chain = presentDestructionPriorityChain(presentTypes)
+  if (!chain.includes(type)) return false
+  const normalized = normalizePrioritySkipTypes(currentlySkipped, presentTypes)
+  if (normalized.includes(type)) return true
+  const maxUseful = Math.max(0, chain.length - 1)
+  if (normalized.length >= maxUseful) return false
+  return chain[normalized.length] === type
+}
+
+/** Переключить skip: снятие каскадно убирает все следующие в цепочке. */
+export function applyPrioritySkipToggle(
+  type: ShipType,
+  currentlySkipped: readonly ShipType[],
+  presentTypes: Iterable<ShipType>,
+): ShipType[] {
+  const chain = presentDestructionPriorityChain(presentTypes)
+  const normalized = normalizePrioritySkipTypes(currentlySkipped, presentTypes)
+  const idx = chain.indexOf(type)
+  if (idx < 0) return normalized
+  if (normalized.includes(type)) {
+    return normalized.filter((t) => chain.indexOf(t) < idx)
+  }
+  if (!canTogglePrioritySkipType(type, currentlySkipped, presentTypes)) return normalized
+  return [...normalized, type]
+}
+
+/** Первый непроспущенный тип в цепочке — основная цель уничтожения при победе. */
+export function primaryDestructionType(
+  presentTypes: Iterable<ShipType>,
+  prioritySkipTypes: Iterable<ShipType>,
+): ShipType | null {
+  const skips = new Set(prioritySkipTypes)
+  return presentDestructionPriorityChain(presentTypes).find((t) => !skips.has(t)) ?? null
+}
+
+/**
+ * Типы, которые победитель может выбрать к уничтожению при данных skip
+ * (бюджет урона не учитывается): открытый tier + ранее пропущенные.
+ */
+export function selectableDestructionTypes(
+  presentTypes: Iterable<ShipType>,
+  prioritySkipTypes: Iterable<ShipType>,
+): ShipType[] {
+  const chain = presentDestructionPriorityChain(presentTypes)
+  const skips = new Set(prioritySkipTypes)
+  const primary = chain.find((t) => !skips.has(t))
+  if (!primary) return [...chain]
+  return chain.filter(
+    (t) => t === primary || (skips.has(t) && compareDestructionPriority(t, primary) < 0),
+  )
+}
 
 export type CombatTriggerKind = 'movement' | 'stack' | 'bombardment'
 
@@ -1390,9 +1487,33 @@ export function rollCombatRound(
 export function removeShipsFromSnapshot(game: GameSnapshot, shipIds: readonly string[]): void {
   if (shipIds.length === 0) return
   const removeSet = new Set(shipIds)
+  const touchedKeys = new Set<string>()
   for (const cell of game.cells) {
+    const before = cell.ships.length
     cell.ships = cell.ships.filter((s) => !removeSet.has(s.id))
+    if (cell.ships.length !== before) touchedKeys.add(hexKey(cell.coord.q, cell.coord.r))
   }
+  for (const key of touchedKeys) {
+    const [q, r] = key.split(',').map(Number)
+    removeOrphanedActionMarkersAt(game, { q, r })
+  }
+}
+
+/**
+ * Маркер действия привязан к игроку: если на клетке не осталось его кораблей —
+ * маркер снимается (уничтожение, отступление и т.п.).
+ */
+export function removeOrphanedActionMarkersAt(game: GameSnapshot, coord: HexCoord): void {
+  const cell = cellAt(game, coord)
+  if (!cell?.actionMarkerId) return
+  const marker = game.actionMarkers.find((candidate) => candidate.id === cell.actionMarkerId)
+  if (!marker) {
+    cell.actionMarkerId = null
+    return
+  }
+  if (cell.ships.some((ship) => ship.ownerId === marker.ownerId)) return
+  game.actionMarkers = game.actionMarkers.filter((candidate) => candidate.id !== marker.id)
+  cell.actionMarkerId = null
 }
 
 function findShipUnit(game: GameSnapshot, shipId: string): (ShipUnit & { cell: RuntimeCellState }) | null {
@@ -1421,6 +1542,15 @@ function validatePrioritySkipPlans(
     if (!allowedShipTypes.has(plan.shipType)) {
       errors.push(`Тип ${SHIP_LABELS[plan.shipType]} нет у противника в этом бою`)
     }
+  }
+
+  if (errors.length) return errors
+
+  if (!isValidPrioritySkipSet(seen, allowedShipTypes)) {
+    errors.push(
+      'Priority skip только строго по порядку приоритета уничтожения '
+        + '(нельзя пропускать тип раньше предыдущего; последний тип в бою пропускать бессмысленно)',
+    )
   }
 
   return errors
@@ -2021,20 +2151,6 @@ export interface ApplyCombatResultOptions {
   transferControl?: boolean
 }
 
-/** Снимает маркер действия защитника с клетки боя (независимо от контроля). */
-function removeDefenderActionMarkerAt(
-  game: GameSnapshot,
-  coord: HexCoord,
-  defenderId: string,
-): void {
-  const cell = cellAt(game, coord)
-  if (!cell?.actionMarkerId) return
-  const marker = game.actionMarkers.find((candidate) => candidate.id === cell.actionMarkerId)
-  if (!marker || marker.ownerId !== defenderId) return
-  game.actionMarkers = game.actionMarkers.filter((candidate) => candidate.id !== marker.id)
-  cell.actionMarkerId = null
-}
-
 export function applyCombatResultToSnapshot(
   game: GameSnapshot,
   result: CombatResolutionResult,
@@ -2045,10 +2161,10 @@ export function applyCombatResultToSnapshot(
   removeShipsFromSnapshot(game, result.destroyedShipIds)
   if (result.attackerWon && options.transferControl !== false) {
     maybeTransferControl(game, result.coord, attackerId, defenderId)
-    // Маркер снимаем при победе атакующего — даже на нейтральной клетке.
-    // При победе защитника маркер остаётся.
-    removeDefenderActionMarkerAt(game, result.coord, defenderId)
   }
+  // Маркер клетки боя: если у владельца не осталось кораблей — снять
+  // (не только при победе атакующего и не только для «защитника» FSM).
+  removeOrphanedActionMarkersAt(game, result.coord)
 }
 
 
@@ -2541,13 +2657,15 @@ export function beginOrAwaitCombatContinuation(
     continuation?: PendingCombat['continuation']
     combatOptions?: CombatOptions
     shipsDestroyedInCombat: boolean
+    /** Результат только что сыгранного раунда (чтобы не потерять его при конце боя) */
+    seedCombatResult?: CombatResolutionResult
   },
   rng: () => number = Math.random,
 ): { errors: string[]; combatResult?: CombatResolutionResult; combatVanished?: boolean } {
   let shipsDestroyedInCombat = args.shipsDestroyedInCombat
   let completedRoundNumber = args.completedRoundNumber
   let combatOptions = args.combatOptions
-  let lastResult: CombatResolutionResult | undefined
+  let lastResult: CombatResolutionResult | undefined = args.seedCombatResult
 
   for (let autoRound = 0; autoRound < MAX_AUTO_COMBAT_ROUNDS; autoRound++) {
     const shouldContinue = args.continuation
@@ -2575,6 +2693,10 @@ export function beginOrAwaitCombatContinuation(
         { shipsDestroyedInCombat: true },
       )
       if (combatOptions) game.pendingCombat!.combatOptions = combatOptions
+      // Пустые решения — стороны явно выбирают continue/retreat (не автозаполнять).
+      if (isAwaitingContinue(game.pendingCombat)) {
+        game.pendingCombat.continueDecisions = {}
+      }
       return { errors: [], combatResult: lastResult }
     }
 
@@ -2813,7 +2935,7 @@ export function continuePendingCombat(
     return { errors: [], combatResult: step.combatResult }
   }
 
-  return beginOrAwaitCombatContinuation(
+  const followUp = beginOrAwaitCombatContinuation(
     game,
     {
       coord: { q, r },
@@ -2823,9 +2945,17 @@ export function continuePendingCombat(
       continuation,
       combatOptions: combatOptions ?? step.combatOptions,
       shipsDestroyedInCombat: step.shipsDestroyedInCombat,
+      seedCombatResult: step.combatResult,
     },
     rng,
   )
+  return {
+    errors: followUp.errors,
+    // Иначе при конце боя в этом же шаге lastCombatResult на сервере остаётся от прошлого раунда
+    // (флот до уничтожений) — клиент показывает «второй раунд» со старыми кораблями.
+    combatResult: followUp.combatResult ?? step.combatResult,
+    combatVanished: followUp.combatVanished,
+  }
 }
 
 export function stopPendingCombat(
@@ -2867,11 +2997,8 @@ export function stopPendingCombat(
     found.cell.ships = found.cell.ships.filter((ship) => ship.id !== shipId)
     destination.ships.push({ id: found.id, type: found.type, ownerId: found.ownerId })
   }
-  // Отступление защитника = атакующий удерживает клетку боя → его маркер снимаем.
-  // Отступление атакующего = защитник остаётся → маркер сохраняется.
-  if (isDefender && defenderId) {
-    removeDefenderActionMarkerAt(game, { q, r }, defenderId)
-  }
+  // Отступление / уход флота: маркер владельца без кораблей на клетке боя снимается.
+  removeOrphanedActionMarkersAt(game, { q, r })
   game.pendingCombat = undefined
   game.eventLog.push({
     id: `evt-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,

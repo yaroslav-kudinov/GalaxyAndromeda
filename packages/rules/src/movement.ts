@@ -1,6 +1,6 @@
 import { MAX_SHIPS_PER_CELL, MAX_SHIPS_PER_CELL_PER_PLAYER, SHIP_LABELS } from './constants.js'
 import { trimGameEventLog } from './event-log.js'
-import { getCellKeys, hexDistance } from './map.js'
+import { getCellKeys, HEX_DIRECTIONS } from './map.js'
 import {
   ACTION_MARKER_ALREADY_RESOLVED_MSG,
   ACTION_MARKER_MUST_RESOLVE_BEFORE_ADVANCE_MSG,
@@ -42,6 +42,7 @@ import {
   getCombatDestinationKeysFromMoves,
   isCombatDestination,
   resolveCombatAtCell,
+  removeOrphanedActionMarkersAt,
   setupPendingCombatDestruction,
   setupCombatPrepForMovement,
   stopPendingCombat,
@@ -133,6 +134,10 @@ function countIncomingMoves(
   return { player, total }
 }
 
+/**
+ * Клетки в пределах moveRange по **пути по существующим гексам** (BFS).
+ * «Пустые» дыры карты (гекса нет) нельзя пересекать — осевое hexDistance не подходит.
+ */
 export function getReachableHexKeys(
   map: MapDefinition,
   from: HexCoord,
@@ -141,20 +146,65 @@ export function getReachableHexKeys(
 ): string[] {
   const range = game ? getEffectiveMoveRange(game, shipType) : getShipMoveRange(shipType)
   const fromKey = hexKey(from.q, from.r)
-  const keys: string[] = []
 
-  const candidateKeys = game?.cells.length
-    ? game.cells.map((c) => hexKey(c.coord.q, c.coord.r))
-    : [...getCellKeys(map)]
+  const candidateKeys = new Set(
+    game?.cells.length
+      ? game.cells.map((c) => hexKey(c.coord.q, c.coord.r))
+      : [...getCellKeys(map)],
+  )
+  if (!candidateKeys.has(fromKey) || range < 1) return []
 
-  for (const key of candidateKeys) {
-    if (key === fromKey) continue
-    const [q, r] = key.split(',').map(Number)
-    const dist = hexDistance(from, { q, r })
-    if (dist >= 1 && dist <= range) keys.push(key)
+  const reachable: string[] = []
+  const dist = new Map<string, number>([[fromKey, 0]])
+  const queue: string[] = [fromKey]
+
+  while (queue.length > 0) {
+    const cur = queue.shift()!
+    const d = dist.get(cur)!
+    if (d >= range) continue
+    const [cq, cr] = cur.split(',').map(Number)
+    for (const dir of HEX_DIRECTIONS) {
+      const nk = hexKey(cq! + dir.q, cr! + dir.r)
+      if (!candidateKeys.has(nk) || dist.has(nk)) continue
+      const nd = d + 1
+      dist.set(nk, nd)
+      queue.push(nk)
+      if (nd >= 1 && nd <= range) reachable.push(nk)
+    }
   }
 
-  return keys
+  return reachable
+}
+
+/** Длина кратчайшего пути по существующим гексам; null если пути нет в пределах maxSteps. */
+export function hexPathDistance(
+  existingKeys: ReadonlySet<string>,
+  from: HexCoord,
+  to: HexCoord,
+  maxSteps: number,
+): number | null {
+  const fromKey = hexKey(from.q, from.r)
+  const toKey = hexKey(to.q, to.r)
+  if (fromKey === toKey) return 0
+  if (!existingKeys.has(fromKey) || !existingKeys.has(toKey) || maxSteps < 1) return null
+
+  const dist = new Map<string, number>([[fromKey, 0]])
+  const queue: string[] = [fromKey]
+  while (queue.length > 0) {
+    const cur = queue.shift()!
+    const d = dist.get(cur)!
+    if (d >= maxSteps) continue
+    const [cq, cr] = cur.split(',').map(Number)
+    for (const dir of HEX_DIRECTIONS) {
+      const nk = hexKey(cq! + dir.q, cr! + dir.r)
+      if (!existingKeys.has(nk) || dist.has(nk)) continue
+      const nd = d + 1
+      if (nk === toKey) return nd
+      dist.set(nk, nd)
+      queue.push(nk)
+    }
+  }
+  return null
 }
 
 export function canDeclareControlForMove(
@@ -186,11 +236,14 @@ export function validateDestinationForMove(
   const toKey = hexKey(to.q, to.r)
   if (fromKey === toKey) return ['Выберите другую клетку назначения']
 
-  const dist = hexDistance(from, to)
   const range = game ? getEffectiveMoveRange(game, ship.type) : getShipMoveRange(ship.type)
-  if (dist < 1) return ['Нужна соседняя или более дальняя клетка']
-  if (dist > range) {
-    return [`Дальность ${range}, расстояние ${dist}`]
+  const existingKeys = new Set(game.cells.map((c) => hexKey(c.coord.q, c.coord.r)))
+  const pathDist = hexPathDistance(existingKeys, from, to, range)
+  if (pathDist == null || pathDist < 1) {
+    return [`Нет пути по клеткам карты в пределах дальности ${range}`]
+  }
+  if (pathDist > range) {
+    return [`Дальность ${range}, путь ${pathDist}`]
   }
 
   if (game && isMovementIntoCellBlocked(game, dest, fromKey, toKey)) {
@@ -385,6 +438,12 @@ function finishPendingMovementPlans(
   )
   if (marker) removeActionMarker(game, marker.id, playerId)
   markActionMarkerResolvedThisTurn(game)
+  // На всякий случай: маркеры клеток, с которых ушли все корабли владельца.
+  removeOrphanedActionMarkersAt(game, from)
+  if (combatKey) {
+    const [cq, cr] = combatKey.split(',').map(Number)
+    removeOrphanedActionMarkersAt(game, { q: cq, r: cr })
+  }
 
   return summaries
 }
@@ -528,12 +587,16 @@ export function executeMarkerMovement(
       if (followUp.errors.length) {
         return { errors: followUp.errors, combatResult: combatResult ?? undefined }
       }
-      // Бой продолжается (awaiting-*) или сразу брошен следующий раунд.
-      if (game.pendingCombat || followUp.combatResult || followUp.combatVanished) {
+      // Бой ещё идёт (prep/destruction/continue) — движение откладываем.
+      if (game.pendingCombat) {
         return {
           errors: [],
           combatResult: followUp.combatResult ?? combatResult ?? undefined,
         }
+      }
+      // Бой уже завершён в follow-up (полный wipe и т.п.) — дожимаем вход на клетку ниже.
+      if (followUp.combatResult) {
+        combatResult = followUp.combatResult
       }
     }
   }

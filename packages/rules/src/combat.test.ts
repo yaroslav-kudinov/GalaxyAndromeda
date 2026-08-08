@@ -13,9 +13,13 @@ import type { ShipType } from './types.js'
 import {
   applyShieldAbsorption,
   applyCombatResultToSnapshot,
+  applyPrioritySkipToggle,
+  primaryDestructionType,
+  selectableDestructionTypes,
   buildCombatPreview,
   buildCombatPreviewFromPending,
   buildDestructionSelectionState,
+  canTogglePrioritySkipType,
   combatResolutionFingerprint,
   formatShieldContributionLabel,
   COMBAT_STUB,
@@ -27,7 +31,9 @@ import {
   getImmediatelyDestroyableShipIds,
   getCombatRetreatDestinations,
   isCombatDestination,
+  isValidPrioritySkipSet,
   ONE_BATTLE_PER_MARKER_MSG,
+  presentDestructionPriorityChain,
   resolveCombatAtCell,
   rollCombatRound,
   selectShipsToDestroy,
@@ -821,6 +827,7 @@ describe('combat sketch', () => {
     map.cells.push({ q: 1, r: 0 })
     const game = gameSnapshotFromMap(map)
     addShip(game, 0, 0, 'player-1', 'battleship', 'att-bb')
+    addShip(game, 0, 0, 'player-1', 'destroyer', 'att-dd')
     addShip(game, 1, 0, 'player-2', 'cruiser', 'def-cr')
     addShip(game, 1, 0, 'player-2', 'destroyer', 'def-dd')
     game.cells.find((c) => c.coord.q === 1 && c.coord.r === 0)!.controlOwnerId = 'player-2'
@@ -829,20 +836,72 @@ describe('combat sketch', () => {
       game,
       { q: 1, r: 0 },
       'player-1',
-      [{ id: 'att-bb', type: 'battleship', ownerId: 'player-1' }],
+      [
+        { id: 'att-bb', type: 'battleship', ownerId: 'player-1' },
+        { id: 'att-dd', type: 'destroyer', ownerId: 'player-1' },
+      ],
     )
     expect(preview).not.toBeNull()
 
-    const ok = validateCombatOptions(game, preview!, ['att-bb'], {
-      attacker: { prioritySkips: [{ shipType: 'cruiser' }] },
-      defender: { prioritySkips: [{ shipType: 'battleship' }] },
+    // Skip только префиксом цепочки: DD, но не CR без DD; последний тип в бою — нельзя.
+    const ok = validateCombatOptions(game, preview!, ['att-bb', 'att-dd'], {
+      attacker: { prioritySkips: [{ shipType: 'destroyer' }] },
+      defender: { prioritySkips: [{ shipType: 'destroyer' }] },
     })
     expect(ok).toEqual([])
 
-    const ownSideRejected = validateCombatOptions(game, preview!, ['att-bb'], {
+    const outOfOrder = validateCombatOptions(game, preview!, ['att-bb', 'att-dd'], {
+      attacker: { prioritySkips: [{ shipType: 'cruiser' }] },
+    })
+    expect(outOfOrder.some((e) => /порядку приоритета/.test(e))).toBe(true)
+
+    const skipLastUseless = validateCombatOptions(game, preview!, ['att-bb', 'att-dd'], {
+      attacker: { prioritySkips: [{ shipType: 'destroyer' }, { shipType: 'cruiser' }] },
+    })
+    expect(skipLastUseless.some((e) => /порядку приоритета|бессмысленно/.test(e))).toBe(true)
+
+    const ownSideRejected = validateCombatOptions(game, preview!, ['att-bb', 'att-dd'], {
       attacker: { prioritySkips: [{ shipType: 'battleship' }] },
     })
     expect(ownSideRejected.some((e) => /нет у противника/.test(e))).toBe(true)
+  })
+
+  it('priority skip helpers: prefix only, last present type not skippable', () => {
+    const present: ShipType[] = ['destroyer', 'cruiser', 'battleship']
+    expect(presentDestructionPriorityChain(present)).toEqual([
+      'destroyer',
+      'cruiser',
+      'battleship',
+    ])
+    expect(isValidPrioritySkipSet([], present)).toBe(true)
+    expect(isValidPrioritySkipSet(['destroyer'], present)).toBe(true)
+    expect(isValidPrioritySkipSet(['destroyer', 'cruiser'], present)).toBe(true)
+    expect(isValidPrioritySkipSet(['cruiser'], present)).toBe(false)
+    expect(isValidPrioritySkipSet(['destroyer', 'cruiser', 'battleship'], present)).toBe(false)
+
+    expect(canTogglePrioritySkipType('destroyer', [], present)).toBe(true)
+    expect(canTogglePrioritySkipType('cruiser', [], present)).toBe(false)
+    expect(canTogglePrioritySkipType('cruiser', ['destroyer'], present)).toBe(true)
+    expect(canTogglePrioritySkipType('battleship', ['destroyer', 'cruiser'], present)).toBe(false)
+
+    expect(applyPrioritySkipToggle('destroyer', ['destroyer', 'cruiser'], present)).toEqual([])
+    expect(applyPrioritySkipToggle('cruiser', ['destroyer'], present)).toEqual([
+      'destroyer',
+      'cruiser',
+    ])
+
+    expect(primaryDestructionType(present, [])).toBe('destroyer')
+    expect(primaryDestructionType(present, ['destroyer'])).toBe('cruiser')
+    expect(selectableDestructionTypes(present, [])).toEqual(['destroyer'])
+    expect(selectableDestructionTypes(present, ['destroyer'])).toEqual([
+      'destroyer',
+      'cruiser',
+    ])
+    expect(selectableDestructionTypes(present, ['destroyer', 'cruiser'])).toEqual([
+      'destroyer',
+      'cruiser',
+      'battleship',
+    ])
   })
 
   it('executeMarkerMovement removes destroyed defender ships on attacker win', () => {
@@ -892,7 +951,9 @@ describe('combat sketch', () => {
     game.participatingPlayerIds = ['player-1', 'player-2']
 
     addShip(game, 0, 0, 'player-1', 'battleship', 'att-bb')
+    addShip(game, 0, 0, 'player-1', 'destroyer', 'att-dd')
     addShip(game, 1, 0, 'player-2', 'destroyer', 'def-dd')
+    addShip(game, 1, 0, 'player-2', 'cruiser', 'def-cr')
     game.cells.find((c) => c.coord.q === 1 && c.coord.r === 0)!.controlOwnerId = 'player-2'
     game.phase = 'planning'
     expect(addActionMarker(game, 'player-1', { q: 0, r: 0 })).toEqual([])
@@ -900,13 +961,15 @@ describe('combat sketch', () => {
 
     const prepStart = executeMarkerMovement(game, map, 'player-1', { q: 0, r: 0 }, [
       { shipId: 'att-bb', to: { q: 1, r: 0 } },
+      { shipId: 'att-dd', to: { q: 1, r: 0 } },
     ])
     expect(prepStart.errors).toEqual([])
 
-    expect(updateCombatPrep(game, 'player-2', true, [{ shipType: 'battleship' }]).errors).toEqual([])
+    // Защитник пропускает эсминцев атакующего (не единственный/последний тип).
+    expect(updateCombatPrep(game, 'player-2', true, [{ shipType: 'destroyer' }]).errors).toEqual([])
     expect(combatPrepOf(game.pendingCombat)?.readyBy['player-2']).toBe(true)
 
-    updateCombatPrep(game, 'player-1', true)
+    updateCombatPrep(game, 'player-1', true, [{ shipType: 'destroyer' }])
     expect(combatPrepOf(game.pendingCombat)?.phase).toBe('countdown')
   })
 
@@ -1090,6 +1153,82 @@ describe('combat sketch', () => {
     expect(game.actionMarkers).toEqual([])
     expect(game.cells.find((c) => c.coord.q === 1 && c.coord.r === 0)?.actionMarkerId).toBeNull()
     expect(game.cells.find((c) => c.coord.q === 1 && c.coord.r === 0)?.controlOwnerId).toBeNull()
+  })
+
+  it('removes action marker when owner ships are wiped even if round winner is defender', () => {
+    const map = createEmptyMap('orphan-marker', 'Orphan marker')
+    map.cells.push({ q: 1, r: 0 })
+    const game = gameSnapshotFromMap(map)
+    game.phase = 'planning'
+    game.activePlayerId = 'player-2'
+    addShip(game, 1, 0, 'player-2', 'destroyer', 'def-a')
+    addShip(game, 1, 0, 'player-2', 'destroyer', 'def-b')
+    expect(addActionMarker(game, 'player-2', { q: 1, r: 0 })).toEqual([])
+
+    // Уничтожены все корабли владельца маркера — маркер снимается независимо от attackerWon.
+    applyCombatResultToSnapshot(
+      game,
+      {
+        coord: { q: 1, r: 0 },
+        winnerId: 'player-2',
+        attackerWon: false,
+        log: [],
+        destroyedShipIds: ['def-a', 'def-b'],
+        stub: false,
+      },
+      'player-1',
+      'player-2',
+    )
+
+    expect(game.actionMarkers).toEqual([])
+    expect(game.cells.find((c) => c.coord.q === 1 && c.coord.r === 0)?.actionMarkerId).toBeNull()
+  })
+
+  it('after combat wipe via follow-up, attackers occupy the battle cell and marker is cleared', () => {
+    const map = createEmptyMap('occupy-wipe', 'Occupy wipe')
+    map.cells.push({ q: 1, r: 0 })
+    const game = gameSnapshotFromMap(map)
+    game.phase = 'actions'
+    game.activePlayerId = 'player-1'
+    game.participatingPlayerIds = ['player-1', 'player-2']
+
+    addShip(game, 0, 0, 'player-1', 'battleship', 'att-bb')
+    addShip(game, 1, 0, 'player-2', 'destroyer', 'def-dd')
+    game.cells.find((c) => c.coord.q === 1 && c.coord.r === 0)!.controlOwnerId = 'player-2'
+    game.phase = 'planning'
+    game.activePlayerId = 'player-1'
+    expect(addActionMarker(game, 'player-1', { q: 0, r: 0 })).toEqual([])
+    game.activePlayerId = 'player-2'
+    expect(addActionMarker(game, 'player-2', { q: 1, r: 0 })).toEqual([])
+    game.activePlayerId = 'player-1'
+    game.phase = 'actions'
+
+    const originalRandom = Math.random
+    Math.random = () => 5 / 6
+    try {
+      const result = executeMarkerMovement(
+        game,
+        map,
+        'player-1',
+        { q: 0, r: 0 },
+        [{ shipId: 'att-bb', to: { q: 1, r: 0 } }],
+        {},
+      )
+      expect(result.errors).toEqual([])
+      expect(result.combatResult?.attackerWon).toBe(true)
+      expect(game.pendingCombat).toBeUndefined()
+
+      const battle = game.cells.find((c) => c.coord.q === 1 && c.coord.r === 0)!
+      const origin = game.cells.find((c) => c.coord.q === 0 && c.coord.r === 0)!
+      expect(battle.ships.some((s) => s.id === 'att-bb')).toBe(true)
+      expect(origin.ships.some((s) => s.id === 'att-bb')).toBe(false)
+      expect(battle.ships.some((s) => s.ownerId === 'player-2')).toBe(false)
+      expect(battle.actionMarkerId).toBeNull()
+      expect(game.actionMarkers.every((m) => m.ownerId !== 'player-2')).toBe(true)
+      expect(battle.controlOwnerId).toBe('player-1')
+    } finally {
+      Math.random = originalRandom
+    }
   })
 
   it('keeps the defender action marker when defender wins the round', () => {
@@ -1580,6 +1719,86 @@ describe('pendingCombat FSM', () => {
 })
 
 describe('покрытие непокрытых боевых путей', () => {
+  it('после частичного уничтожения: awaiting-continue и раунд 2 без погибших кораблей', () => {
+    const map = createEmptyMap('partial-then-r2', 'Partial then R2')
+    map.cells.push({ q: 1, r: 0 }, { q: 0, r: 1 })
+    const game = gameSnapshotFromMap(map)
+    game.phase = 'actions'
+    game.activePlayerId = 'player-1'
+    game.participatingPlayerIds = ['player-1', 'player-2']
+    game.turnNumber = 2
+
+    // 7 эсминцев атаки vs 4 защиты, d6=3 → 21 vs 12, урон 9 = ровно 3 эсминца (не full wipe).
+    for (let i = 0; i < 7; i++) {
+      addShip(game, 0, 0, 'player-1', 'destroyer', `att-dd-${i}`)
+    }
+    for (let i = 1; i <= 4; i++) {
+      addShip(game, 1, 0, 'player-2', 'destroyer', `def-dd-${i}`)
+    }
+    game.cells.find((c) => c.coord.q === 1 && c.coord.r === 0)!.controlOwnerId = 'player-2'
+
+    const incoming = game.cells
+      .find((c) => c.coord.q === 0 && c.coord.r === 0)!
+      .ships.filter((s) => s.ownerId === 'player-1')
+    const movementPlans = incoming.map((s) => ({ shipId: s.id, to: { q: 1, r: 0 } }))
+
+    const result = withAllDiceThree(() =>
+      resolveCombatAtCell(game, { q: 1, r: 0 }, 'player-1', incoming),
+    )
+    expect(result.attackerWon).toBe(true)
+    expect(result.needsDestructionSelection).toBe(true)
+    expect(result.rawDamage).toBe(9)
+
+    setupPendingCombatDestruction(
+      game,
+      { q: 1, r: 0 },
+      'player-1',
+      'player-2',
+      result,
+      {},
+      { attacker: [], defender: [] },
+      'movement',
+      {
+        incomingAttackerShipIds: incoming.map((s) => s.id),
+        movementFrom: { q: 0, r: 0 },
+        movementPlans,
+      },
+    )
+
+    const killed = ['def-dd-1', 'def-dd-2', 'def-dd-3']
+    expect(confirmCombatDestruction(game, 'player-1', killed).errors).toEqual([])
+
+    const cell = game.cells.find((c) => c.coord.q === 1 && c.coord.r === 0)!
+    expect(cell.ships.filter((s) => s.ownerId === 'player-2')).toHaveLength(1)
+    expect(cell.ships.some((s) => s.id === 'def-dd-4')).toBe(true)
+
+    expect(game.pendingCombat?.phase).toBe('awaiting-continue')
+    expect(game.pendingCombat?.shipsDestroyedInCombat).toBe(true)
+    expect(
+      isAwaitingContinue(game.pendingCombat) ? game.pendingCombat.continueDecisions : null,
+    ).toEqual({})
+
+    expect(continuePendingCombat(game, 'player-1').errors).toEqual([])
+    expect(game.pendingCombat?.phase).toBe('awaiting-continue')
+    expect(
+      isAwaitingContinue(game.pendingCombat) && game.pendingCombat.continueDecisions?.attacker,
+    ).toBe(true)
+
+    const previewBeforeR2 = buildCombatPreviewFromPending(game)
+    expect(previewBeforeR2?.defender.ships.filter((s) => s.type === 'destroyer')).toHaveLength(1)
+
+    const continued = withAllDiceThree(() => continuePendingCombat(game, 'player-2'))
+    expect(continued.errors).toEqual([])
+
+    const r2 = continued.combatResult
+    expect(r2).toBeTruthy()
+    const defenderRolls = (r2!.rounds?.at(-1) ?? r2!.roundOne)?.shipRolls.filter(
+      (s) => s.side === 'defender' && s.shipType === 'destroyer' && !s.supportRolls?.length,
+    )
+    expect(defenderRolls).toHaveLength(1)
+    expect(defenderRolls![0]?.shipId).toBe('def-dd-4')
+  })
+
   it('раунд 2+: сохраняет movementFrom/plans, attackerId и увеличивает roundNumber', () => {
     const map = createEmptyMap('round2', 'Round 2')
     map.cells.push({ q: 1, r: 0 })
