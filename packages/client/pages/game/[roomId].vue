@@ -153,6 +153,33 @@ const markerActionSource = ref<HexCoord | null>(null)
 const markerActionHint = ref<string | null>(null)
 const markerActionBusy = ref(false)
 const battleModalOpen = ref(false)
+const rulesHelpOpen = ref(false)
+
+const RULES_NEWBIE_TIP_STORAGE_KEY = 'galaxy-rules-newbie-tip-dismissed'
+const showRulesNewbieTip = ref(
+  (() => {
+    if (!import.meta.client) return true
+    try {
+      return localStorage.getItem(RULES_NEWBIE_TIP_STORAGE_KEY) !== '1'
+    } catch {
+      return true
+    }
+  })(),
+)
+
+function dismissRulesNewbieTip() {
+  showRulesNewbieTip.value = false
+  try {
+    localStorage.setItem(RULES_NEWBIE_TIP_STORAGE_KEY, '1')
+  } catch {
+    /* ignore quota / private mode */
+  }
+}
+
+function openRulesHelp() {
+  rulesHelpOpen.value = true
+  if (showRulesNewbieTip.value) dismissRulesNewbieTip()
+}
 const battlePreviewSnapshot = ref<import('@galaxy/rules').CombatPreview | null>(null)
 const pendingOrderAfterBattle = ref<MarkerOrderConfirmResult | null>(null)
 const battleResolution = ref<CombatResolutionResult | null>(null)
@@ -988,6 +1015,7 @@ const boardPreviewMoves = computed(() => {
     return markerMapPickPreviewMoves.value.map((m) => ({
       from: m.from,
       to: m.to,
+      shipId: m.shipId,
       combat: m.combat,
     }))
   }
@@ -2284,6 +2312,7 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
         :available-action-marker-keys="availableActionMarkerKeys"
         :available-production-marker-keys="availableProductionMarkerKeys"
         :supply-chain-keys="supplyChainHighlightKeys"
+        :players="snapshot?.players ?? []"
         @select="selectCell"
       />
       <p v-else class="empty-hint">Нет данных карты — импортируйте .galaxy.json</p>
@@ -2537,6 +2566,36 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
           <span class="server-pill" :class="serverStatus">
             {{ serverStatus === 'online' ? 'Сервер' : serverStatus === 'offline' ? 'Offline' : '…' }}
           </span>
+          <div class="rules-help-wrap">
+            <button
+              type="button"
+              class="rules-help-btn"
+              title="Справка по правилам"
+              :aria-describedby="showRulesNewbieTip ? 'rules-newbie-tip' : undefined"
+              @click="openRulesHelp"
+            >
+              Правила
+            </button>
+            <div
+              v-if="showRulesNewbieTip"
+              id="rules-newbie-tip"
+              class="rules-newbie-tip"
+              role="status"
+            >
+              <p class="rules-newbie-tip-text">
+                Не знаете что делать? Ознакомьтесь с разделом правил!
+              </p>
+              <button
+                type="button"
+                class="rules-newbie-tip-dismiss"
+                title="Скрыть подсказку"
+                aria-label="Скрыть подсказку"
+                @click.stop="dismissRulesNewbieTip"
+              >
+                ×
+              </button>
+            </div>
+          </div>
           <button
             v-if="serverStatus === 'online' && roomBootstrap && roomBootstrap.playerCount < roomBootstrap.maxPlayers"
             type="button"
@@ -2547,6 +2606,8 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
           </button>
         </div>
       </header>
+
+      <RulesHelpModal :open="rulesHelpOpen" @close="rulesHelpOpen = false" />
 
       <div class="you-plaque-slot" aria-live="polite">
         <div
@@ -3662,7 +3723,7 @@ button,
   line-height: 1.25;
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
   cursor: pointer;
-  animation: phase-advance-pulse 1.55s ease-in-out infinite;
+  animation: phase-advance-pulse 1.25s ease-in-out infinite;
   box-shadow:
     0 0 0 0 color-mix(in srgb, var(--player-color, #3b82f6) 45%, transparent),
     0 2px 6px rgba(0, 0, 0, 0.35);
@@ -3684,31 +3745,33 @@ button,
   cursor: wait;
 }
 .active-mini .active-player-dot {
-  animation: active-player-dot 1.55s ease-in-out infinite;
+  animation: active-player-dot 1.25s ease-in-out infinite;
 }
 @keyframes active-player-dot {
   0%,
   100% {
     transform: scale(1);
+    opacity: 1;
   }
   50% {
-    transform: scale(1.2);
+    transform: scale(1.35);
+    opacity: 0.88;
   }
 }
 @keyframes phase-advance-pulse {
   0%,
   100% {
     box-shadow:
-      0 0 4px 1px color-mix(in srgb, var(--player-color, #3b82f6) 35%, transparent),
+      0 0 6px 2px color-mix(in srgb, var(--player-color, #3b82f6) 45%, transparent),
       0 2px 6px rgba(0, 0, 0, 0.35);
     filter: brightness(1);
   }
   50% {
     box-shadow:
-      0 0 16px 5px color-mix(in srgb, var(--player-color, #3b82f6) 72%, transparent),
-      0 0 28px 2px color-mix(in srgb, var(--player-color, #3b82f6) 40%, transparent),
-      0 2px 8px rgba(0, 0, 0, 0.4);
-    filter: brightness(1.1);
+      0 0 22px 8px color-mix(in srgb, var(--player-color, #3b82f6) 82%, transparent),
+      0 0 36px 4px color-mix(in srgb, var(--player-color, #3b82f6) 52%, transparent),
+      0 2px 10px rgba(0, 0, 0, 0.45);
+    filter: brightness(1.16);
   }
 }
 .join-overlay {
@@ -3797,6 +3860,89 @@ button,
   color: #dbeafe;
   font-size: 0.75rem;
   cursor: pointer;
+}
+
+.rules-help-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.rules-help-btn {
+  padding: 0.25rem 0.55rem;
+  border-radius: 6px;
+  border: 1px solid #64748b;
+  background: #1e293b;
+  color: #e2e8f0;
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.rules-help-btn:hover {
+  border-color: #94a3b8;
+  background: #334155;
+}
+
+.rules-newbie-tip {
+  --tip-font: 'Manrope', 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
+  position: absolute;
+  top: calc(100% + 0.55rem);
+  right: 0;
+  z-index: 40;
+  display: flex;
+  align-items: flex-start;
+  gap: 0.35rem;
+  width: max-content;
+  max-width: min(18rem, 70vw);
+  padding: 0.55rem 0.6rem 0.55rem 0.7rem;
+  border-radius: 10px;
+  border: 1px solid #64748b;
+  background: #0f172a;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45);
+  color: #e8eef7;
+  font-family: var(--tip-font);
+  -webkit-font-smoothing: antialiased;
+}
+
+.rules-newbie-tip::before {
+  content: '';
+  position: absolute;
+  top: -6px;
+  right: 1.1rem;
+  width: 10px;
+  height: 10px;
+  border-left: 1px solid #64748b;
+  border-top: 1px solid #64748b;
+  background: #0f172a;
+  transform: rotate(45deg);
+}
+
+.rules-newbie-tip-text {
+  margin: 0;
+  font-size: 0.82rem;
+  font-weight: 600;
+  line-height: 1.4;
+  letter-spacing: 0.01em;
+}
+
+.rules-newbie-tip-dismiss {
+  flex: 0 0 auto;
+  width: 1.35rem;
+  height: 1.35rem;
+  margin-top: -0.1rem;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: #94a3b8;
+  font-size: 1.1rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.rules-newbie-tip-dismiss:hover {
+  background: #1e293b;
+  color: #f1f5f9;
 }
 
 @media (max-width: 900px) {

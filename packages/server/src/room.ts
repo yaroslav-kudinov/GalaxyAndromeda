@@ -322,6 +322,7 @@ function roomObservation(
     productionMarkerResolvedThisTurn: s.productionMarkerResolvedThisTurn ?? false,
     participatingPlayerIds: s.participatingPlayerIds,
     turnEvent: s.turnEvent ?? null,
+    eventDeck: s.eventDeck ?? null,
     gameOver: s.gameOver ?? null,
     pendingCombat: s.pendingCombat ?? null,
     productionTokensSpentThisTurn: s.productionTokensSpentThisTurn ?? null,

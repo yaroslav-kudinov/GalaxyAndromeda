@@ -204,7 +204,7 @@ const activePlayerStyle = computed(() => {
 }
 
 .active-player-badge--you {
-  animation: active-player-pulse 1.55s ease-in-out infinite;
+  animation: active-player-pulse 1.25s ease-in-out infinite;
 }
 
 .active-player-dot {
@@ -216,20 +216,23 @@ const activePlayerStyle = computed(() => {
 }
 
 .active-player-badge--you .active-player-dot {
-  animation: active-player-dot 1.55s ease-in-out infinite;
+  animation: active-player-dot 1.25s ease-in-out infinite;
 }
 
 @keyframes active-player-pulse {
   0%,
   100% {
     box-shadow:
-      0 0 0 0 color-mix(in srgb, var(--player-color, #3b82f6) 35%, transparent),
+      0 0 0 0 color-mix(in srgb, var(--player-color, #3b82f6) 45%, transparent),
       0 2px 8px rgba(0, 0, 0, 0.25);
+    filter: brightness(1);
   }
   50% {
     box-shadow:
-      0 0 0 5px color-mix(in srgb, var(--player-color, #3b82f6) 0%, transparent),
-      0 2px 12px color-mix(in srgb, var(--player-color, #3b82f6) 35%, transparent);
+      0 0 0 8px color-mix(in srgb, var(--player-color, #3b82f6) 0%, transparent),
+      0 0 18px 4px color-mix(in srgb, var(--player-color, #3b82f6) 55%, transparent),
+      0 2px 12px rgba(0, 0, 0, 0.3);
+    filter: brightness(1.12);
   }
 }
 
@@ -240,8 +243,8 @@ const activePlayerStyle = computed(() => {
     opacity: 1;
   }
   50% {
-    transform: scale(1.15);
-    opacity: 0.85;
+    transform: scale(1.3);
+    opacity: 0.9;
   }
 }
 </style>

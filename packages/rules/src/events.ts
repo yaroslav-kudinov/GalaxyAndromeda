@@ -67,7 +67,7 @@ export const EVENT_CARDS: readonly GameEventCard[] = [
   { id: 'ammo-detonation', name: 'Детонация склада боеприпасов', description: 'Нельзя строить эсминец, крейсер, линкор в этом ходу.', effectSummary: 'Постройка destroyer/cruiser/battleship запрещена' },
   { id: 'peoples-donation', name: 'Народное пожертвование', description: 'Немедленно все фишки ресурсов переворачиваются лицом вверх.', effectSummary: 'Все фишки лицом вверх' },
   { id: 'mandatory-overtime', name: 'Обязательные сверхурочные', description: 'Любое число фишек производства в одном регионе (не больше числа клеток региона).', effectSummary: 'Сверхурочные в одном регионе' },
-  { id: 'hyper-gap', name: 'Просвет в гиперпространстве', description: 'Все корабли +1 ход; у Г.О. fireRange = 4.', effectSummary: 'Ход +1; Г.О. fireRange 4' },
+  { id: 'hyper-gap', name: 'Просвет в гиперпространстве', description: 'Все корабли +1 ход; у гиперпространственного орудия дальность стрельбы = 4.', effectSummary: 'Ход +1; дальность орудия 4' },
   { id: 'all-for-front', name: '«Всё для фронта»', description: 'Каждый игрок может потратить не более 3 фишек производства за ход.', effectSummary: 'Макс. 3 фишки производства на игрока' },
   { id: 'shadow-economy', name: 'Теневая экономика', description: 'Номинал каждой фишки ресурса +2 (только этот ход).', effectSummary: 'Номинал фишек +2' },
   { id: 'hold-formation', name: '«Держать строй»', description: 'destroyCost +2 для каждого уничтожаемого в бою корабля.', effectSummary: 'destroyCost +2' },
@@ -76,6 +76,32 @@ export const EVENT_CARDS: readonly GameEventCard[] = [
 ] as const
 
 export const ALL_EVENT_IDS: EventCardId[] = EVENT_CARDS.map((c) => c.id)
+
+/**
+ * Сколько копий карты в полной колоде.
+ * Жёсткие эффекты — 1 копия; средние — 2; мягкие/полезные — 2–3.
+ */
+export const EVENT_DECK_COPIES: Readonly<Record<EventCardId, number>> = {
+  'empty-void': 3,
+  'peoples-donation': 2,
+  'mandatory-overtime': 2,
+  'hyper-gap': 2,
+  'shadow-economy': 2,
+  'magnetic-storm': 2,
+  'production-accident': 2,
+  'all-for-front': 2,
+  'combat-chaos': 1,
+  'stand-to-death': 1,
+  'saboteurs-activation': 1,
+  'ammo-detonation': 1,
+  'hold-formation': 1,
+  'local-self-defense': 1,
+}
+
+export const EVENT_DECK_SIZE = ALL_EVENT_IDS.reduce(
+  (sum, id) => sum + (EVENT_DECK_COPIES[id] ?? 1),
+  0,
+)
 
 /** Устаревшие id из сохранений → актуальная карта (или no-op). */
 export function migrateLegacyEventId(eventId: string): EventCardId {
@@ -90,12 +116,55 @@ export function getEventCard(id: EventCardId): GameEventCard {
   return card
 }
 
+/** Неперетасованный шаблон колоды с учётом кратности карт. */
+export function buildEventDeckTemplate(): EventCardId[] {
+  const deck: EventCardId[] = []
+  for (const id of ALL_EVENT_IDS) {
+    const copies = EVENT_DECK_COPIES[id] ?? 1
+    for (let i = 0; i < copies; i++) deck.push(id)
+  }
+  return deck
+}
+
+export function shuffleEventDeck(deck: readonly EventCardId[], rng: () => number = Math.random): EventCardId[] {
+  const out = [...deck]
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1))
+    const a = out[i]!
+    out[i] = out[j]!
+    out[j] = a
+  }
+  return out
+}
+
+export function createShuffledEventDeck(rng: () => number = Math.random): EventCardId[] {
+  return shuffleEventDeck(buildEventDeckTemplate(), rng)
+}
+
+/**
+ * Снять верхнюю карту колоды. Пустая / отсутствующая колода → новая перетасовка полного комплекта.
+ */
+export function drawNextEventFromDeck(game: GameSnapshot, rng: () => number = Math.random): EventCardId {
+  if (!game.eventDeck || game.eventDeck.length === 0) {
+    game.eventDeck = createShuffledEventDeck(rng)
+  }
+  const next = game.eventDeck.shift()
+  if (!next) {
+    game.eventDeck = createShuffledEventDeck(rng)
+    return migrateLegacyEventId(game.eventDeck.shift()!)
+  }
+  return migrateLegacyEventId(next)
+}
+
+/** @deprecated Используйте колоду (`drawNextEventFromDeck`). Оставлено для старых тестов/скриптов. */
 export function drawTurnEvent(turnNumber: number): EventCardId {
   return ALL_EVENT_IDS[(turnNumber - 1) % ALL_EVENT_IDS.length]!
 }
 
+/** Случайная карта с весами колоды (без состояния игры). */
 export function drawRandomEvent(rng: () => number = Math.random): EventCardId {
-  return ALL_EVENT_IDS[Math.floor(rng() * ALL_EVENT_IDS.length)]!
+  const deck = buildEventDeckTemplate()
+  return deck[Math.floor(rng() * deck.length)]!
 }
 
 function drawnEventId(game: GameSnapshot): EventCardId | null {
@@ -193,7 +262,7 @@ export function ensureTurnEventForPhase(game: GameSnapshot, rng: () => number = 
   if (game.phase !== 'events') return
   if (game.turnEvent?.turnNumber === game.turnNumber) return
   resetTurnEventTracking(game)
-  const eventId = drawRandomEvent(rng)
+  const eventId = drawNextEventFromDeck(game, rng)
   const card = getEventCard(eventId)
   game.turnEvent = { eventId, turnNumber: game.turnNumber }
   appendEventLog(game, `Событие хода: «${card.name}» — ${card.effectSummary}`)

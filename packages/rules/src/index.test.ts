@@ -1977,7 +1977,7 @@ describe('production', () => {
       MAX_FLEET_SIZE_PER_PLAYER.hyper + 1,
       fleetSpreadCoords,
     )
-    expect(getFleetLimitWarnings(game).some((w) => w.includes('Г.О.'))).toBe(true)
+    expect(getFleetLimitWarnings(game).some((w) => w.includes('Гиперпространственное орудие'))).toBe(true)
   })
 })
 

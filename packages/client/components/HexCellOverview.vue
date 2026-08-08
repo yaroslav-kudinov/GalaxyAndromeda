@@ -128,17 +128,17 @@ const contentTopY = computed(() => {
   fill: #f472b6;
 }
 .marker-badge--available {
-  animation: marker-badge-available 2.2s ease-in-out infinite;
+  animation: marker-badge-available 1.55s ease-in-out infinite;
 }
 @keyframes marker-badge-available {
   0%,
   100% {
-    opacity: 0.72;
+    opacity: 0.58;
     transform: scale(1);
   }
   50% {
     opacity: 1;
-    transform: scale(1.12);
+    transform: scale(1.2);
   }
 }
 .marker-badge-label {

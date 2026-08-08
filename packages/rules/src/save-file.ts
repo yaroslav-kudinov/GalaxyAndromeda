@@ -53,7 +53,7 @@ export interface PendingEvent {
 }
 
 import type { CombatOptions, CombatPrepState, PendingCombatRoundState } from './combat.js'
-import { migrateLegacyEventId, type TurnEventState } from './events.js'
+import { migrateLegacyEventId, type EventCardId, type TurnEventState } from './events.js'
 import type { GameOverState } from './victory.js'
 
 export type { TurnEventState, GameOverState }
@@ -282,6 +282,11 @@ export interface GameSnapshot {
   participatingPlayerIds?: string[]
   /** Глобальное событие текущего хода (одно на всех игроков) */
   turnEvent?: TurnEventState
+  /**
+   * Оставшиеся карты событий (верх колоды — индекс 0).
+   * Пустая / отсутствующая колода при следующей вытяжке перетасовывается заново.
+   */
+  eventDeck?: EventCardId[]
   /** Игра завершена */
   gameOver?: GameOverState
   /** Незавершённый многoroundовый бой */
@@ -470,6 +475,9 @@ function normalizeGameSnapshot(game: GameSnapshot, map?: MapDefinition): GameSna
           ...game.turnEvent,
           eventId: migrateLegacyEventId(String(game.turnEvent.eventId)),
         }
+      : undefined,
+    eventDeck: Array.isArray(game.eventDeck)
+      ? game.eventDeck.map((id) => migrateLegacyEventId(String(id)))
       : undefined,
     gameOver: game.gameOver ? { ...game.gameOver } : undefined,
     pendingCombat: clonePendingCombat(migrateLegacyPendingCombat(game.pendingCombat)),
@@ -698,6 +706,7 @@ export function gameSnapshotFromObservation(
         ?? preserve?.participatingPlayerIds)
       : preserve?.participatingPlayerIds,
     turnEvent: fromObservationField(mech, 'turnEvent', preserve?.turnEvent),
+    eventDeck: fromObservationField(mech, 'eventDeck', preserve?.eventDeck),
     productionTokensSpentThisTurn: fromObservationField(
       mech,
       'productionTokensSpentThisTurn',

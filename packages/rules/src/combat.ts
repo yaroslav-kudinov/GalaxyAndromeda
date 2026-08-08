@@ -104,7 +104,7 @@ export const SHIP_FIRE_RANGE: Partial<Record<ShipType, number>> = {
 
 }
 
-/** min/max fireRange; Г.О. [2,3] — не соседняя клетка */
+/** min/max fireRange; гиперпространственное орудие [2,3] — не соседняя клетка */
 
 export interface FireRangeBounds {
 

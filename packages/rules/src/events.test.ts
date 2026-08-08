@@ -1,8 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import {
   applyEventImmediateEffects,
+  buildEventDeckTemplate,
+  createShuffledEventDeck,
+  drawNextEventFromDeck,
   drawRandomEvent,
   ensureTurnEventForPhase,
+  EVENT_DECK_COPIES,
+  EVENT_DECK_SIZE,
   getEffectiveMoveRange,
   getEffectiveTokenValue,
   getTurnModifiers,
@@ -83,19 +88,46 @@ describe('events', () => {
     })
   })
 
-  it('drawRandomEvent is deterministic with fixed rng', () => {
-    expect(drawRandomEvent(() => 0)).toBe('magnetic-storm')
-    expect(drawRandomEvent(() => 0.99)).toBe('local-self-defense')
+  it('event deck template uses weighted copies (harsh cards rarer)', () => {
+    const template = buildEventDeckTemplate()
+    expect(template).toHaveLength(EVENT_DECK_SIZE)
+    expect(EVENT_DECK_SIZE).toBeGreaterThan(14)
+    expect(EVENT_DECK_COPIES['empty-void']).toBe(3)
+    expect(EVENT_DECK_COPIES['ammo-detonation']).toBe(1)
+    expect(EVENT_DECK_COPIES['saboteurs-activation']).toBe(1)
+    expect(EVENT_DECK_COPIES['stand-to-death']).toBe(1)
+    expect(template.filter((id) => id === 'empty-void')).toHaveLength(3)
+    expect(template.filter((id) => id === 'ammo-detonation')).toHaveLength(1)
   })
 
-  it('ensureTurnEventForPhase draws once per turn', () => {
+  it('drawRandomEvent is deterministic with fixed rng over weighted template', () => {
+    expect(drawRandomEvent(() => 0)).toBe('magnetic-storm')
+    const template = buildEventDeckTemplate()
+    expect(drawRandomEvent(() => 0.999999)).toBe(template[template.length - 1])
+  })
+
+  it('drawNextEventFromDeck reshuffles when empty', () => {
+    const game = gameSnapshotFromMap(createEmptyMap())
+    game.eventDeck = ['empty-void']
+    expect(drawNextEventFromDeck(game, () => 0)).toBe('empty-void')
+    expect(game.eventDeck).toHaveLength(0)
+    const next = drawNextEventFromDeck(game, () => 0)
+    expect(next).toBeTruthy()
+    expect(game.eventDeck!.length).toBe(EVENT_DECK_SIZE - 1)
+  })
+
+  it('ensureTurnEventForPhase draws from deck once per turn', () => {
     const game = gameSnapshotFromMap(createEmptyMap())
     game.phase = 'events'
     game.turnNumber = 3
+    game.eventDeck = createShuffledEventDeck(() => 0.25)
+    const beforeLen = game.eventDeck.length
     ensureTurnEventForPhase(game, () => 0.5)
     const first = game.turnEvent?.eventId
+    expect(game.eventDeck.length).toBe(beforeLen - 1)
     ensureTurnEventForPhase(game, () => 0)
     expect(game.turnEvent?.eventId).toBe(first)
+    expect(game.eventDeck.length).toBe(beforeLen - 1)
   })
 
   it('resolveTurnEvent applies saboteurs in controlled regions', () => {

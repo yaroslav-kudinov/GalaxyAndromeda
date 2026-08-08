@@ -107,7 +107,7 @@ export function buildTerritoryEdgeBands(
   size: number,
   orientation: HexOrientation,
   /** How far the soft fill reaches toward cell center (0–1 of radius) */
-  insetFactor = 0.42,
+  insetFactor = 0.32,
   excludePlayers: ReadonlySet<number> | readonly number[] = [],
 ): TerritoryEdgeBand[] {
   return buildTerritoryOverlay(cells, size, orientation, insetFactor, excludePlayers).bands
@@ -120,7 +120,7 @@ export function buildTerritoryOverlay(
   cells: MapCellDefinition[],
   size: number,
   orientation: HexOrientation,
-  insetFactor = 0.42,
+  insetFactor = 0.32,
   /** Слоты игроков (1–6), чьи территории не рисуем (обычно — локальный игрок) */
   excludePlayers: ReadonlySet<number> | readonly number[] = [],
 ): TerritoryOverlay {

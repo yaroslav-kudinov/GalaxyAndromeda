@@ -92,7 +92,7 @@ describe('По правилам (PDF / rulebook compliance)', () => {
     })
   })
 
-  it('Г.О. fireRange 2–3: соседняя клетка запрещена', () => {
+  it('гиперпространственное орудие fireRange 2–3: соседняя клетка запрещена', () => {
     expect(getFireRangeBounds('hyper')).toEqual({ min: 2, max: 3 })
 
     const map = createEmptyMap('hyper-range', 'Hyper')

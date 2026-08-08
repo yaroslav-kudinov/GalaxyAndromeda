@@ -100,4 +100,19 @@ export function markerSummary(cell: BoardCellView): string | null {
   return null
 }
 
+const SHIP_LABELS_PLURAL: Record<ShipType, string> = {
+  supply: 'Снабжение',
+  destroyer: 'Эсминцы',
+  cruiser: 'Крейсеры',
+  battleship: 'Линкоры',
+  shield: 'Щитоносцы',
+  hyper: 'Гиперпространственные орудия',
+}
+
+/** Singular for 1; plural name + « × N» for N > 1. */
+export function shipTypeCountLabel(type: ShipType, count: number): string {
+  if (count <= 1) return SHIP_LABELS[type]
+  return `${SHIP_LABELS_PLURAL[type]} × ${count}`
+}
+
 export { SHIP_LABELS, SHIP_ABBREV }

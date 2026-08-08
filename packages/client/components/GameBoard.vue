@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { PlayerState } from '@galaxy/rules'
 import type { BoardCellView } from '~/utils/board-adapter'
 import { boardMarkerKeys } from '~/utils/board-adapter'
 import type { HexOrientation } from '~/utils/hex-layout'
@@ -17,7 +18,12 @@ const props = withDefaults(
     myTerritoryKeys?: string[]
     hideTerritoryPlayers?: number[]
     movementSourceKey?: string | null
-    previewMoves?: { from: { q: number; r: number }; to: { q: number; r: number }; combat?: boolean }[]
+    previewMoves?: {
+      from: { q: number; r: number }
+      to: { q: number; r: number }
+      shipId?: string
+      combat?: boolean
+    }[]
     territoryLabelPlayers?: TerritoryLabelPlayer[]
     availableActionMarkerKeys?: string[]
     availableProductionMarkerKeys?: string[]
@@ -26,6 +32,7 @@ const props = withDefaults(
     showOrientationToggle?: boolean
     showAutoFitToggle?: boolean
     orientation?: HexOrientation
+    players?: PlayerState[]
   }>(),
   {
     ghosts: () => [],
@@ -46,6 +53,7 @@ const props = withDefaults(
     zoomable: true,
     showOrientationToggle: true,
     showAutoFitToggle: true,
+    players: () => [],
   },
 )
 
@@ -83,6 +91,7 @@ const markerKeys = computed(() => boardMarkerKeys(props.cells))
     :show-orientation-toggle="showOrientationToggle"
     :show-auto-fit-toggle="showAutoFitToggle"
     :orientation="orientation"
+    :players="players"
     @select="(q, r) => emit('select', q, r)"
     @add-ghost="(q, r) => emit('addGhost', q, r)"
   />

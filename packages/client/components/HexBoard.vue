@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { MapCellDefinition } from '@galaxy/rules'
+import type { MapCellDefinition, PlayerState } from '@galaxy/rules'
 import { PLAYER_COLORS, getCellResourceToken, hexKey } from '@galaxy/rules'
 import {
   HEX_ORIENTATIONS,
@@ -35,7 +35,12 @@ const props = withDefaults(
     /** Слоты игроков (1–6), чьи территории не рисуем на карте */
     hideTerritoryPlayers?: number[]
     movementSourceKey?: string | null
-    previewMoves?: { from: { q: number; r: number }; to: { q: number; r: number }; combat?: boolean }[]
+    previewMoves?: {
+      from: { q: number; r: number }
+      to: { q: number; r: number }
+      shipId?: string
+      combat?: boolean
+    }[]
     territoryLabelPlayers?: TerritoryLabelPlayer[]
     zoomable?: boolean
     orientation?: HexOrientation
@@ -45,6 +50,8 @@ const props = withDefaults(
     toolbarPlacement?: 'inline' | 'overlay'
     mode?: 'editor' | 'game'
     fillViewport?: boolean
+    players?: PlayerState[]
+    cellHoverTooltip?: boolean
   }>(),
   {
     zoomable: true,
@@ -69,8 +76,61 @@ const props = withDefaults(
     toolbarPlacement: 'overlay',
     mode: 'editor',
     fillViewport: true,
+    players: () => [],
+    cellHoverTooltip: undefined,
   },
 )
+
+const HOVER_TOOLTIP_DELAY_MS = 1000
+const showCellHoverTooltip = computed(
+  () => props.cellHoverTooltip ?? props.mode === 'game',
+)
+const hoverTooltipCell = ref<MapCellDefinition | null>(null)
+const hoverTooltipVisible = ref(false)
+const hoverTooltipPos = ref({ x: 0, y: 0 })
+let hoverTooltipTimer: ReturnType<typeof setTimeout> | null = null
+
+function clearHoverTooltipTimer() {
+  if (hoverTooltipTimer) {
+    clearTimeout(hoverTooltipTimer)
+    hoverTooltipTimer = null
+  }
+}
+
+function clampTooltipPos(x: number, y: number) {
+  const offset = 14
+  const maxW = 280
+  const maxH = 220
+  return {
+    x: Math.max(8, Math.min(x + offset, window.innerWidth - maxW - 8)),
+    y: Math.max(8, Math.min(y + offset, window.innerHeight - maxH - 8)),
+  }
+}
+
+function onCellMouseEnter(cell: MapCellDefinition, e: MouseEvent) {
+  if (!showCellHoverTooltip.value) return
+  clearHoverTooltipTimer()
+  hoverTooltipVisible.value = false
+  hoverTooltipCell.value = cell
+  const { clientX, clientY } = e
+  hoverTooltipTimer = setTimeout(() => {
+    hoverTooltipPos.value = clampTooltipPos(clientX, clientY)
+    hoverTooltipVisible.value = true
+  }, HOVER_TOOLTIP_DELAY_MS)
+}
+
+function onCellMouseLeave() {
+  clearHoverTooltipTimer()
+  hoverTooltipCell.value = null
+  hoverTooltipVisible.value = false
+}
+
+function onCellMouseMove(_cell: MapCellDefinition, e: MouseEvent) {
+  if (!hoverTooltipVisible.value) return
+  hoverTooltipPos.value = clampTooltipPos(e.clientX, e.clientY)
+}
+
+onUnmounted(clearHoverTooltipTimer)
 
 const emit = defineEmits<{
   select: [q: number, r: number]
@@ -130,7 +190,7 @@ const territoryOverlay = computed(() =>
     props.cells,
     size,
     orientation.value,
-    0.42,
+    0.32,
     props.hideTerritoryPlayers,
   ),
 )
@@ -230,12 +290,27 @@ function isMovementSource(key: string): boolean {
   return props.movementSourceKey != null && props.movementSourceKey === key
 }
 
+function shipAnchorAt(q: number, r: number, shipId?: string): { x: number; y: number } {
+  const cell = props.cells.find((c) => c.q === q && c.r === r)
+  if (!cell?.startingShips?.length) return center(q, r)
+
+  const positions = shipPositions(cell)
+  if (shipId) {
+    const idx = cell.startingShips.findIndex(
+      (s) => (s as { id?: string }).id === shipId,
+    )
+    if (idx >= 0 && positions[idx]) return positions[idx]
+  }
+
+  return positions.length === 1 ? positions[0] : center(q, r)
+}
+
 const previewArrowPaths = computed(() =>
   props.previewMoves.map((move, idx) => {
-    const from = center(move.from.q, move.from.r)
+    const from = shipAnchorAt(move.from.q, move.from.r, move.shipId)
     const to = center(move.to.q, move.to.r)
     return {
-      key: `preview-${idx}-${hexKey(move.from.q, move.from.r)}-${hexKey(move.to.q, move.to.r)}`,
+      key: `preview-${idx}-${hexKey(move.from.q, move.from.r)}-${hexKey(move.to.q, move.to.r)}-${move.shipId ?? idx}`,
       d: `M ${from.x} ${from.y} L ${to.x} ${to.y}`,
       combat: !!move.combat,
     }
@@ -449,8 +524,8 @@ function onPointerUp(e: PointerEvent) {
           :x2="band.gx2"
           :y2="band.gy2"
         >
-          <stop offset="0%" :stop-color="PLAYER_COLORS[band.player] ?? '#888'" stop-opacity="0.72" />
-          <stop offset="55%" :stop-color="PLAYER_COLORS[band.player] ?? '#888'" stop-opacity="0.28" />
+          <stop offset="0%" :stop-color="PLAYER_COLORS[band.player] ?? '#888'" stop-opacity="0.88" />
+          <stop offset="42%" :stop-color="PLAYER_COLORS[band.player] ?? '#888'" stop-opacity="0.36" />
           <stop offset="100%" :stop-color="NEUTRAL_CELL_FILL" stop-opacity="0" />
         </linearGradient>
         <linearGradient
@@ -463,8 +538,8 @@ function onPointerUp(e: PointerEvent) {
           :x2="corner.gx2"
           :y2="corner.gy2"
         >
-          <stop offset="0%" :stop-color="PLAYER_COLORS[corner.player] ?? '#888'" stop-opacity="0.72" />
-          <stop offset="55%" :stop-color="PLAYER_COLORS[corner.player] ?? '#888'" stop-opacity="0.28" />
+          <stop offset="0%" :stop-color="PLAYER_COLORS[corner.player] ?? '#888'" stop-opacity="0.88" />
+          <stop offset="42%" :stop-color="PLAYER_COLORS[corner.player] ?? '#888'" stop-opacity="0.36" />
           <stop offset="100%" :stop-color="NEUTRAL_CELL_FILL" stop-opacity="0" />
         </linearGradient>
       </defs>
@@ -488,6 +563,9 @@ function onPointerUp(e: PointerEvent) {
           :class="{ hex: true, owned: cell.startPlayer != null }"
           :fill="NEUTRAL_CELL_FILL"
           @click="emit('select', cell.q, cell.r)"
+          @mouseenter="onCellMouseEnter(cell, $event)"
+          @mouseleave="onCellMouseLeave"
+          @mousemove="onCellMouseMove(cell, $event)"
         />
         <polygon
           v-if="isReachable(hexKey(cell.q, cell.r))"
@@ -614,6 +692,16 @@ function onPointerUp(e: PointerEvent) {
         </template>
       </g>
     </svg>
+
+    <Teleport to="body">
+      <HexCellTooltip
+        v-if="showCellHoverTooltip && hoverTooltipVisible && hoverTooltipCell"
+        :cell="hoverTooltipCell"
+        :players="players"
+        :x="hoverTooltipPos.x"
+        :y="hoverTooltipPos.y"
+      />
+    </Teleport>
   </div>
 </template>
 
@@ -733,10 +821,10 @@ function onPointerUp(e: PointerEvent) {
 }
 .territory-perimeter {
   fill: none;
-  stroke-width: 2.6;
+  stroke-width: 2.8;
   stroke-linecap: round;
   stroke-linejoin: round;
-  opacity: 0.92;
+  opacity: 0.98;
 }
 .territory-edges {
   pointer-events: none;
@@ -808,25 +896,26 @@ function onPointerUp(e: PointerEvent) {
 .hex-marker-ring--production {
   stroke: #f472b6;
   stroke-width: 2.2;
-  stroke-dasharray: 5 3;
 }
 .hex-marker-ring--action.hex-marker-ring--available,
 .hex-marker-ring--production.hex-marker-ring--available {
-  animation: marker-ring-available 2.2s ease-in-out infinite;
+  animation: marker-ring-available 1.55s ease-in-out infinite;
 }
 .hex-marker-ring--action.hex-marker-ring--available {
-  filter: drop-shadow(0 0 3px rgba(254, 240, 138, 0.45));
+  filter: drop-shadow(0 0 5px rgba(254, 240, 138, 0.65));
 }
 .hex-marker-ring--production.hex-marker-ring--available {
-  filter: drop-shadow(0 0 3px rgba(244, 114, 182, 0.45));
+  filter: drop-shadow(0 0 5px rgba(244, 114, 182, 0.65));
 }
 @keyframes marker-ring-available {
   0%,
   100% {
-    stroke-opacity: 0.72;
+    stroke-opacity: 0.55;
+    stroke-width: 2.2;
   }
   50% {
     stroke-opacity: 1;
+    stroke-width: 2.8;
   }
 }
 .hex-board--zoomed-out .hex-marker-ring--action,

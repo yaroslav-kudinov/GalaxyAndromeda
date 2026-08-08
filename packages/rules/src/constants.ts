@@ -53,7 +53,7 @@ export const SHIP_LABELS: Record<ShipType, string> = {
   cruiser: 'Крейсер',
   battleship: 'Линкор',
   shield: 'Щитоносец',
-  hyper: 'Г.О.',
+  hyper: 'Гиперпространственное орудие',
 }
 
 export const SHIP_ABBREV: Record<ShipType, string> = {

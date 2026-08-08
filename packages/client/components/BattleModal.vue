@@ -431,6 +431,11 @@ function playerColor(id: string): string {
   return props.snapshot.players.find((p) => p.id === id)?.color ?? '#94a3b8'
 }
 
+/** CSS-переменная цвета игрока для колонок, бросков и карточек поддержки */
+function sideColorVars(playerId: string): { '--side-color': string } {
+  return { '--side-color': playerColor(playerId) }
+}
+
 function rollLabel(entry: ShipCombatRollLog): string {
   const name = SHIP_LABELS[entry.shipType]
   if (entry.supportRolls?.length) return `Поддержка от ${name}…`
@@ -786,7 +791,9 @@ onUnmounted(() => {
           </h2>
           <p class="battle-sub">
             ({{ preview.coord.q }}, {{ preview.coord.r }}) —
-            {{ playerLabel(preview.attackerId) }} vs {{ playerLabel(preview.defenderId) }}
+            <span :style="{ color: playerColor(preview.attackerId) }">{{ playerLabel(preview.attackerId) }}</span>
+            vs
+            <span :style="{ color: playerColor(preview.defenderId) }">{{ playerLabel(preview.defenderId) }}</span>
           </p>
         </div>
         <button v-if="phase === 'post'" type="button" class="close-btn" @click="emit('close')">×</button>
@@ -800,6 +807,11 @@ onUnmounted(() => {
             </p>
             <ul v-if="localSupportCandidate" class="support-choice-list">
               <li v-for="ship in localSupportCandidate.ships" :key="ship.shipId">
+                <span
+                  class="player-swatch"
+                  :style="{ background: playerColor(localPlayerId) }"
+                  aria-hidden="true"
+                />
                 {{ SHIP_LABELS[ship.type] }} · +{{ ship.supportDice }}d6
                 <span class="muted">({{ ship.fromCoord.q }}, {{ ship.fromCoord.r }})</span>
               </li>
@@ -812,7 +824,8 @@ onUnmounted(() => {
 
           <div class="fleet-arena">
             <section
-              class="fleet-col fleet-col--attacker"
+              class="fleet-col"
+              :style="sideColorVars(preview.attackerId)"
               :class="{
                 'fleet-col--mine': isLocalFleet('attacker'),
                 'fleet-col--target': canToggleSkipOnFleet('attacker'),
@@ -870,10 +883,11 @@ onUnmounted(() => {
                   v-for="sup in attackerSupportShips"
                   :key="'att-sup-' + sup.shipId"
                   class="ship-card ship-card--support"
-                  :title="`Поддержка с (${sup.fromCoord.q}, ${sup.fromCoord.r})`"
+                  :style="sideColorVars(sup.ownerId)"
+                  :title="`Поддержка · ${playerLabel(sup.ownerId)} · (${sup.fromCoord.q}, ${sup.fromCoord.r})`"
                 >
                   <svg class="ship-card-glyph" viewBox="-14 -14 28 28" aria-hidden="true">
-                    <ShipGlyph :type="sup.type" :player-color="playerColor(preview.attackerId)" :scale="0.9" />
+                    <ShipGlyph :type="sup.type" :player-color="playerColor(sup.ownerId)" :scale="0.9" />
                   </svg>
                   <span class="support-tag">поддержка</span>
                   <span class="ship-card-meta">
@@ -889,7 +903,8 @@ onUnmounted(() => {
             </div>
 
             <section
-              class="fleet-col fleet-col--defender"
+              class="fleet-col"
+              :style="sideColorVars(preview.defenderId)"
               :class="{
                 'fleet-col--mine': isLocalFleet('defender'),
                 'fleet-col--target': canToggleSkipOnFleet('defender'),
@@ -947,10 +962,11 @@ onUnmounted(() => {
                   v-for="sup in defenderSupportShips"
                   :key="'def-sup-' + sup.shipId"
                   class="ship-card ship-card--support"
-                  :title="`Поддержка с (${sup.fromCoord.q}, ${sup.fromCoord.r})`"
+                  :style="sideColorVars(sup.ownerId)"
+                  :title="`Поддержка · ${playerLabel(sup.ownerId)} · (${sup.fromCoord.q}, ${sup.fromCoord.r})`"
                 >
                   <svg class="ship-card-glyph" viewBox="-14 -14 28 28" aria-hidden="true">
-                    <ShipGlyph :type="sup.type" :player-color="playerColor(preview.defenderId)" :scale="0.9" />
+                    <ShipGlyph :type="sup.type" :player-color="playerColor(sup.ownerId)" :scale="0.9" />
                   </svg>
                   <span class="support-tag">поддержка</span>
                   <span class="ship-card-meta">
@@ -969,16 +985,22 @@ onUnmounted(() => {
               </span>
               <span
                 class="prep-odds-edge"
-                :class="{
-                  'prep-odds-edge--att': prepDiceSummary.expectedEdge > 0.5,
-                  'prep-odds-edge--def': prepDiceSummary.expectedEdge < -0.5,
-                }"
+                :style="
+                  prepDiceSummary.expectedEdge > 0.5
+                    ? sideColorVars(preview.attackerId)
+                    : prepDiceSummary.expectedEdge < -0.5
+                      ? sideColorVars(preview.defenderId)
+                      : undefined
+                "
               >
                 ожид. перевес
                 {{ prepDiceSummary.expectedEdge > 0 ? '+' : '' }}{{ prepDiceSummary.expectedEdge.toFixed(1) }}
               </span>
               <span class="prep-odds-pct">
-                атака {{ pct(prepOdds.win) }} · ничья {{ pct(prepOdds.draw) }} · защита {{ pct(prepOdds.defeat) }}
+                <span :style="{ color: playerColor(preview.attackerId) }">атака {{ pct(prepOdds.win) }}</span>
+                · ничья {{ pct(prepOdds.draw) }}
+                ·
+                <span :style="{ color: playerColor(preview.defenderId) }">защита {{ pct(prepOdds.defeat) }}</span>
               </span>
             </p>
             <p v-if="enemyFleetSide" class="skip-cue">
@@ -1061,9 +1083,10 @@ onUnmounted(() => {
               v-for="sh in shieldContributions"
               :key="sh.shipId"
               class="shield-chip"
+              :style="sideColorVars(sh.ownerId)"
             >
               <svg class="shield-chip-glyph" viewBox="-12 -12 24 24" aria-hidden="true">
-                <ShipGlyph type="shield" player-color="#4ade80" :scale="0.65" :show-plate="false" />
+                <ShipGlyph type="shield" :player-color="playerColor(sh.ownerId)" :scale="0.65" :show-plate="false" />
               </svg>
               <span>{{ sh.absorbCapacity }}</span>
             </span>
@@ -1176,19 +1199,21 @@ onUnmounted(() => {
 
         <template v-else>
           <section class="totals-bar">
-            <div class="total-side total-side--attacker">
-              <span class="total-label">{{ isBombardment ? 'Обстрел · сумма кубиков' : 'Атакующий · сумма кубиков' }}</span>
+            <div class="total-side" :style="sideColorVars(preview.attackerId)">
+              <span class="total-label">
+                {{ isBombardment ? 'Обстрел' : 'Атакующий' }} · {{ playerLabel(preview.attackerId) }}
+              </span>
               <span class="total-value">{{ animationDone ? finalAttackerTotal : attackerRunningTotal }}</span>
             </div>
             <template v-if="!isBombardment">
               <span class="total-vs">vs</span>
-              <div class="total-side total-side--defender">
-                <span class="total-label">Защитник · сумма кубиков</span>
+              <div class="total-side" :style="sideColorVars(preview.defenderId)">
+                <span class="total-label">Защитник · {{ playerLabel(preview.defenderId) }}</span>
                 <span class="total-value">{{ animationDone ? finalDefenderTotal : defenderRunningTotal }}</span>
               </div>
             </template>
-            <div v-else class="total-side total-side--defender total-side--passive">
-              <span class="total-label">Защитник</span>
+            <div v-else class="total-side total-side--passive" :style="sideColorVars(preview.defenderId)">
+              <span class="total-label">Защитник · {{ playerLabel(preview.defenderId) }}</span>
               <span class="total-value muted">не бросает</span>
             </div>
           </section>
@@ -1200,10 +1225,9 @@ onUnmounted(() => {
                 v-for="(entry, i) in allRolls"
                 :key="entry.shipId + '-' + i"
                 class="roll-entry"
+                :style="sideColorVars(entry.ownerId)"
                 :class="{
                   'roll-entry--visible': i < revealedCount,
-                  'roll-entry--attacker': entry.side === 'attacker',
-                  'roll-entry--defender': entry.side === 'defender',
                   'roll-entry--support': !!entry.supportRolls?.length,
                 }"
               >
@@ -1217,6 +1241,7 @@ onUnmounted(() => {
                 v-for="sh in shieldContributions"
                 :key="'shield-' + sh.shipId"
                 class="roll-entry roll-entry--shield roll-entry--visible"
+                :style="sideColorVars(sh.ownerId)"
               >
                 <span class="roll-label">{{ shieldLabel(sh) }}</span>
                 <span class="roll-shield-badge">без кубиков</span>
@@ -1260,11 +1285,23 @@ onUnmounted(() => {
           <button type="button" class="btn-secondary" :disabled="resolving" @click="emit('supportSide', null)">
             Не поддерживать
           </button>
-          <button type="button" class="btn-secondary" :disabled="resolving" @click="emit('supportSide', 'attacker')">
-            Поддержать атакующего
+          <button
+            type="button"
+            class="btn-side"
+            :style="sideColorVars(preview.attackerId)"
+            :disabled="resolving"
+            @click="emit('supportSide', 'attacker')"
+          >
+            Поддержать {{ playerLabel(preview.attackerId) }}
           </button>
-          <button type="button" class="btn-primary" :disabled="resolving" @click="emit('supportSide', 'defender')">
-            Поддержать защитника
+          <button
+            type="button"
+            class="btn-side btn-side--emphasis"
+            :style="sideColorVars(preview.defenderId)"
+            :disabled="resolving"
+            @click="emit('supportSide', 'defender')"
+          >
+            Поддержать {{ playerLabel(preview.defenderId) }}
           </button>
         </template>
         <template v-if="phase === 'pre' && isOnlinePrep && !isDefenderObserver && !isThirdParty">
@@ -1351,9 +1388,9 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   border-radius: 12px;
-  border: 1px solid rgba(248, 113, 113, 0.5);
+  border: 1px solid rgba(100, 116, 139, 0.55);
   background:
-    radial-gradient(ellipse 80% 50% at 50% 0%, rgba(127, 29, 29, 0.22), transparent 55%),
+    radial-gradient(ellipse 80% 50% at 50% 0%, rgba(51, 65, 85, 0.35), transparent 55%),
     rgba(15, 23, 42, 0.98);
   color: #e2e8f0;
   box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
@@ -1375,7 +1412,7 @@ onUnmounted(() => {
 .battle-head h2 {
   margin: 0;
   font-size: 1rem;
-  color: #fecaca;
+  color: #e2e8f0;
 }
 .battle-sub {
   margin: 0.2rem 0 0;
@@ -1421,17 +1458,10 @@ onUnmounted(() => {
 .fleet-col {
   padding: 0.55rem;
   border-radius: 10px;
-  border: 1px solid transparent;
+  border: 1px solid color-mix(in srgb, var(--side-color, #94a3b8) 35%, transparent);
+  background: color-mix(in srgb, var(--side-color, #94a3b8) 22%, rgba(15, 23, 42, 0.92));
   min-width: 0;
   transition: border-color 0.2s, box-shadow 0.2s;
-}
-.fleet-col--attacker {
-  background: rgba(127, 29, 29, 0.28);
-  border-color: rgba(248, 113, 113, 0.35);
-}
-.fleet-col--defender {
-  background: rgba(30, 58, 138, 0.28);
-  border-color: rgba(96, 165, 250, 0.35);
 }
 .fleet-col--target {
   box-shadow: inset 0 0 0 1px rgba(251, 191, 36, 0.35);
@@ -1527,7 +1557,7 @@ onUnmounted(() => {
   transform: translateY(0);
 }
 .ship-card--pulse {
-  animation: skip-pulse 1.35s ease-in-out infinite;
+  animation: skip-pulse 1.1s ease-in-out infinite;
 }
 .ship-card--dim:disabled,
 .ship-card--dim {
@@ -1567,15 +1597,15 @@ onUnmounted(() => {
   border-style: dashed;
 }
 .ship-card--support {
-  border-color: rgba(167, 139, 250, 0.55);
-  background: rgba(76, 29, 149, 0.25);
+  border-color: color-mix(in srgb, var(--side-color, #a78bfa) 55%, transparent);
+  background: color-mix(in srgb, var(--side-color, #a78bfa) 20%, rgba(2, 6, 23, 0.45));
 }
 .support-tag {
   font-size: 0.55rem;
   font-weight: 700;
   letter-spacing: 0.02em;
   text-transform: uppercase;
-  color: #ddd6fe;
+  color: color-mix(in srgb, var(--side-color, #ddd6fe) 70%, #fff);
 }
 .ship-card-glyph {
   width: 2.4rem;
@@ -1647,10 +1677,8 @@ onUnmounted(() => {
 .prep-odds-edge {
   font-weight: 700;
   font-variant-numeric: tabular-nums;
-  color: #cbd5e1;
+  color: color-mix(in srgb, var(--side-color, #cbd5e1) 72%, #fff);
 }
-.prep-odds-edge--att { color: #fca5a5; }
-.prep-odds-edge--def { color: #93c5fd; }
 .prep-odds-pct {
   font-variant-numeric: tabular-nums;
   color: #64748b;
@@ -1730,9 +1758,9 @@ onUnmounted(() => {
   color: #fde68a;
 }
 .priority-rail-item--skippable .priority-rail-btn {
-  animation: skip-pulse 1.35s ease-in-out infinite;
-  border-color: rgba(251, 191, 36, 0.55);
-  background: rgba(120, 53, 15, 0.28);
+  animation: skip-pulse 1.1s ease-in-out infinite;
+  border-color: rgba(251, 191, 36, 0.65);
+  background: rgba(120, 53, 15, 0.32);
 }
 .priority-rail-item--primary .priority-rail-label {
   color: #86efac;
@@ -1758,12 +1786,14 @@ onUnmounted(() => {
 }
 @keyframes skip-pulse {
   0%, 100% {
-    box-shadow: 0 0 0 0 rgba(251, 191, 36, 0.15);
+    box-shadow: 0 0 0 0 rgba(251, 191, 36, 0.25);
     filter: brightness(1);
   }
   50% {
-    box-shadow: 0 0 0 3px rgba(251, 191, 36, 0.28);
-    filter: brightness(1.12);
+    box-shadow:
+      0 0 0 5px rgba(251, 191, 36, 0.45),
+      0 0 14px 2px rgba(251, 191, 36, 0.28);
+    filter: brightness(1.2);
   }
 }
 
@@ -1787,11 +1817,11 @@ onUnmounted(() => {
   gap: 0.15rem;
   padding: 0.15rem 0.4rem 0.15rem 0.2rem;
   border-radius: 999px;
-  background: rgba(20, 83, 45, 0.4);
-  border: 1px solid rgba(74, 222, 128, 0.4);
+  background: color-mix(in srgb, var(--side-color, #4ade80) 22%, rgba(15, 23, 42, 0.85));
+  border: 1px solid color-mix(in srgb, var(--side-color, #4ade80) 45%, transparent);
   font-size: 0.72rem;
   font-weight: 700;
-  color: #bbf7d0;
+  color: color-mix(in srgb, var(--side-color, #bbf7d0) 65%, #fff);
   font-variant-numeric: tabular-nums;
 }
 .shield-chip-glyph {
@@ -1989,9 +2019,8 @@ onUnmounted(() => {
   font-size: 1.4rem;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
+  color: color-mix(in srgb, var(--side-color, #94a3b8) 78%, #fff);
 }
-.total-side--attacker .total-value { color: #fca5a5; }
-.total-side--defender .total-value { color: #93c5fd; }
 .total-vs {
   font-size: 0.75rem;
   color: #64748b;
@@ -2013,29 +2042,22 @@ onUnmounted(() => {
   opacity: 0;
   transform: translateY(4px);
   transition: opacity 0.25s, transform 0.25s;
+  background: color-mix(in srgb, var(--side-color, #94a3b8) 20%, rgba(15, 23, 42, 0.88));
+  border-left: 3px solid var(--side-color, #94a3b8);
+}
+.roll-entry--support {
+  font-style: italic;
 }
 .roll-entry--visible {
   opacity: 1;
   transform: translateY(0);
 }
-.roll-entry--attacker {
-  background: rgba(127, 29, 29, 0.35);
-  border-left: 3px solid #f87171;
-}
-.roll-entry--defender {
-  background: rgba(30, 58, 138, 0.35);
-  border-left: 3px solid #60a5fa;
-}
-.roll-entry--support {
-  font-style: italic;
-}
 .roll-entry--shield {
-  background: rgba(20, 83, 45, 0.45);
-  border-left: 3px solid #4ade80;
+  font-style: normal;
 }
 .roll-shield-badge {
   font-size: 0.72rem;
-  color: #86efac;
+  color: color-mix(in srgb, var(--side-color, #86efac) 65%, #fff);
   font-style: italic;
 }
 .shield-roster {
@@ -2211,9 +2233,41 @@ onUnmounted(() => {
   border-radius: 8px;
   font-size: 0.78rem;
   line-height: 1.35;
-  color: #bfdbfe;
-  background: rgba(30, 58, 138, 0.35);
-  border: 1px solid rgba(96, 165, 250, 0.45);
+  color: #cbd5e1;
+  background: rgba(30, 41, 59, 0.55);
+  border: 1px solid rgba(100, 116, 139, 0.45);
+}
+.player-swatch {
+  display: inline-block;
+  width: 0.55rem;
+  height: 0.55rem;
+  margin-right: 0.25rem;
+  border-radius: 999px;
+  vertical-align: middle;
+  box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.6);
+}
+.support-choice-list li {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.15rem;
+}
+.btn-side {
+  padding: 0.45rem 0.75rem;
+  border-radius: 8px;
+  font-size: 0.82rem;
+  cursor: pointer;
+  border: 1px solid color-mix(in srgb, var(--side-color, #475569) 55%, #fff);
+  background: color-mix(in srgb, var(--side-color, #475569) 18%, #1e293b);
+  color: color-mix(in srgb, var(--side-color, #e2e8f0) 55%, #fff);
+  font-weight: 600;
+}
+.btn-side--emphasis {
+  background: color-mix(in srgb, var(--side-color, #475569) 32%, #1e293b);
+}
+.btn-side:disabled {
+  opacity: 0.6;
+  cursor: wait;
 }
 .observer-hint {
   margin: 0;
