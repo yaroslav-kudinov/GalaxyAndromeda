@@ -44,6 +44,8 @@ interface PersistedRoomFile {
   code: string
   maxPlayers: number
   playerIds: string[]
+  status?: 'lobby' | 'playing'
+  hostPlayerId?: string | null
   observationRevision: number
   /** epoch ms; для чистки пустых лобби после рестарта */
   lastActivityAt?: number
@@ -102,6 +104,8 @@ function serializeRoom(room: Room): string {
     code: room.code,
     maxPlayers: room.maxPlayers,
     playerIds: [...room.playerIds],
+    status: room.status,
+    hostPlayerId: room.hostPlayerId,
     observationRevision: room.observationRevision,
     lastActivityAt: room.lastActivityAt,
     lastCombatResult: room.lastCombatResult,
@@ -250,6 +254,8 @@ function readPersistedRoom(path: string): Room | null {
     maxPlayers: typeof record.maxPlayers === 'number' && record.maxPlayers > 0
       ? record.maxPlayers
       : save.game.players.length,
+    status: record.status === 'lobby' || record.status === 'playing' ? record.status : 'playing',
+    hostPlayerId: typeof record.hostPlayerId === 'string' ? record.hostPlayerId : record.playerIds?.[0] ?? null,
     lastCombatResult: record.lastCombatResult,
     observationRevision: typeof record.observationRevision === 'number' ? record.observationRevision : 0,
     lastActivityAt: activityFromFile,

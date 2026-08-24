@@ -9,6 +9,7 @@ import {
   markActionMarkerResolvedThisTurn,
   removeActionMarker,
   removeProductionMarker,
+  removeStaleProductionMarkerAt,
   toggleMarkerAtCell,
   PRODUCTION_MARKER_ALREADY_RESOLVED_MSG,
   PRODUCTION_MARKER_MUST_RESOLVE_BEFORE_ADVANCE_MSG,
@@ -96,6 +97,38 @@ function effectiveControlOwnerId(
 function cellAt(game: GameSnapshot, coord: HexCoord): RuntimeCellState | undefined {
   const key = hexKey(coord.q, coord.r)
   return game.cells.find((c) => hexKey(c.coord.q, c.coord.r) === key)
+}
+
+/** Мирный вход: чужой контроль без боевого флота переходит входящему; маркер производства снимается. */
+function applyPeacefulControlCapture(
+  game: GameSnapshot,
+  dest: RuntimeCellState,
+  playerId: string,
+): void {
+  const owner = effectiveControlOwnerId(game, dest.controlOwnerId)
+  if (owner == null || owner === playerId) {
+    removeStaleProductionMarkerAt(game, dest.coord)
+    return
+  }
+  if (isCombatDestination(game, playerId, dest.coord)) return
+  if (!dest.ships.some((ship) => ship.ownerId === playerId)) return
+  dest.controlOwnerId = playerId
+  removeStaleProductionMarkerAt(game, dest.coord)
+}
+
+function capturePeacefulDestinations(
+  game: GameSnapshot,
+  playerId: string,
+  destinations: HexCoord[],
+): void {
+  const seen = new Set<string>()
+  for (const to of destinations) {
+    const key = hexKey(to.q, to.r)
+    if (seen.has(key)) continue
+    seen.add(key)
+    const cell = cellAt(game, to)
+    if (cell) applyPeacefulControlCapture(game, cell, playerId)
+  }
 }
 
 function findShipOnBoard(
@@ -277,10 +310,11 @@ export function validateDestinationForMove(
 
   if (effectiveControlOwnerId(game, dest.controlOwnerId) != null
     && effectiveControlOwnerId(game, dest.controlOwnerId) !== playerId) {
-    if (!isCombatDestination(game, playerId, to)) {
-      return ['Вражеская клетка — бой пока не реализован']
+    // Бой только если isCombatDestination (есть враг не-supply).
+    // Мирный вход на чужой контроль без боевого флота захватывает клетку.
+    if (isCombatDestination(game, playerId, to)) {
+      return errors
     }
-    return errors
   }
 
   if (isCombatDestination(game, playerId, to)) {
@@ -456,6 +490,8 @@ function finishPendingMovementPlans(
       summaries.push(`${SHIP_LABELS[ship.type]} → (${move.to.q},${move.to.r})`)
     }
   }
+
+  capturePeacefulDestinations(game, playerId, moves.map((move) => move.to))
 
   const marker = game.actionMarkers.find(
     (m) =>
@@ -654,6 +690,8 @@ export function executeMarkerMovement(
       summaries.push(`${SHIP_LABELS[ship.type]} → (${move.to.q},${move.to.r})`)
     }
   }
+
+  capturePeacefulDestinations(game, playerId, moves.map((move) => move.to))
 
   const marker = game.actionMarkers.find(
     (m) =>

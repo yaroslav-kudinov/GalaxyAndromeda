@@ -4,7 +4,7 @@ import {
   getEffectiveFireRangeBounds,
   getEffectiveSupportRange,
   getSupportRange,
-  isCombatDestination,
+  isBombardmentDestination,
   resolveCombatAtCell,
   setupPendingCombatDestruction,
   setupCombatPrepForBombardment,
@@ -78,7 +78,7 @@ export function getBombardmentTargetKeys(
   for (const cell of game.cells) {
     const dist = hexDistance(from, cell.coord)
     if (dist < bounds.min || dist > bounds.max) continue
-    if (!isCombatDestination(game, playerId, cell.coord)) continue
+    if (!isBombardmentDestination(game, playerId, cell.coord)) continue
     keys.push(hexKey(cell.coord.q, cell.coord.r))
   }
   return keys
@@ -152,7 +152,7 @@ export function validateBombardmentTarget(
     errors.push(`Дальность обстрела ${bounds.max}, расстояние ${dist}`)
   }
 
-  if (!isCombatDestination(game, playerId, target)) {
+  if (!isBombardmentDestination(game, playerId, target)) {
     errors.push('Обстрел только по оспариваемой клетке')
   }
 
@@ -241,7 +241,7 @@ export function buildBombardmentPreview(
   bombardingShips: ShipUnit[],
   fromCoord: HexCoord,
 ): CombatPreview | null {
-  const base = buildCombatPreview(game, target, attackerId, [])
+  const base = buildCombatPreview(game, target, attackerId, [], { forBombardment: true })
   if (!base) return null
 
   const supportingShips = bombardingShips

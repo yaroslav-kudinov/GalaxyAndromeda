@@ -9,7 +9,7 @@ import {
   validateActionMarkerBeforeAdvance,
   validateProductionMarkerBeforeAdvance,
 } from './markers.js'
-import { controlledRegionCountForPlayer, validProductionRegionsForPlayer } from './regions.js'
+import { validProductionRegionsForPlayer } from './regions.js'
 import { applyVictoryAndDefeatChecks } from './victory.js'
 import type { GameSnapshot } from './save-file.js'
 import { gameStateFromSnapshot } from './save-file.js'
@@ -40,33 +40,61 @@ export function nextPhase(current: Phase): Phase {
   return PHASE_ORDER[(idx + 1) % PHASE_ORDER.length]
 }
 
-function usesRegionTurnOrder(phase?: Phase): boolean {
-  return phase === 'actions' || phase === 'production'
+function mixTurnOrderSeed(turnNumber: number, mapId: string): number {
+  let h = ((turnNumber + 1) * 0x9e3779b9) >>> 0
+  for (let i = 0; i < mapId.length; i++) {
+    h = Math.imul(h ^ mapId.charCodeAt(i), 0x01000193) >>> 0
+  }
+  return h >>> 0
 }
 
-/** Rulebook: fewer controlled regions act first in Actions/Production. */
+function mulberry32(seed: number): () => number {
+  let a = seed >>> 0
+  return () => {
+    a = (a + 0x6d2b79f5) | 0
+    let t = Math.imul(a ^ (a >>> 15), 1 | a)
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+  }
+}
+
+function shuffleInPlace<T>(items: T[], rng: () => number): void {
+  for (let i = items.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1))
+    const current = items[i]!
+    items[i] = items[j]!
+    items[j] = current
+  }
+}
+
+/** Один случайный порядок на игровой ход: события, планирование, действия и производство совпадают. */
 export function activePlayerOrder(
   players: PlayerState[],
   participatingPlayerIds?: string[] | null,
   context?: TurnOrderContext,
 ): string[] {
-  let pool = players.filter((p) => !p.eliminated)
-  if (participatingPlayerIds?.length) {
-    pool = pool.filter((p) => participatingPlayerIds.includes(p.id))
-  }
-  const slotOrder = pool.map((p) => p.id)
+  const participating = participatingPlayerIds?.length
+    ? new Set(participatingPlayerIds)
+    : null
+  const eligible = new Set(
+    players
+      .filter((p) => !p.eliminated && (!participating || participating.has(p.id)))
+      .map((p) => p.id),
+  )
+  let base = players.map((p) => p.id)
+  if (participating) base = base.filter((id) => participating.has(id))
 
-  if (context?.state && usesRegionTurnOrder(context.phase)) {
-    return [...slotOrder].sort((a, b) => {
-      const diff =
-        controlledRegionCountForPlayer(context.state!, a)
-        - controlledRegionCountForPlayer(context.state!, b)
-      if (diff !== 0) return diff
-      return slotOrder.indexOf(a) - slotOrder.indexOf(b)
-    })
+  const phase = context?.phase ?? context?.state?.phase
+  if (context?.state && phase) {
+    const shuffled = [...base]
+    shuffleInPlace(
+      shuffled,
+      mulberry32(mixTurnOrderSeed(context.state.turnNumber, context.state.mapId)),
+    )
+    return shuffled.filter((id) => eligible.has(id))
   }
 
-  return slotOrder
+  return base.filter((id) => eligible.has(id))
 }
 
 export function nextActivePlayerId(

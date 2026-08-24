@@ -32,6 +32,13 @@ async function main() {
   })
   const { playerId } = (await joinRes.json()) as { playerId: string }
 
+  const startRes = await fetch(`${BASE}/rooms/${roomId}/start`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ playerId }),
+  })
+  if (!startRes.ok) throw new Error(`start failed: ${await startRes.text()}`)
+
   const stateRes = await fetch(`${BASE}/rooms/${roomId}/state?playerId=${playerId}`)
   const obs = (await stateRes.json()) as { geometry: { asciiMap: string } }
   console.log('asciiMap:\n', obs.geometry.asciiMap)

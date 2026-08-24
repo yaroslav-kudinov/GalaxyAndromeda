@@ -21,7 +21,7 @@ const FADE_MS = 650
 
 const GAME_OVER_REASON_LABELS: Record<string, string> = {
   four_regions: '4 региона от 7 клеток',
-  power_centers: 'Большинство энергоцентров',
+  power_centers: 'Большинство центров власти',
   last_standing: 'Последний игрок на карте',
 }
 
@@ -30,6 +30,7 @@ export function useGameStatusToasts(
   playerId: Ref<string>,
   playerName: Ref<string>,
 ) {
+  const { play: playSfx } = useGameSfx()
   const toasts = ref<GameToast[]>([])
   let seq = 0
   let bootstrapped = false
@@ -68,11 +69,12 @@ export function useGameStatusToasts(
     pushToast('phase', PHASE_LABELS[phase], `Ход ${turnNumber}`)
   }
 
-  function announceActivePlayer(activeId: string | null | undefined) {
+  function announceActivePlayer(activeId: string | null | undefined, playTurnSfx: boolean) {
     if (!activeId) return
     const isMe = activeId === playerId.value
     if (isMe) {
       pushToast('turn', 'Ваш ход', PHASE_LABELS[snapshot.value?.phase ?? 'planning'], true)
+      if (playTurnSfx) playSfx('turn')
     } else {
       pushToast('turn', `Ход: ${playerLabel(activeId)}`, 'Ожидайте')
     }
@@ -91,7 +93,7 @@ export function useGameStatusToasts(
         bootstrapped = true
         announceIdentity()
         announcePhase(phase, turn)
-        announceActivePlayer(activeId)
+        announceActivePlayer(activeId, false)
         return
       }
 
@@ -102,7 +104,7 @@ export function useGameStatusToasts(
         announcePhase(phase, turn)
       }
       if (activeId !== prevActive) {
-        announceActivePlayer(activeId)
+        announceActivePlayer(activeId, true)
       }
     },
   )

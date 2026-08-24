@@ -13,8 +13,9 @@ Read **`geometry.asciiMap` and `spatialSummary` first** for strategy, then `mech
 
 1. `game_ping`
 2. `game_create_room` or join existing
-3. `game_join_room`
-4. Loop: `game_get_state` → pick from `legalActions` → `game_submit_action`
+3. `game_join_room` (optional `preferredPlayerId` = слот/цвет)
+4. Host: `game_start_room` (`roomId`, `playerId`) — иначе действия отклоняются
+5. Loop: `game_get_state` → pick from `legalActions` → `game_submit_action`
 
 ## Response format
 

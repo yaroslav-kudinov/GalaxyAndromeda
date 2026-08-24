@@ -84,6 +84,8 @@ export interface RoomBootstrap {
   map: MapDefinition
   maxPlayers: number
   playerCount: number
+  status?: 'lobby' | 'playing'
+  hostPlayerId?: string | null
   joinedPlayerIds: string[]
   availablePlayerIds?: string[]
   players: { id: string; name: string; color: string; joined?: boolean }[]
@@ -109,6 +111,8 @@ export interface LobbyListEntry {
   mapName: string
   maxPlayers: number
   playerCount: number
+  status?: 'lobby' | 'playing'
+  hostPlayerId?: string | null
   phase: string
   turnNumber: number
   activePlayerId: string
@@ -183,6 +187,13 @@ export async function fetchLobbies(): Promise<LobbiesResponse> {
 
 export async function fetchRoomBootstrap(roomId: string): Promise<RoomBootstrap> {
   return apiFetch<RoomBootstrap>(`/rooms/${roomId}/bootstrap`)
+}
+
+export async function startRoom(roomId: string, playerId: string): Promise<{ ok: true; code: string; status: string }> {
+  return apiFetch(`/rooms/${roomId}/start`, {
+    method: 'POST',
+    body: JSON.stringify({ playerId }),
+  })
 }
 
 /** Human UI: skip heavy ASCII/spatial geometry (agents use full observation via MCP). */

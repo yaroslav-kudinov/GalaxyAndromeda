@@ -43,7 +43,7 @@ export function productionMarkerUnlockRegionCountForPlayer(
   ).length
 }
 
-/** Число контролируемых регионов игрока (для очереди хода: меньше регионов — раньше). */
+/** Число контролируемых регионов игрока. */
 export function controlledRegionCountForPlayer(state: GameState, ownerId: string): number {
   const summary = buildSpatialSummary(state)
   return summary.regions.filter((r) => r.ownerId === ownerId).length

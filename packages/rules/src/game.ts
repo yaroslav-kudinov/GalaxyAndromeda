@@ -5,7 +5,7 @@ import { getActiveEventObservation } from './events.js'
 import type { GameSnapshot } from './save-file.js'
 import { buildSpatialSummary, renderAsciiMap } from './observation/index.js'
 import { PLAYER_COLORS } from './constants.js'
-import { advanceGamePhase, phaseAdvanceActionLabel } from './turn.js'
+import { activePlayerOrder, advanceGamePhase, phaseAdvanceActionLabel } from './turn.js'
 
 const EMPTY_GEOMETRY: GameObservation['geometry'] = {
   asciiMap: '',
@@ -29,7 +29,7 @@ export function gameStateFromMap(map: MapDefinition, playerNames: string[] = [])
     eliminated: false,
   }))
 
-  return {
+  const state: GameState = {
     mapId: map.id,
     phase: 'planning',
     turnNumber: 1,
@@ -51,6 +51,9 @@ export function gameStateFromMap(map: MapDefinition, playerNames: string[] = [])
     }),
     eventLog: [],
   }
+  state.activePlayerId =
+    activePlayerOrder(state.players, null, { state, phase: 'planning' })[0] ?? null
+  return state
 }
 
 export function buildObservation(
@@ -93,6 +96,9 @@ export function buildObservation(
     'eventLog',
     'lastCombatResult',
     'observationRevision',
+    'roomStatus',
+    'hostPlayerId',
+    'eventDeck',
   ] as const) {
     if (key in stateExtra) {
       mechanicsExtra[key] = stateExtra[key] ?? null

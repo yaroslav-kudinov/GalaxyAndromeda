@@ -114,7 +114,7 @@ describe('combat sketch', () => {
         scope: 'self',
         fromCoord: { q: 1, r: 0 },
       }),
-    ).toBe('Щит: поглощает до 4 (на клетке)')
+    ).toBe('щит · до 4 на клетке')
     expect(
       formatShieldContributionLabel({
         shipId: 'sh-2',
@@ -123,7 +123,7 @@ describe('combat sketch', () => {
         scope: 'neighbor',
         fromCoord: { q: 2, r: 0 },
       }),
-    ).toBe('Щит: поглощает до 2 (с соседа)')
+    ).toBe('щит · до 2 с соседа')
   })
 
   it('combatResolutionFingerprint is stable for identical results', () => {
@@ -447,6 +447,9 @@ describe('combat sketch', () => {
     game.participatingPlayerIds = ['player-1', 'player-2']
 
     addShip(game, 0, 0, 'player-1', 'destroyer', 'dd-1')
+    addShip(game, 0, 0, 'player-1', 'destroyer', 'dd-2')
+    addShip(game, 1, 0, 'player-2', 'destroyer', 'def-a')
+    addShip(game, 0, 1, 'player-2', 'destroyer', 'def-b')
     game.cells.find((c) => c.coord.q === 1 && c.coord.r === 0)!.controlOwnerId = 'player-2'
     game.cells.find((c) => c.coord.q === 0 && c.coord.r === 1)!.controlOwnerId = 'player-2'
 
@@ -1152,6 +1155,40 @@ describe('combat sketch', () => {
     expect(game.actionMarkers).toEqual([])
     expect(game.cells.find((c) => c.coord.q === 1 && c.coord.r === 0)?.actionMarkerId).toBeNull()
     expect(game.cells.find((c) => c.coord.q === 1 && c.coord.r === 0)?.controlOwnerId).toBeNull()
+  })
+
+  it('combat capture takes control and removes defender production marker', () => {
+    const map = createEmptyMap('capture-prod', 'Capture prod')
+    map.cells.push({ q: 1, r: 0 })
+    const game = gameSnapshotFromMap(map)
+    addShip(game, 1, 0, 'player-2', 'destroyer', 'def')
+    const cell = game.cells.find((c) => c.coord.q === 1 && c.coord.r === 0)!
+    cell.controlOwnerId = 'player-2'
+    cell.productionMarkerId = 'prod-p2'
+    game.productionMarkers.push({
+      id: 'prod-p2',
+      ownerId: 'player-2',
+      coord: { q: 1, r: 0 },
+      targetRegionId: 'region-p2',
+    })
+
+    applyCombatResultToSnapshot(
+      game,
+      {
+        coord: { q: 1, r: 0 },
+        winnerId: 'player-1',
+        attackerWon: true,
+        log: [],
+        destroyedShipIds: ['def'],
+        stub: false,
+      },
+      'player-1',
+      'player-2',
+    )
+
+    expect(cell.controlOwnerId).toBe('player-1')
+    expect(cell.productionMarkerId).toBeNull()
+    expect(game.productionMarkers).toHaveLength(0)
   })
 
   it('removes action marker when owner ships are wiped even if round winner is defender', () => {
@@ -2119,5 +2156,84 @@ describe('покрытие непокрытых боевых путей', () => 
       game,
     })
     expect(errors.filter((e) => e.includes('не совпадает с владельцем кораблей'))).toEqual([])
+  })
+
+  it('isCombatDestination: пустая чужая controlled и только supply — не бой', () => {
+    const map = createEmptyMap('no-combat-empty', 'No combat')
+    map.cells.push({ q: 1, r: 0 }, { q: 0, r: 1 })
+    const game = gameSnapshotFromMap(map)
+    game.cells.find((c) => c.coord.q === 1 && c.coord.r === 0)!.controlOwnerId = 'player-2'
+    expect(isCombatDestination(game, 'player-1', { q: 1, r: 0 })).toBe(false)
+
+    addShip(game, 0, 1, 'player-2', 'supply', 'sp-1')
+    game.cells.find((c) => c.coord.q === 0 && c.coord.r === 1)!.controlOwnerId = 'player-2'
+    expect(isCombatDestination(game, 'player-1', { q: 0, r: 1 })).toBe(false)
+
+    addShip(game, 1, 0, 'player-2', 'destroyer', 'dd-1')
+    expect(isCombatDestination(game, 'player-1', { q: 1, r: 0 })).toBe(true)
+  })
+
+  it('stopPendingCombat: отступление на чужой control не меняет controlOwnerId', () => {
+    const map = createEmptyMap('retreat-control', 'Retreat control')
+    map.cells.push({ q: 1, r: 0 }, { q: 0, r: 1 })
+    const game = gameSnapshotFromMap(map)
+    addShip(game, 0, 0, 'player-1', 'destroyer', 'att-dd')
+    addShip(game, 1, 0, 'player-2', 'destroyer', 'def-dd')
+    game.cells.find((c) => c.coord.q === 1 && c.coord.r === 0)!.controlOwnerId = 'player-2'
+    const retreatCell = game.cells.find((c) => c.coord.q === 0 && c.coord.r === 1)!
+    retreatCell.controlOwnerId = 'player-1'
+    retreatCell.productionMarkerId = 'prod-p1'
+    game.productionMarkers.push({
+      id: 'prod-p1',
+      ownerId: 'player-1',
+      coord: { q: 0, r: 1 },
+      targetRegionId: 'region-p1',
+    })
+    setupPendingCombat(game, { q: 1, r: 0 }, 'player-1', 2, 'movement', undefined, {
+      shipsDestroyedInCombat: true,
+    })
+    expect(continuePendingCombat(game, 'player-1').errors).toEqual([])
+    expect(stopPendingCombat(game, 'player-2', { q: 0, r: 1 })).toEqual([])
+    expect(retreatCell.controlOwnerId).toBe('player-1')
+    expect(retreatCell.ships.some((s) => s.id === 'def-dd')).toBe(true)
+    expect(retreatCell.productionMarkerId).toBe('prod-p1')
+    expect(game.productionMarkers).toHaveLength(1)
+  })
+
+  it('щит атакующего поглощает, когда атакующий проиграл раунд', () => {
+    const map = createEmptyMap('att-shield', 'Attacker shield')
+    map.cells.push({ q: 1, r: 0 }, { q: 2, r: 0 })
+    const game = gameSnapshotFromMap(map)
+    addShip(game, 0, 0, 'player-1', 'destroyer', 'att-dd')
+    addShip(game, 2, 0, 'player-1', 'shield', 'att-sh')
+    addShip(game, 1, 0, 'player-2', 'battleship', 'def-bb')
+    game.cells.find((c) => c.coord.q === 1 && c.coord.r === 0)!.controlOwnerId = 'player-2'
+
+    const preview = buildCombatPreview(
+      game,
+      { q: 1, r: 0 },
+      'player-1',
+      [{ id: 'att-dd', type: 'destroyer', ownerId: 'player-1' }],
+    )
+    expect(preview).not.toBeNull()
+    expect(preview!.shieldContributions.some((c) => c.ownerId === 'player-1')).toBe(true)
+
+    let n = 0
+    const rng = () => {
+      // destroyer 1d6 low, battleship 3d6 high → defender wins
+      n++
+      return n <= 1 ? 0 : 5 / 6
+    }
+    const result = resolveCombatAtCell(
+      game,
+      { q: 1, r: 0 },
+      'player-1',
+      [{ id: 'att-dd', type: 'destroyer', ownerId: 'player-1' }],
+      {},
+      rng,
+      preview!,
+    )
+    expect(result.attackerWon).toBe(false)
+    expect(result.shieldAbsorbed).toBeGreaterThan(0)
   })
 })

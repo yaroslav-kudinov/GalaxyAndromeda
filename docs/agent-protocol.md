@@ -8,8 +8,11 @@ HTTP base: `http://127.0.0.1:3001` (env `GAME_SERVER_URL` for MCP).
 |--------|------|-------------|
 | GET | `/health` | Health check |
 | POST | `/bug-reports` | Body: `{ description, screenshotBase64?, screenshotMime?, roomId?, playerId?, playerName? }` → `{ ok, id, expiresAt, hasScreenshot }`. Хранение в `.bug-reports/`, TTL 60 дней |
-| POST | `/rooms` | Body: `{ map, maxPlayers? }` or `{ save, maxPlayers? }` → `{ roomId, code }` |
-| POST | `/rooms/:id/join` | Body: `{ playerName }` → `{ playerId, code }` |
+| POST | `/rooms` | Body: `{ map, maxPlayers? }` or `{ save, maxPlayers? }` → `{ roomId, code }`. Комната в статусе `lobby` |
+| POST | `/rooms/:id/join` | Body: `{ playerName, preferredPlayerId? }` → `{ playerId, code }`. Только пока `lobby` |
+| POST | `/rooms/:id/rejoin` | Body: `{ playerId, playerName?, preferredPlayerId? }` → смена слота в лобби или возврат в свой слот |
+| POST | `/rooms/:id/start` | Body: `{ playerId }` — хост начинает партию (`playing`) |
+| GET | `/rooms/:id/bootstrap` | Карта, слоты, `status`, `hostPlayerId`, `joinedPlayerIds` |
 | GET | `/rooms/:id/state?playerId=` | `GameObservation` |
 | GET | `/rooms/:id/legal-actions?playerId=` | `LegalAction[]` |
 | POST | `/rooms/:id/action` | Body: `{ playerId, action: { actionId, params? } }` |
@@ -40,6 +43,8 @@ Combat FSM phases: `prep` → (roll) → `awaiting-destruction` (winner picks lo
     phase, turnNumber, activePlayerId, players, cells,
     pendingCombat?, turnEvent?, gameOver?, lastCombatResult?,
     observationRevision?, // monotonic; clients ignore stale responses
+    roomStatus?, // 'lobby' | 'playing'
+    hostPlayerId?,
     // cleared fields are sent as explicit null, not omitted
   },
   geometry: {
@@ -64,7 +69,7 @@ Combat FSM phases: `prep` → (roll) → `awaiting-destruction` (winner picks lo
 ## MCP tools
 
 - `game_ping`
-- `game_create_room`, `game_join_room`
+- `game_create_room`, `game_join_room`, `game_start_room`
 - `game_get_state`, `game_get_legal_actions`, `game_submit_action`
 - `game_get_event_log`, `game_add_ai_player`
 

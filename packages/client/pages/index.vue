@@ -16,7 +16,7 @@ import type { LobbyPlayerSlot } from '~/components/LobbyPlayerList.vue'
 import { checkServerHealth, createRoom, createRoomFromSave, fetchRoomBootstrap, GameApiError, joinRoom } from '~/composables/useGameApi'
 import { gameSaveStorageKey, saveGameSession } from '~/composables/useGameSession'
 import { savePlayerClaim } from '~/composables/usePlayerClaim'
-import { bootstrapToLobbySlots, defaultSlotForRoom, roomHasFreeSlot } from '~/utils/lobby-slot'
+import { bootstrapToLobbySlots, defaultSlotForRoom, joinAsLabel, roomHasFreeSlot } from '~/utils/lobby-slot'
 import { loadLobbySaves, upsertLobbySave } from '~/composables/useLobbySaves'
 import { usePlayerProfile } from '~/composables/usePlayerProfile'
 import {
@@ -579,7 +579,7 @@ onUnmounted(() => {
                 ? serverOnline
                   ? `Создать комнату из сохранения (до ${MAX_LOBBY_PLAYERS} игроков)`
                   : 'Продолжить игру (offline)'
-                : `Создать игру (до ${MAX_LOBBY_PLAYERS} игроков)`
+                : `Создать комнату (до ${MAX_LOBBY_PLAYERS} игроков)`
           }}
         </button>
       </section>
@@ -617,7 +617,7 @@ onUnmounted(() => {
           :disabled="busy || !joinRoomId.trim() || joinPreviewLoading || !!joinPreviewError || !selectedJoinSlot || joinPreviewFull"
           @click="joinExistingGame"
         >
-          {{ busy ? 'Вход…' : `Войти как ${nickname}` }}
+          {{ busy ? 'Вход…' : joinAsLabel(nickname, selectedJoinSlot) }}
         </button>
       </section>
     </div>

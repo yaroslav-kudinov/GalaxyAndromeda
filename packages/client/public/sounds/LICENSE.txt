@@ -1,0 +1,7 @@
+Kenney Interface Sounds — CC0 1.0 Universal
+https://kenney.nl/assets/interface-sounds
+
+turn.ogg  — Audio/confirmation_002.ogg
+combat.ogg — Audio/error_008.ogg
+
+Credit “Kenney.nl” is appreciated but not required.

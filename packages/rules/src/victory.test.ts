@@ -40,4 +40,29 @@ describe('victory', () => {
     applyVictoryAndDefeatChecks(game, map.id)
     expect(game.gameOver?.winnerId).toBe('player-1')
   })
+
+  it('power_centers: majority of ALL power centers on map, not only occupied', () => {
+    const map = createEmptyMap('pc-majority', 'PC')
+    map.cells = []
+    // 5 центров: нужно > 2.5 → ≥ 3. Два игрока явно на карте.
+    map.cells.push(
+      { q: 0, r: 0, isPowerCenter: true, startPlayer: 1 },
+      { q: 1, r: 0, isPowerCenter: true, startPlayer: 1 },
+      { q: 2, r: 0, isPowerCenter: true, startPlayer: 2 },
+      { q: 3, r: 0, isPowerCenter: true },
+      { q: 4, r: 0, isPowerCenter: true },
+    )
+    const game = gameSnapshotFromMap(map)
+    expect(game.players.map((p) => p.id)).toEqual(['player-1', 'player-2'])
+    for (const c of game.cells) c.controlOwnerId = null
+    game.cells.find((c) => c.coord.q === 0)!.controlOwnerId = 'player-1'
+    game.cells.find((c) => c.coord.q === 1)!.controlOwnerId = 'player-1'
+    game.cells.find((c) => c.coord.q === 2)!.controlOwnerId = 'player-2'
+    expect(checkVictory(gameStateFromSnapshot(game, map.id))).toBeNull()
+
+    game.cells.find((c) => c.coord.q === 3)!.controlOwnerId = 'player-1'
+    const won = checkVictory(gameStateFromSnapshot(game, map.id))
+    expect(won?.winnerId).toBe('player-1')
+    expect(won?.reason).toBe('power_centers')
+  })
 })

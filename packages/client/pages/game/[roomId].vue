@@ -54,10 +54,10 @@ import {
   combatResolutionFingerprint,
   getCombatRetreatDestinations,
 } from '@galaxy/rules'
-import { fetchObservation, fetchRoomBootstrap, GameApiError, joinRoom, rejoinRoom, submitGameAction, updateCombatPrepAction } from '~/composables/useGameApi'
+import { fetchObservation, fetchRoomBootstrap, GameApiError, joinRoom, rejoinRoom, startRoom, submitGameAction, updateCombatPrepAction } from '~/composables/useGameApi'
 import { gameSaveStorageKey, loadGameSessionForRoom, saveGameSession } from '~/composables/useGameSession'
 import { loadPlayerClaim, savePlayerClaim } from '~/composables/usePlayerClaim'
-import { bootstrapToLobbySlots, defaultSlotForRoom, roomHasFreeSlot } from '~/utils/lobby-slot'
+import { bootstrapToLobbySlots, defaultSlotForRoom, joinAsLabel, roomHasFreeSlot } from '~/utils/lobby-slot'
 import { useGamePresence } from '~/composables/useGamePresence'
 import { usePlayerProfile } from '~/composables/usePlayerProfile'
 import { useObservationSync } from '~/composables/useObservationSync'
@@ -95,6 +95,8 @@ const joinError = ref<string | null>(null)
 const joinBusy = ref(false)
 const selectedJoinSlot = ref<string | null>(null)
 const roomBootstrap = ref<Awaited<ReturnType<typeof fetchRoomBootstrap>> | null>(null)
+const roomMatchStatus = ref<'lobby' | 'playing' | null>(null)
+const lobbyHostPlayerId = ref<string | null>(null)
 const inviteCopied = ref(false)
 
 let pollTimer: ReturnType<typeof setTimeout> | null = null
@@ -137,6 +139,56 @@ const {
   resyncing: syncResyncing,
 } = observationSync
 
+const gameViewportRef = ref<HTMLElement | null>(null)
+const hudTopRef = ref<HTMLElement | null>(null)
+let hudChromeResizeObserver: ResizeObserver | null = null
+let lastHudHeaderHeightPx = 0
+
+/** Верхняя плашка, без бейджа/модалок — иначе min-height завязанный на CSS-var разгоняет высоту. */
+const HUD_HEADER_MIN_PX = 48
+const HUD_HEADER_MAX_PX = 220
+
+function syncHudChromeHeight() {
+  const header = hudTopRef.value
+  const viewport = gameViewportRef.value
+  if (!header || !viewport) return
+  const raw = Math.ceil(header.getBoundingClientRect().height)
+  if (raw <= 0) return
+  const height = Math.min(HUD_HEADER_MAX_PX, Math.max(HUD_HEADER_MIN_PX, raw))
+  if (height === lastHudHeaderHeightPx) return
+  lastHudHeaderHeightPx = height
+  viewport.style.setProperty('--hud-header-height', `${height}px`)
+}
+
+const wsDisconnectWarning = ref(false)
+
+function isWebSocketSecurityError(reason: unknown): boolean {
+  if (!reason) return false
+  const msg =
+    typeof reason === 'string'
+      ? reason
+      : reason instanceof Error
+        ? reason.message
+        : String(reason)
+  return (
+    /insecure WebSocket/i.test(msg)
+    || /Failed to construct 'WebSocket'/i.test(msg)
+    || /failed to connect to websocket/i.test(msg)
+    || (reason instanceof DOMException && reason.name === 'SecurityError' && /WebSocket/i.test(msg))
+  )
+}
+
+function onWindowUnhandledRejection(ev: PromiseRejectionEvent) {
+  if (isWebSocketSecurityError(ev.reason)) {
+    wsDisconnectWarning.value = true
+  }
+}
+
+function onWindowError(ev: ErrorEvent) {
+  if (isWebSocketSecurityError(ev.error) || isWebSocketSecurityError(ev.message)) {
+    wsDisconnectWarning.value = true
+  }
+}
 function reloadPage() {
   if (import.meta.client) window.location.reload()
 }
@@ -195,6 +247,8 @@ const pendingOrderAfterBattle = ref<MarkerOrderConfirmResult | null>(null)
 const battleResolution = ref<CombatResolutionResult | null>(null)
 /** Fingerprint итога, который игрок уже закрыл — чтобы poll не открывал модалку снова */
 const dismissedCombatResultKey = ref<string | null>(null)
+/** После первого снимка комнаты не всплывает чужой/старый lastCombatResult */
+const combatResultsHydrated = ref(false)
 const battleResolving = ref(false)
 const productionModalOpen = ref(false)
 const productionMarkerSource = ref<HexCoord | null>(null)
@@ -266,6 +320,23 @@ const joinRoomFull = computed(() => {
   return !roomHasFreeSlot(bootstrap)
 })
 
+const isWaitingLobby = computed(
+  () => !roomId.value.startsWith('local-') && roomMatchStatus.value === 'lobby',
+)
+
+const showLobbyOverlay = computed(() => needsJoin.value || isWaitingLobby.value)
+
+const isLobbyHost = computed(
+  () => !!playerId.value && lobbyHostPlayerId.value === playerId.value,
+)
+
+function applyBootstrapMeta(bootstrap: Awaited<ReturnType<typeof fetchRoomBootstrap>>) {
+  if (bootstrap.status === 'lobby' || bootstrap.status === 'playing') {
+    roomMatchStatus.value = bootstrap.status
+  }
+  lobbyHostPlayerId.value = bootstrap.hostPlayerId ?? null
+}
+
 function syncDefaultJoinSlot() {
   const bootstrap = roomBootstrap.value
   if (!bootstrap) return
@@ -277,6 +348,7 @@ watch(roomBootstrap, () => {
 })
 
 const { toasts: statusToasts, pushToast: pushStatusToast } = useGameStatusToasts(snapshot, playerId, myPlayerName)
+const { play: playGameSfx, muted: sfxMuted, toggleMute: toggleSfxMute } = useGameSfx()
 
 const activePlayerName = computed(() => {
   const id = snapshot.value?.activePlayerId
@@ -336,7 +408,7 @@ const gameOverWinnerName = computed(() => {
 
 const GAME_OVER_REASON_LABELS: Record<string, string> = {
   four_regions: 'Контроль 4 регионов от 7 клеток',
-  power_centers: 'Большинство энергоцентров',
+  power_centers: 'Большинство центров власти',
   last_standing: 'Последний игрок на карте',
 }
 
@@ -433,23 +505,24 @@ const battleResolutionKey = computed(() =>
 )
 
 const roundResultsPendingView = computed(() => {
+  if (!combatResultsHydrated.value) return false
   const key = battleResolutionKey.value
   return key != null && key !== dismissedCombatResultKey.value
 })
 
 /**
- * Модалка: prep, итоги раунда (всем участникам) и выбор уничтожения победителем.
+ * Модалка: prep, итоги раунда (всем клиентам) и выбор уничтожения победителем.
  * Решение «продолжить / отступить» — баннером после закрытия итогов, чтобы не перекрывать карту.
+ * Итог держится и после конца pendingCombat (обстрел / бой без continue).
  */
 const needsBattleModal = computed(() => {
+  if (roundResultsPendingView.value) return true
   if (combatParticipantRole.value === null) return false
   switch (combatPhase.value) {
     case 'prep':
       return true
     case 'awaiting-destruction':
       return true
-    case 'awaiting-continue':
-      return roundResultsPendingView.value
     default:
       return false
   }
@@ -470,6 +543,8 @@ const showCombatContinueDecision = computed(
 const combatUiExpectation = computed((): CombatUiExpectation => {
   if (serverStatus.value !== 'online' || roomId.value.startsWith('local-')) return null
   if (!hasActivePendingCombat.value) return null
+  // Пока игрок смотрит итог, не требовать баннер continue — иначе recovery закроет модалку.
+  if (roundResultsPendingView.value) return null
   if (combatDecisionRole.value != null) return 'continue-decision'
   if (isCombatDestructionChooser.value) return 'destruction'
   if (combatPhase.value === 'prep' && combatParticipantRole.value != null) return 'prep'
@@ -486,8 +561,16 @@ const combatUiPresentation = computed((): CombatUiPresentation => {
     if (combatDecisionRole.value != null && !roundResultsPendingView.value) return 'continue-modal'
     return 'results-modal'
   }
+  if (roundResultsPendingView.value) return 'results-modal'
   return 'none'
 })
+
+const canReopenBattleResults = computed(
+  () =>
+    !!battleResolution.value
+    && !battleModalOpen.value
+    && (!!battlePreviewSnapshot.value || !!combatPrepPreview.value),
+)
 
 /** Идёт бой, в котором вы сейчас ничего не решаете */
 const showForeignCombatBanner = computed(
@@ -566,12 +649,20 @@ watch(showCombatContinueDecision, (active) => {
 watch(
   battleResolutionKey,
   (key, prev) => {
+    if (!combatResultsHydrated.value) return
     if (!key || key === prev) return
     // Уже закрывали именно этот итог — не сбрасываем (poll/null→key мерцание).
     if (dismissedCombatResultKey.value === key) return
     dismissedCombatResultKey.value = null
   },
 )
+
+function markCombatResultsHydrated() {
+  if (combatResultsHydrated.value) return
+  combatResultsHydrated.value = true
+  const key = combatResolutionFingerprint(battleResolution.value)
+  if (key) dismissedCombatResultKey.value = key
+}
 
 function openBattleModalFromPending() {
   if (!needsBattleModal.value || !snapshot.value) return
@@ -583,7 +674,7 @@ function openBattleModalFromPending() {
   ) {
     return
   }
-  const preview = buildCombatPreviewFromPending(snapshot.value)
+  const preview = buildCombatPreviewFromPending(snapshot.value) ?? battlePreviewSnapshot.value
   if (!preview) {
     // Нельзя показать итоги — не блокируем баннер continue/retreat.
     if (combatPhase.value === 'awaiting-continue' && battleResolutionKey.value) {
@@ -595,13 +686,21 @@ function openBattleModalFromPending() {
   battleModalOpen.value = true
 }
 
+function reopenBattleResults() {
+  if (!battleResolution.value || !snapshot.value) return
+  dismissedCombatResultKey.value = null
+  const preview = buildCombatPreviewFromPending(snapshot.value) ?? battlePreviewSnapshot.value
+  if (!preview) return
+  battlePreviewSnapshot.value = preview
+  battleModalOpen.value = true
+}
+
 function recoverCombatUiForExpectation(expectation: CombatUiExpectation) {
   if (expectation === 'continue-decision') {
     if (battleResolutionKey.value) {
       dismissedCombatResultKey.value = battleResolutionKey.value
     }
     battleModalOpen.value = false
-    battlePreviewSnapshot.value = null
     return
   }
   if (expectation === 'destruction' || expectation === 'prep') {
@@ -648,11 +747,15 @@ watch(
   pendingCombatState,
   (pending, prev) => {
     if (!pending) {
-      dismissedCombatResultKey.value = null
       if (prev?.phase === 'prep' && battleModalOpen.value && !battleResolution.value) {
         void resyncAfterCombatCountdown()
       }
       return
+    }
+
+    if (snapshot.value) {
+      const preview = buildCombatPreviewFromPending(snapshot.value)
+      if (preview) battlePreviewSnapshot.value = preview
     }
 
     // Пока идёт бой — модалка маркера не должна перекрывать continue/retreat.
@@ -664,6 +767,23 @@ watch(
     openBattleModalFromPending()
   },
   { deep: true },
+)
+
+let combatSfxHydrated = false
+watch(
+  () => {
+    const pending = pendingCombatState.value
+    if (pending?.phase !== 'prep') return null
+    return `${pending.cellKey}:${pending.roundNumber}:${pending.attackerId}`
+  },
+  (id) => {
+    if (!combatSfxHydrated) {
+      combatSfxHydrated = true
+      return
+    }
+    if (id) playGameSfx('combat')
+  },
+  { immediate: true },
 )
 
 watch(
@@ -885,6 +1005,12 @@ function applyObservation(
   if (!observationSync.observe(revision, source)) return false
 
   legalActions.value = obs.legalActions ?? []
+  if (mechExtra.roomStatus === 'lobby' || mechExtra.roomStatus === 'playing') {
+    roomMatchStatus.value = mechExtra.roomStatus
+  }
+  if ('hostPlayerId' in mechExtra) {
+    lobbyHostPlayerId.value = (mechExtra.hostPlayerId as string | null) ?? null
+  }
   const preserve = saveFile.value?.game
   const game = gameSnapshotFromObservation(
     obs.mechanics,
@@ -907,6 +1033,7 @@ function applyObservation(
       ...(map ? { map: normalizeMapDefinition(map) } : {}),
       game,
     }
+    if (source === 'initial') markCombatResultsHydrated()
     return true
   }
 
@@ -918,6 +1045,7 @@ function applyObservation(
     map: normalizeMapDefinition(map),
     game,
   }
+  if (source === 'initial') markCombatResultsHydrated()
   return true
 }
 
@@ -1377,19 +1505,12 @@ async function confirmMarkerOrder() {
 
 function closeBattleModal() {
   const resultKey = battleResolutionKey.value
-  if (
-    resultKey
-    && (
-      combatPhase.value === 'awaiting-continue'
-      || (combatPhase.value === 'awaiting-destruction' && !isCombatDestructionChooser.value)
-    )
-  ) {
+  if (resultKey) {
     dismissedCombatResultKey.value = resultKey
   }
 
   battleModalOpen.value = false
   markerMapPick.afterBattleModalClosed()
-  battlePreviewSnapshot.value = null
   pendingOrderAfterBattle.value = null
   if (combatPhase.value !== 'awaiting-destruction' && combatPhase.value !== 'awaiting-continue') {
     battleResolution.value = null
@@ -1827,6 +1948,7 @@ async function ensureJoined(): Promise<boolean> {
   try {
     const bootstrap = await fetchRoomBootstrap(roomId.value)
     roomBootstrap.value = bootstrap
+    applyBootstrapMeta(bootstrap)
     const sess = loadGameSessionForRoom(roomId.value)
     if (sess && bootstrap.joinedPlayerIds.includes(sess.playerId)) {
       playerId.value = sess.playerId
@@ -1854,10 +1976,12 @@ async function ensureJoined(): Promise<boolean> {
 }
 
 async function refreshJoinLobby() {
-  if (roomId.value.startsWith('local-') || !needsJoin.value) return
+  if (roomId.value.startsWith('local-') || (!needsJoin.value && !isWaitingLobby.value)) return
   try {
     roomBootstrap.value = await fetchRoomBootstrap(roomId.value)
-    syncDefaultJoinSlot()
+    applyBootstrapMeta(roomBootstrap.value)
+    if (needsJoin.value) syncDefaultJoinSlot()
+    else if (playerId.value) selectedJoinSlot.value = playerId.value
   } catch {
     /* ignore */
   }
@@ -1913,10 +2037,12 @@ async function submitJoin() {
     saveGameSession({ roomId: roomId.value, playerId: id, playerName: name, code })
     savePlayerClaim({ roomId: roomId.value, playerId: id, playerName: name })
     needsJoin.value = false
-    stopJoinLobbyPolling()
+    selectedJoinSlot.value = id
     await tryLoadFromServer()
     startPolling()
     presence.start()
+    if (isWaitingLobby.value) startJoinLobbyPolling()
+    else stopJoinLobbyPolling()
   } catch (e) {
     joinError.value = e instanceof Error ? e.message : 'Не удалось войти'
     if (e instanceof GameApiError && e.availablePlayerIds?.length) {
@@ -1926,6 +2052,54 @@ async function submitJoin() {
     joinBusy.value = false
   }
 }
+
+async function onLobbySlotPicked(slotId: string | null) {
+  selectedJoinSlot.value = slotId
+  if (!slotId || needsJoin.value || !isWaitingLobby.value) return
+  if (slotId === playerId.value) return
+  joinBusy.value = true
+  joinError.value = null
+  try {
+    const name = nickname.value.trim()
+    const result = await rejoinRoom(roomId.value, playerId.value, name, slotId)
+    playerId.value = result.playerId
+    saveGameSession({
+      roomId: roomId.value,
+      playerId: result.playerId,
+      playerName: name,
+      code: result.code,
+    })
+    savePlayerClaim({ roomId: roomId.value, playerId: result.playerId, playerName: name })
+    selectedJoinSlot.value = result.playerId
+    await refreshJoinLobby()
+  } catch (e) {
+    joinError.value = e instanceof Error ? e.message : 'Не удалось сменить слот'
+    selectedJoinSlot.value = playerId.value
+  } finally {
+    joinBusy.value = false
+  }
+}
+
+async function startLobbyGame() {
+  if (!isLobbyHost.value || joinBusy.value) return
+  joinBusy.value = true
+  joinError.value = null
+  try {
+    await startRoom(roomId.value, playerId.value)
+    roomMatchStatus.value = 'playing'
+    stopJoinLobbyPolling()
+    await tryLoadFromServer()
+    startPolling()
+  } catch (e) {
+    joinError.value = e instanceof Error ? e.message : 'Не удалось начать игру'
+  } finally {
+    joinBusy.value = false
+  }
+}
+
+watch(roomMatchStatus, (status) => {
+  if (status === 'playing') stopJoinLobbyPolling()
+})
 
 const inviteLink = computed(() => {
   if (!import.meta.client) return ''
@@ -2049,6 +2223,7 @@ function repairLobbyParticipation(joinedPlayerIds?: string[]): boolean {
 async function tryLoadFromServer() {
   if (roomId.value.startsWith('local-')) {
     serverStatus.value = 'offline'
+    markCombatResultsHydrated()
     return
   }
   serverStatus.value = 'loading'
@@ -2057,15 +2232,20 @@ async function tryLoadFromServer() {
     roomBootstrap.value = bootstrap
     const obs = await fetchObservation(roomId.value, playerId.value)
     applyObservation(obs, bootstrap.map, 'initial')
+    applyBootstrapMeta(bootstrap)
+    markCombatResultsHydrated()
     if (!selectedKey.value) {
       selectedKey.value = hexKey(bootstrap.map.cells[0]?.q ?? 0, bootstrap.map.cells[0]?.r ?? 0)
     }
     serverStatus.value = 'online'
-    repairLobbyParticipation(bootstrap.joinedPlayerIds)
+    if (bootstrap.status !== 'lobby') {
+      repairLobbyParticipation(bootstrap.joinedPlayerIds)
+    }
     persistLocal()
   } catch {
     serverStatus.value = 'offline'
     repairLobbyParticipation(roomBootstrap.value?.joinedPlayerIds)
+    markCombatResultsHydrated()
   }
 }
 
@@ -2392,6 +2572,15 @@ function importGameSave(event: Event) {
 
 onMounted(async () => {
   window.addEventListener('keydown', onMapPickKeydown)
+  window.addEventListener('unhandledrejection', onWindowUnhandledRejection)
+  window.addEventListener('error', onWindowError)
+  if (typeof ResizeObserver !== 'undefined') {
+    hudChromeResizeObserver = new ResizeObserver(() => syncHudChromeHeight())
+    nextTick(() => {
+      if (hudTopRef.value) hudChromeResizeObserver?.observe(hudTopRef.value)
+      syncHudChromeHeight()
+    })
+  }
   if (!loadFromLocalRoom()) {
     loadFallbackMap()
   }
@@ -2401,6 +2590,10 @@ onMounted(async () => {
     await tryLoadFromServer()
     startPolling()
     presence.start()
+    if (isWaitingLobby.value) {
+      selectedJoinSlot.value = playerId.value
+      startJoinLobbyPolling()
+    }
   } else {
     startJoinLobbyPolling()
   }
@@ -2408,6 +2601,11 @@ onMounted(async () => {
 
 onUnmounted(() => {
   window.removeEventListener('keydown', onMapPickKeydown)
+  window.removeEventListener('unhandledrejection', onWindowUnhandledRejection)
+  window.removeEventListener('error', onWindowError)
+  hudChromeResizeObserver?.disconnect()
+  hudChromeResizeObserver = null
+  lastHudHeaderHeightPx = 0
   stopPolling()
   stopJoinLobbyPolling()
 })
@@ -2418,45 +2616,91 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
 </script>
 
 <template>
-  <div class="game-viewport">
-    <div v-if="needsJoin" class="join-overlay">
-      <form class="join-card" @submit.prevent="submitJoin">
-        <h2>Вход в игру</h2>
-        <p v-if="roomBootstrap" class="join-meta">
-          Игроков: {{ roomBootstrap.playerCount }}/{{ roomBootstrap.maxPlayers }}
-          <span v-if="roomBootstrap.code"> · код {{ roomBootstrap.code }}</span>
-        </p>
+  <div ref="gameViewportRef" class="game-viewport">
+    <div v-if="showLobbyOverlay" class="join-overlay">
+      <div class="join-card join-card--lobby">
+        <template v-if="needsJoin">
+          <form @submit.prevent="submitJoin">
+            <h2>Вход в комнату</h2>
+            <p v-if="roomBootstrap" class="join-meta">
+              Игроков: {{ roomBootstrap.playerCount }}/{{ roomBootstrap.maxPlayers }}
+              <span v-if="roomBootstrap.code"> · код {{ roomBootstrap.code }}</span>
+              <span v-if="roomBootstrap.status === 'playing'"> · игра уже идёт</span>
+            </p>
 
-        <div v-if="joinLobbySlots.length" class="join-players">
-          <h3 class="join-players-title">Выберите слот</h3>
-          <LobbySlotPicker
-            v-model="selectedJoinSlot"
-            :slots="joinLobbySlots"
-            :disabled="joinBusy || joinRoomFull"
-          />
-        </div>
+            <div v-if="joinLobbySlots.length" class="join-players">
+              <h3 class="join-players-title">Стартовая позиция и цвет</h3>
+              <LobbySlotPicker
+                v-model="selectedJoinSlot"
+                :slots="joinLobbySlots"
+                :disabled="joinBusy || joinRoomFull"
+              />
+            </div>
 
-        <p v-if="joinRoomFull" class="join-error">Все слоты заняты — дождитесь освобождения места.</p>
+            <p v-if="joinRoomFull" class="join-error">Все слоты заняты — дождитесь освобождения места.</p>
 
-        <p v-if="hasNickname" class="join-as">
-          Вы войдёте как <strong>{{ nickname }}</strong>
-        </p>
-        <p v-else class="join-error">
-          Никнейм не задан —
-          <NuxtLink to="/">выберите в лобби</NuxtLink>
-        </p>
+            <p v-if="hasNickname" class="join-as">
+              Вы войдёте как <strong>{{ nickname }}</strong>
+            </p>
+            <p v-else class="join-error">
+              Никнейм не задан —
+              <NuxtLink to="/">выберите в лобби</NuxtLink>
+            </p>
 
-        <p v-if="joinError" class="join-error">{{ joinError }}</p>
-        <button
-          type="submit"
-          class="join-submit"
-          :disabled="joinBusy || !hasNickname || !selectedJoinSlot || joinRoomFull"
-        >
-          {{ joinBusy ? 'Вход…' : `Войти как ${nickname || '…'}` }}
-        </button>
-        <NuxtLink to="/" class="join-back">← В лобби</NuxtLink>
-        <NuxtLink to="/lobbies" class="join-back">Список лобби</NuxtLink>
-      </form>
+            <p v-if="joinError" class="join-error">{{ joinError }}</p>
+            <button
+              type="submit"
+              class="join-submit"
+              :disabled="joinBusy || !hasNickname || !selectedJoinSlot || joinRoomFull"
+            >
+              {{ joinBusy ? 'Вход…' : joinAsLabel(nickname || '…', selectedJoinSlot) }}
+            </button>
+            <NuxtLink to="/" class="join-back">← В лобби</NuxtLink>
+            <NuxtLink to="/lobbies" class="join-back">Список лобби</NuxtLink>
+          </form>
+        </template>
+        <template v-else>
+          <h2>Комната подготовки</h2>
+          <p v-if="roomBootstrap" class="join-meta">
+            Игроков: {{ roomBootstrap.playerCount }}/{{ roomBootstrap.maxPlayers }}
+            <span v-if="roomBootstrap.code"> · код {{ roomBootstrap.code }}</span>
+          </p>
+          <p class="join-as">
+            Выберите <strong>где играть</strong> (стартовая позиция на карте) и <strong>цвет</strong>.
+            Игра начнётся, когда создатель комнаты нажмёт «Начать игру».
+          </p>
+          <div v-if="joinLobbySlots.length" class="join-players">
+            <h3 class="join-players-title">Стартовая позиция и цвет</h3>
+            <LobbySlotPicker
+              :model-value="selectedJoinSlot"
+              :slots="joinLobbySlots"
+              :current-player-id="playerId"
+              :disabled="joinBusy"
+              @update:model-value="onLobbySlotPicked"
+            />
+          </div>
+          <p v-if="joinError" class="join-error">{{ joinError }}</p>
+          <button
+            type="button"
+            class="join-submit join-submit--secondary"
+            :disabled="joinBusy"
+            @click="copyInviteLink"
+          >
+            {{ inviteCopied ? 'Ссылка скопирована' : 'Скопировать ссылку-приглашение' }}
+          </button>
+          <button
+            v-if="isLobbyHost"
+            type="button"
+            class="join-submit"
+            :disabled="joinBusy || !roomBootstrap?.playerCount"
+            @click="startLobbyGame"
+          >
+            {{ joinBusy ? 'Старт…' : 'Начать игру' }}
+          </button>
+          <p v-else class="join-as">Ждём, пока создатель комнаты начнёт игру…</p>
+          <NuxtLink to="/" class="join-back">← Выйти в лобби</NuxtLink>
+        </template>
+      </div>
     </div>
 
     <section class="board-layer">
@@ -2491,6 +2735,23 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
     <GameStatusToast :toasts="statusToasts" />
 
     <section
+      v-if="wsDisconnectWarning && !roomId.startsWith('local-')"
+      class="sync-warning sync-warning--ui-mismatch"
+      role="alert"
+    >
+      <strong>Соединение обновления оборвано (WebSocket)</strong>
+      <p>
+        Страница загружена по HTTPS, а hot-reload пытался открыть незащищённый ws://.
+        Обновите страницу, чтобы продолжить. Для tuna запускайте клиент с
+        <code>NUXT_HMR_TUNNEL=1</code>.
+      </p>
+      <div class="sync-warning-actions">
+        <button type="button" @click="reloadPage">Обновить страницу</button>
+        <button type="button" class="btn-secondary" @click="wsDisconnectWarning = false">Скрыть</button>
+      </div>
+    </section>
+
+    <section
       v-if="syncWarningVisible && !roomId.startsWith('local-')"
       class="sync-warning"
       :class="{ 'sync-warning--ui-mismatch': syncWarningKind === 'ui-mismatch' }"
@@ -2503,7 +2764,10 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
             : 'Состояние могло рассинхронизироваться'
         }}
       </strong>
-      <p>{{ syncWarningReason ?? 'Не удалось подтвердить актуальность данных.' }}</p>
+      <p>
+        {{ syncWarningReason ?? 'Не удалось подтвердить актуальность данных.' }}
+        Если синхронизация не помогает — обновите страницу.
+      </p>
       <div class="sync-warning-actions">
         <button
           v-if="syncWarningKind === 'ui-mismatch' && combatUiExpectation"
@@ -2538,8 +2802,21 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
       role="status"
     >
       <p class="map-pick-text">{{ foreignCombatBannerText }}</p>
-      <div v-if="combatParticipantRole" class="map-pick-actions">
-        <button type="button" class="map-pick-secondary" @click="abortPendingCombatAction">
+      <div v-if="canReopenBattleResults || combatParticipantRole" class="map-pick-actions">
+        <button
+          v-if="canReopenBattleResults"
+          type="button"
+          class="map-pick-secondary"
+          @click="reopenBattleResults"
+        >
+          Показать итог
+        </button>
+        <button
+          v-if="combatParticipantRole"
+          type="button"
+          class="map-pick-secondary"
+          @click="abortPendingCombatAction"
+        >
           Прервать зависший бой
         </button>
       </div>
@@ -2691,7 +2968,7 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
     </div>
 
     <div class="hud-chrome">
-      <header class="hud-top">
+      <header ref="hudTopRef" class="hud-top">
         <div class="hud-top-left">
           <NuxtLink to="/" class="back-link">← Lobby</NuxtLink>
           <div v-if="saveFile" class="hud-title">
@@ -2750,6 +3027,16 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
           <span class="server-pill" :class="serverStatus">
             {{ serverStatus === 'online' ? 'Сервер' : serverStatus === 'offline' ? 'Offline' : '…' }}
           </span>
+          <button
+            type="button"
+            class="sfx-mute-btn"
+            :title="sfxMuted ? 'Включить звуки' : 'Выключить звуки'"
+            :aria-label="sfxMuted ? 'Включить звуки' : 'Выключить звуки'"
+            :aria-pressed="sfxMuted"
+            @click="toggleSfxMute"
+          >
+            {{ sfxMuted ? '🔇' : '🔊' }}
+          </button>
           <button
             type="button"
             class="bug-report-btn"
@@ -3184,11 +3471,12 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
 }
 .hud-top {
   position: relative;
+  box-sizing: border-box;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: center;
   gap: 0.5rem 0.75rem;
-  min-height: var(--hud-header-height);
+  min-height: 3.75rem;
   padding: 0.5rem 0.75rem;
   background: linear-gradient(to bottom, rgba(15, 23, 42, 0.95), rgba(15, 23, 42, 0.65), transparent);
   backdrop-filter: blur(6px);
@@ -3997,11 +4285,18 @@ button,
   backdrop-filter: blur(4px);
 }
 .join-card {
-  width: min(360px, 92vw);
+  width: min(420px, 92vw);
+  max-height: min(88vh, 720px);
+  overflow: auto;
   padding: 1.25rem;
   border-radius: 12px;
   border: 1px solid #334155;
   background: #1e293b;
+}
+.join-submit--secondary {
+  border-color: #64748b;
+  background: #334155;
+  margin-bottom: 0.5rem;
 }
 .join-card h2 {
   margin: 0 0 0.5rem;
@@ -4072,6 +4367,22 @@ button,
   color: #dbeafe;
   font-size: 0.75rem;
   cursor: pointer;
+}
+
+.sfx-mute-btn {
+  padding: 0.25rem 0.5rem;
+  border-radius: 6px;
+  border: 1px solid #64748b;
+  background: #1e293b;
+  color: #e2e8f0;
+  font-size: 0.85rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.sfx-mute-btn:hover {
+  border-color: #94a3b8;
+  background: #334155;
 }
 
 .bug-report-btn {
@@ -4182,6 +4493,7 @@ button,
     padding: 0.5rem 1.15rem 0.45rem;
   }
   .hud-top {
+    min-height: 5.75rem;
     grid-template-columns: 1fr;
     grid-template-rows: auto auto auto;
     gap: 0.45rem;

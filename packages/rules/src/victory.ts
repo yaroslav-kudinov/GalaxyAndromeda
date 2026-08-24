@@ -18,7 +18,7 @@ const VICTORY_REGION_COUNT = 4
 
 const REASON_LABELS: Record<VictoryReason, string> = {
   four_regions: 'контроль 4 регионов от 7 клеток',
-  power_centers: 'большинство энергоцентров',
+  power_centers: 'большинство центров власти',
   last_standing: 'единственный оставшийся игрок',
 }
 
@@ -40,6 +40,10 @@ function powerCenterCounts(state: GameState): Map<string, number> {
   return counts
 }
 
+function totalPowerCentersOnMap(state: GameState): number {
+  return state.cells.reduce((n, cell) => n + (cell.isPowerCenter ? 1 : 0), 0)
+}
+
 function playerHasPresence(state: GameState, playerId: string): boolean {
   const hasControl = state.cells.some((c) => c.controlOwnerId === playerId)
   const hasShips = state.cells.some((c) => c.ships.some((s) => s.ownerId === playerId))
@@ -55,7 +59,7 @@ function detectVictoryReason(state: GameState, winnerId: string): VictoryReason 
     return 'four_regions'
   }
   const pc = powerCenterCounts(state).get(winnerId) ?? 0
-  const total = [...powerCenterCounts(state).values()].reduce((a, b) => a + b, 0)
+  const total = totalPowerCentersOnMap(state)
   if (total > 0 && pc > total / 2) return 'power_centers'
   return 'last_standing'
 }
@@ -74,13 +78,13 @@ export function checkVictory(state: GameState): { winnerId: string; reason: Vict
   }
 
   const pcCounts = powerCenterCounts(state)
-  const totalPc = [...pcCounts.values()].reduce((a, b) => a + b, 0)
+  const totalPc = totalPowerCentersOnMap(state)
   if (totalPc > 0) {
     let bestId: string | null = null
     let bestCount = 0
     let tie = false
-    for (const [playerId, count] of pcCounts) {
-      if (!players.includes(playerId)) continue
+    for (const playerId of players) {
+      const count = pcCounts.get(playerId) ?? 0
       if (count > bestCount) {
         bestCount = count
         bestId = playerId
@@ -137,7 +141,7 @@ export function applyVictoryAndDefeatChecks(
         turn: game.turnNumber,
         phase: game.phase,
         type: 'elimination',
-        message: `${player.name} выбыл — потеряны все энергоцентры`,
+        message: `${player.name} выбыл — потеряны все центры власти`,
         timestamp: Date.now(),
       })
     }

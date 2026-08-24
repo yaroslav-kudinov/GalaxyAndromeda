@@ -1,4 +1,5 @@
 import { STRATEGIC_ZOOM_THRESHOLD } from '~/utils/board-overview'
+import { TOKEN_CHIP_RADIUS } from '~/utils/resource-token-pips'
 
 /** Compensate SVG glyph scale when viewBox zoom changes (screen-stable icon size) */
 export function effectiveGlyphScale(baseScale: number, zoom: number, mode: 'editor' | 'game' = 'editor'): number {
@@ -12,7 +13,7 @@ export function effectiveGlyphScale(baseScale: number, zoom: number, mode: 'edit
 export function overlayContentScale(zoom: number): number {
   if (zoom > STRATEGIC_ZOOM_THRESHOLD) return 1
   const clamped = Math.min(STRATEGIC_ZOOM_THRESHOLD, Math.max(0.35, zoom))
-  return Math.min(1.35, STRATEGIC_ZOOM_THRESHOLD / clamped)
+  return Math.min(1.45, STRATEGIC_ZOOM_THRESHOLD / clamped)
 }
 
 export const TOKEN_BOARD_SCALE = 0.95
@@ -25,4 +26,9 @@ export function tokenBoardScale(zoom: number, mode: 'editor' | 'game' = 'editor'
 
 export function powerCenterBoardScale(zoom: number, mode: 'editor' | 'game' = 'editor'): number {
   return effectiveGlyphScale(POWER_CENTER_BOARD_SCALE_REF, zoom, mode)
+}
+
+/** Компактный жетон относительно гекса (как на крупном масштабе). */
+export function resourceTokenGlyphScale(hexSize: number): number {
+  return (hexSize * 0.572) / (2 * TOKEN_CHIP_RADIUS)
 }

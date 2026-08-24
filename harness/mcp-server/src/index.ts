@@ -28,7 +28,8 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
 const tools = [
   { name: 'game_ping', description: 'Check game server health' },
   { name: 'game_create_room', description: 'Create room; optional map JSON body' },
-  { name: 'game_join_room', description: 'Join room: roomId, playerName' },
+  { name: 'game_join_room', description: 'Join lobby: roomId, playerName, optional preferredPlayerId' },
+  { name: 'game_start_room', description: 'Host starts the match from lobby: roomId, playerId' },
   { name: 'game_get_state', description: 'Get observation: roomId, playerId' },
   { name: 'game_get_legal_actions', description: 'Legal actions: roomId, playerId' },
   { name: 'game_submit_action', description: 'Submit: roomId, playerId, actionId' },
@@ -64,7 +65,17 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case 'game_join_room': {
         const result = await api(`/rooms/${a.roomId}/join`, {
           method: 'POST',
-          body: JSON.stringify({ playerName: a.playerName ?? 'Agent' }),
+          body: JSON.stringify({
+            playerName: a.playerName ?? 'Agent',
+            preferredPlayerId: a.preferredPlayerId || undefined,
+          }),
+        })
+        return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] }
+      }
+      case 'game_start_room': {
+        const result = await api(`/rooms/${a.roomId}/start`, {
+          method: 'POST',
+          body: JSON.stringify({ playerId: a.playerId }),
         })
         return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] }
       }

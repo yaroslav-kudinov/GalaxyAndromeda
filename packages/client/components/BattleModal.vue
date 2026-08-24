@@ -17,6 +17,7 @@ import {
   formatShieldContributionLabel,
   SHIP_LABELS,
   SHIP_COMBAT_DICE,
+  SHIP_SUPPORT_DIE_FACES,
   sumCombatSideDiceTotal,
   COMBAT_PREP_COUNTDOWN_MS,
   SHIP_DESTROY_COST,
@@ -405,14 +406,35 @@ function startRevealAnimation() {
   }, 650)
 }
 
+const destructionReviewReady = ref(false)
+let destructionReviewTimer: ReturnType<typeof setTimeout> | null = null
+
 function goToPostPhase() {
+  destructionReviewReady.value = false
+  if (destructionReviewTimer) {
+    clearTimeout(destructionReviewTimer)
+    destructionReviewTimer = null
+  }
+  phase.value = 'post'
   if (needsDestructionSelection.value && isLocalWinner.value) {
-    selectedDestructionIds.value = []
-    phase.value = 'destruction'
-  } else {
-    phase.value = 'post'
+    destructionReviewTimer = setTimeout(() => {
+      destructionReviewReady.value = true
+      destructionReviewTimer = null
+    }, 2000)
   }
 }
+
+function openDestructionPicker() {
+  selectedDestructionIds.value = []
+  phase.value = 'destruction'
+}
+
+const attackerShields = computed(() =>
+  shieldContributions.value.filter((s) => s.ownerId === props.preview.attackerId),
+)
+const defenderShields = computed(() =>
+  shieldContributions.value.filter((s) => s.ownerId === props.preview.defenderId),
+)
 
 /** После confirm-destruction / перехода к continue показываем итог, а не пустой экран выбора */
 watch(
@@ -450,6 +472,10 @@ function rollLabel(entry: ShipCombatRollLog): string {
 
 function shieldLabel(contribution: ShieldContribution): string {
   return formatShieldContributionLabel(contribution)
+}
+
+function supportDieFaces(type: ShipType): number {
+  return SHIP_SUPPORT_DIE_FACES[type] ?? 6
 }
 
 const shieldContributions = computed(() => props.preview.shieldContributions)
@@ -491,9 +517,13 @@ const roundDamageText = computed(() => {
   const rawDamage = props.resolution.rawDamage ?? 0
   const absorbed = props.resolution.shieldAbsorbed ?? 0
   const remaining = Math.max(0, rawDamage - absorbed)
-  return absorbed > 0
-    ? `Разница: ${rawDamage}; щиты поглотили ${absorbed}; на уничтожение ${remaining}.`
-    : `Разница: ${rawDamage}; на уничтожение ${remaining}.`
+  if (absorbed > 0) {
+    return `Разница: ${rawDamage}; щиты проигравшего поглотили ${absorbed}; на уничтожение ${remaining}.`
+  }
+  if (rawDamage > 0) {
+    return `Разница: ${rawDamage}; щитов у проигравшего не было; на уничтожение ${remaining}.`
+  }
+  return `Разница: ${rawDamage}; на уничтожение ${remaining}.`
 })
 
 const destroyedShipsText = computed(() => {
@@ -773,6 +803,7 @@ onUnmounted(() => {
   window.removeEventListener('keydown', onKeydown)
   if (revealTimer) clearInterval(revealTimer)
   if (countdownTimer) clearInterval(countdownTimer)
+  if (destructionReviewTimer) clearTimeout(destructionReviewTimer)
 })
 </script>
 
@@ -902,9 +933,9 @@ onUnmounted(() => {
                   <svg class="ship-card-glyph" viewBox="-14 -14 28 28" aria-hidden="true">
                     <ShipGlyph :type="sup.type" :player-color="playerColor(sup.ownerId)" :scale="0.9" />
                   </svg>
-                  <span class="support-tag">поддержка</span>
+                  <span class="support-tag">поддержка · +{{ sup.supportDice }}d{{ supportDieFaces(sup.type) }}</span>
                   <span class="ship-card-meta">
-                    <span class="meta-dice">+{{ sup.supportDice }}d6</span>
+                    <span class="meta-dice">+{{ sup.supportDice }}d{{ supportDieFaces(sup.type) }}</span>
                   </span>
                 </div>
               </div>
@@ -981,9 +1012,9 @@ onUnmounted(() => {
                   <svg class="ship-card-glyph" viewBox="-14 -14 28 28" aria-hidden="true">
                     <ShipGlyph :type="sup.type" :player-color="playerColor(sup.ownerId)" :scale="0.9" />
                   </svg>
-                  <span class="support-tag">поддержка</span>
+                  <span class="support-tag">поддержка · +{{ sup.supportDice }}d{{ supportDieFaces(sup.type) }}</span>
                   <span class="ship-card-meta">
-                    <span class="meta-dice">+{{ sup.supportDice }}d6</span>
+                    <span class="meta-dice">+{{ sup.supportDice }}d{{ supportDieFaces(sup.type) }}</span>
                   </span>
                 </div>
               </div>
@@ -1091,20 +1122,37 @@ onUnmounted(() => {
             </li>
           </ol>
 
-          <div v-if="shieldContributions.length" class="shield-chips" title="Щиты защитника">
-            <span
-              v-for="sh in shieldContributions"
-              :key="sh.shipId"
-              class="shield-chip"
-              :style="sideColorVars(sh.ownerId)"
-            >
-              <svg class="shield-chip-glyph" viewBox="-12 -12 24 24" aria-hidden="true">
-                <ShipGlyph type="shield" :player-color="playerColor(sh.ownerId)" :scale="0.65" :show-plate="false" />
-              </svg>
-              <span>{{ sh.absorbCapacity }}</span>
-            </span>
-            <span class="shield-chip-total">макс {{ preview.shieldAbsorbTotal }}</span>
+          <div v-if="shieldContributions.length" class="shield-chips" title="Щиты сторон (поглощают у проигравшего)">
+            <template v-if="attackerShields.length">
+              <span class="shield-side-label">Атака</span>
+              <span
+                v-for="sh in attackerShields"
+                :key="'att-sh-' + sh.shipId"
+                class="shield-chip"
+                :style="sideColorVars(sh.ownerId)"
+              >
+                <svg class="shield-chip-glyph" viewBox="-12 -12 24 24" aria-hidden="true">
+                  <ShipGlyph type="shield" :player-color="playerColor(sh.ownerId)" :scale="0.65" :show-plate="false" />
+                </svg>
+                <span>{{ formatShieldContributionLabel(sh) }}</span>
+              </span>
+            </template>
+            <template v-if="defenderShields.length">
+              <span class="shield-side-label">Защита</span>
+              <span
+                v-for="sh in defenderShields"
+                :key="'def-sh-' + sh.shipId"
+                class="shield-chip"
+                :style="sideColorVars(sh.ownerId)"
+              >
+                <svg class="shield-chip-glyph" viewBox="-12 -12 24 24" aria-hidden="true">
+                  <ShipGlyph type="shield" :player-color="playerColor(sh.ownerId)" :scale="0.65" :show-plate="false" />
+                </svg>
+                <span>{{ formatShieldContributionLabel(sh) }}</span>
+              </span>
+            </template>
           </div>
+          <p v-else-if="phase === 'pre'" class="shield-empty muted">Щитоносцев у сторон рядом с клеткой боя нет.</p>
 
           <p v-if="prepPhase === 'countdown' && countdownDisplay != null" class="countdown-banner">
             {{ countdownDisplay || '…' }}
@@ -1355,6 +1403,19 @@ onUnmounted(() => {
           @click="startBattle"
         >
           {{ resolving ? 'Разрешение…' : 'Начать бой' }}
+        </button>
+        <button
+          v-else-if="phase === 'post' && needsDestructionSelection && isLocalWinner"
+          type="button"
+          class="btn-primary"
+          :disabled="!destructionReviewReady || resolving"
+          @click="openDestructionPicker"
+        >
+          {{
+            destructionReviewReady
+              ? 'Выбрать уничтожение'
+              : 'Итог раунда…'
+          }}
         </button>
         <button
           v-else-if="phase === 'destruction'"
@@ -1854,6 +1915,19 @@ onUnmounted(() => {
   justify-content: center;
   gap: 0.35rem;
   margin: 0 0 0.5rem;
+}
+.shield-side-label {
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #94a3b8;
+  margin-left: 0.35rem;
+}
+.shield-empty {
+  margin: 0 0 0.5rem;
+  text-align: center;
+  font-size: 0.78rem;
 }
 .shield-chip {
   display: inline-flex;

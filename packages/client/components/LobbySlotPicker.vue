@@ -1,10 +1,13 @@
 <script setup lang="ts">
+import { PLAYER_LABELS } from '@galaxy/rules'
 import type { LobbyPlayerSlot } from '~/components/LobbyPlayerList.vue'
 
 const props = defineProps<{
   slots: LobbyPlayerSlot[]
   modelValue: string | null
   disabled?: boolean
+  /** Свой слот можно не выбирать заново; чужие занятые — нет */
+  currentPlayerId?: string | null
 }>()
 
 const emit = defineEmits<{
@@ -16,16 +19,22 @@ function slotNumber(id: string): number {
   return m ? Number.parseInt(m[1], 10) : 0
 }
 
+function colorLabel(id: string): string {
+  const n = slotNumber(id)
+  return PLAYER_LABELS[n] ?? `Слот ${n || '?'}`
+}
+
 function selectSlot(id: string) {
   if (props.disabled) return
   const slot = props.slots.find((s) => s.id === id)
-  if (!slot || slot.joined) return
+  if (!slot) return
+  if (slot.joined && slot.id !== props.currentPlayerId) return
   emit('update:modelValue', id)
 }
 </script>
 
 <template>
-  <div class="slot-picker" role="radiogroup" aria-label="Выбор слота">
+  <div class="slot-picker" role="radiogroup" aria-label="Выбор слота и цвета">
     <button
       v-for="slot in slots"
       :key="slot.id"
@@ -33,24 +42,29 @@ function selectSlot(id: string) {
       class="slot-option"
       :class="{
         selected: modelValue === slot.id,
-        occupied: slot.joined,
-        vacant: !slot.joined,
+        occupied: slot.joined && slot.id !== currentPlayerId,
+        vacant: !slot.joined || slot.id === currentPlayerId,
       }"
-      :disabled="disabled || slot.joined"
+      :disabled="disabled || (slot.joined && slot.id !== currentPlayerId)"
       :aria-checked="modelValue === slot.id"
+      :aria-label="`${colorLabel(slot.id)}, слот ${slotNumber(slot.id)}`"
       role="radio"
       @click="selectSlot(slot.id)"
     >
       <span class="dot" :style="{ background: slot.color }" aria-hidden="true" />
       <span class="slot-body">
         <span class="slot-title">
-          Слот {{ slotNumber(slot.id) }}
-          <strong>{{ slot.joined ? slot.name : 'Свободно' }}</strong>
+          <strong class="color-name">{{ colorLabel(slot.id) }}</strong>
+          <span class="slot-meta">
+            Слот {{ slotNumber(slot.id) }}
+            ·
+            {{ slot.joined ? (slot.id === currentPlayerId ? 'вы' : slot.name) : 'свободно' }}
+          </span>
         </span>
         <span class="slot-id">{{ slot.id }}</span>
       </span>
       <span class="slot-badge">
-        {{ slot.joined ? 'занят' : modelValue === slot.id ? 'выбран' : 'свободен' }}
+        {{ slot.joined ? (slot.id === currentPlayerId ? 'вы' : 'занят') : modelValue === slot.id ? 'выбран' : 'свободен' }}
       </span>
     </button>
   </div>
@@ -92,10 +106,11 @@ function selectSlot(id: string) {
   cursor: not-allowed;
 }
 .dot {
-  width: 0.65rem;
-  height: 0.65rem;
+  width: 1rem;
+  height: 1rem;
   border-radius: 50%;
   flex-shrink: 0;
+  box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.9);
 }
 .slot-body {
   display: flex;
@@ -104,13 +119,19 @@ function selectSlot(id: string) {
   min-width: 0;
 }
 .slot-title {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
   font-size: 0.84rem;
   color: #cbd5e1;
 }
-.slot-title strong {
-  display: block;
-  font-size: 0.9rem;
+.color-name {
+  font-size: 0.95rem;
   color: #f8fafc;
+}
+.slot-meta {
+  font-size: 0.78rem;
+  color: #94a3b8;
 }
 .slot-id {
   font-size: 0.72rem;

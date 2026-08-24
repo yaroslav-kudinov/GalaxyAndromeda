@@ -1,7 +1,15 @@
-import { defaultPreferredPlayerId } from '@galaxy/rules'
+import { defaultPreferredPlayerId, PLAYER_LABELS, slotFromPlayerId } from '@galaxy/rules'
 import type { RoomBootstrap } from '~/composables/useGameApi'
 import { loadPlayerClaim } from '~/composables/usePlayerClaim'
 import { loadGameSessionForRoom } from '~/composables/useGameSession'
+
+/** Подпись кнопки входа: «Войти как Ник · Красный» */
+export function joinAsLabel(playerName: string, preferredPlayerId: string | null | undefined): string {
+  const name = playerName.trim() || '…'
+  const slot = preferredPlayerId ? slotFromPlayerId(preferredPlayerId) : null
+  const color = slot != null ? PLAYER_LABELS[slot] : null
+  return color ? `Войти как ${name} · ${color}` : `Войти как ${name}`
+}
 
 export function bootstrapToLobbySlots(bootstrap: RoomBootstrap) {
   return bootstrap.players.slice(0, bootstrap.maxPlayers).map((p) => ({

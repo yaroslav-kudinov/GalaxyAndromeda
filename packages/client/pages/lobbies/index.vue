@@ -74,6 +74,9 @@ function slotsForLobby(lobby: LobbyListEntry): LobbyPlayerSlot[] {
 }
 
 function canEnterLobby(lobby: LobbyListEntry): boolean {
+  const claim = loadPlayerClaim(lobby.roomId)
+  if (claim && lobby.players.some((p) => p.id === claim.playerId && p.joined)) return true
+  if (lobby.status === 'playing') return false
   return lobby.playerCount < lobby.maxPlayers
 }
 
@@ -170,7 +173,11 @@ onUnmounted(stopPolling)
           <div>
             <h2>{{ lobby.mapName }}</h2>
             <p class="lobby-meta">
-              Ход {{ lobby.turnNumber }} · {{ lobby.phase }}
+              {{
+                lobby.status === 'lobby'
+                  ? 'Подготовка'
+                  : `Ход ${lobby.turnNumber} · ${lobby.phase}`
+              }}
               <span v-if="lobby.code"> · код {{ lobby.code }}</span>
             </p>
             <p class="lobby-id">{{ lobby.roomId }}</p>

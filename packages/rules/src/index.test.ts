@@ -998,29 +998,29 @@ describe('game markers', () => {
 describe('turn flow', () => {
   it('passes turn within planning before changing phase', () => {
     const state = gameStateFromMap(createEmptyMap(), ['P1', 'P2', 'P3'])
+    const order = activePlayerOrder(state.players, null, { state, phase: 'planning' })
     expect(state.phase).toBe('planning')
-    expect(state.activePlayerId).toBe('player-1')
+    expect(state.activePlayerId).toBe(order[0])
 
     expect(advanceGamePhase(state)).toEqual([])
     expect(state.phase).toBe('planning')
-    expect(state.activePlayerId).toBe('player-2')
+    expect(state.activePlayerId).toBe(order[1])
 
     expect(advanceGamePhase(state)).toEqual([])
     expect(state.phase).toBe('planning')
-    expect(state.activePlayerId).toBe('player-3')
+    expect(state.activePlayerId).toBe(order[2])
 
     expect(advanceGamePhase(state)).toEqual([])
     expect(state.phase).toBe('actions')
-    expect(state.activePlayerId).toBe('player-1')
+    expect(state.activePlayerId).toBe(order[0])
   })
 
-  it('actions phase turn order: fewer controlled regions act first (rulebook)', () => {
+  it('keeps the same player order from planning through actions and production', () => {
     const map = createEmptyMap()
     addHorizontalLine(map, 3, 0, 0, 1)
     addHorizontalLine(map, 3, 5, 0, 2)
     map.cells.push({ q: 10, r: 0, startPlayer: 2 })
     const state = gameStateFromMap(map, ['P1', 'P2', 'P3'])
-    state.phase = 'actions'
 
     for (const cell of state.cells) {
       if (cell.coord.q <= 2) cell.controlOwnerId = 'player-1'
@@ -1028,18 +1028,49 @@ describe('turn flow', () => {
       if (cell.coord.q === 10) cell.controlOwnerId = 'player-2'
     }
 
-    expect(
-      activePlayerOrder(state.players, null, { state, phase: 'actions' }),
-    ).toEqual(['player-3', 'player-1', 'player-2'])
+    const ctx = (phase: 'planning' | 'actions' | 'production') => ({ state, phase })
+    const planning = activePlayerOrder(state.players, null, ctx('planning'))
+    expect(planning).toHaveLength(3)
+    expect(activePlayerOrder(state.players, null, ctx('actions'))).toEqual(planning)
+    expect(activePlayerOrder(state.players, null, ctx('production'))).toEqual(planning)
 
     state.phase = 'planning'
-    state.activePlayerId = 'player-1'
+    state.activePlayerId = planning[0]!
     advanceGamePhase(state)
     expect(state.phase).toBe('planning')
+    expect(state.activePlayerId).toBe(planning[1])
     advanceGamePhase(state)
     advanceGamePhase(state)
     expect(state.phase).toBe('actions')
-    expect(state.activePlayerId).toBe('player-3')
+    expect(state.activePlayerId).toBe(planning[0])
+  })
+
+  it('shuffles turn order by game turn, stable within planning/actions/production', () => {
+    const map = createEmptyMap()
+    map.cells = [
+      { q: 0, r: 0, startPlayer: 1 },
+      { q: 1, r: 0, startPlayer: 2 },
+    ]
+    const state = gameStateFromMap(map, ['P1', 'P2'])
+    for (const cell of state.cells) cell.controlOwnerId = null
+
+    const ctx = (turn: number, phase: 'events' | 'planning' | 'actions' | 'production') => ({
+      state: { ...state, turnNumber: turn },
+      phase,
+    })
+    const first = activePlayerOrder(state.players, null, ctx(1, 'planning'))
+    expect(activePlayerOrder(state.players, null, ctx(1, 'planning'))).toEqual(first)
+    expect(activePlayerOrder(state.players, null, ctx(1, 'events'))).toEqual(first)
+    expect(activePlayerOrder(state.players, null, ctx(1, 'actions'))).toEqual(first)
+    expect(activePlayerOrder(state.players, null, ctx(1, 'production'))).toEqual(first)
+
+    const seen = new Set<string>()
+    for (let turn = 1; turn <= 48; turn++) {
+      seen.add(activePlayerOrder(state.players, null, ctx(turn, 'planning')).join(','))
+    }
+    expect(seen.size).toBeGreaterThan(1)
+    expect(seen.has('player-1,player-2')).toBe(true)
+    expect(seen.has('player-2,player-1')).toBe(true)
   })
 
   it('skips non-participating players when only two joined', () => {
@@ -1050,21 +1081,28 @@ describe('turn flow', () => {
 
     expect(advanceGameSnapshot(game, map.id)).toEqual([])
     expect(game.phase).toBe('actions')
-    expect(game.activePlayerId).toBe('player-1')
+    const actionsOrder = activePlayerOrder(game.players, game.participatingPlayerIds, {
+      state: gameStateFromSnapshot(game, map.id),
+      phase: 'actions',
+    })
+    expect(game.activePlayerId).toBe(actionsOrder[0])
   })
 
   it('passes turn within actions and production when no markers remain', () => {
     const state = gameStateFromMap(createEmptyMap(), ['P1', 'P2'])
     state.phase = 'actions'
-    state.activePlayerId = 'player-1'
+    const actionsOrder = activePlayerOrder(state.players, null, { state, phase: 'actions' })
+    state.activePlayerId = actionsOrder[0]!
 
     expect(advanceGamePhase(state)).toEqual([])
     expect(state.phase).toBe('actions')
-    expect(state.activePlayerId).toBe('player-2')
+    expect(state.activePlayerId).toBe(actionsOrder[1])
 
     expect(advanceGamePhase(state)).toEqual([])
     expect(state.phase).toBe('production')
-    expect(state.activePlayerId).toBe('player-1')
+    expect(state.activePlayerId).toBe(
+      activePlayerOrder(state.players, null, { state, phase: 'production' })[0],
+    )
   })
 
   it('actions phase wraps to first player while action markers remain', () => {
@@ -1088,30 +1126,39 @@ describe('turn flow', () => {
     const map = createEmptyMap()
     const base = gameStateFromMap(map, ['P1', 'P2'])
     base.phase = 'actions'
-    base.activePlayerId = 'player-2'
+    const actionsOrder = activePlayerOrder(base.players, null, { state: base, phase: 'actions' })
+    base.activePlayerId = actionsOrder[actionsOrder.length - 1]!
     const game = gameSnapshotFromGameState(base)
 
     expect(advanceGameSnapshot(game, map.id)).toEqual([])
     expect(game.phase).toBe('production')
-    expect(game.activePlayerId).toBe('player-1')
+    expect(game.activePlayerId).toBe(
+      activePlayerOrder(game.players, null, {
+        state: gameStateFromSnapshot(game, map.id),
+        phase: 'production',
+      })[0],
+    )
   })
 
   it('starts new turn with events after all players produce', () => {
     const state = gameStateFromMap(createEmptyMap(), ['P1', 'P2', 'P3'])
     state.phase = 'production'
-    state.activePlayerId = 'player-1'
     state.turnNumber = 1
+    const prodOrder = activePlayerOrder(state.players, null, { state, phase: 'production' })
+    state.activePlayerId = prodOrder[0]!
 
     expect(advanceGamePhase(state)).toEqual([])
     expect(state.phase).toBe('production')
-    expect(state.activePlayerId).toBe('player-2')
+    expect(state.activePlayerId).toBe(prodOrder[1])
 
     expect(advanceGamePhase(state)).toEqual([])
-    expect(state.activePlayerId).toBe('player-3')
+    expect(state.activePlayerId).toBe(prodOrder[2])
 
     expect(advanceGamePhase(state)).toEqual([])
     expect(state.phase).toBe('events')
-    expect(state.activePlayerId).toBe('player-1')
+    expect(state.activePlayerId).toBe(
+      activePlayerOrder(state.players, null, { state, phase: 'events' })[0],
+    )
     expect(state.turnNumber).toBe(2)
   })
 
@@ -1122,7 +1169,9 @@ describe('turn flow', () => {
 
     expect(advanceGamePhase(state)).toEqual([])
     expect(state.phase).toBe('planning')
-    expect(state.activePlayerId).toBe('player-1')
+    expect(state.activePlayerId).toBe(
+      activePlayerOrder(state.players, null, { state, phase: 'planning' })[0],
+    )
   })
 
   it('keeps markers and skips a planning player without actions', () => {
@@ -1396,6 +1445,36 @@ describe('movement', () => {
     expect(dest.ships[0]?.type).toBe('supply')
   })
 
+  it('peaceful entry onto enemy cell takes control and removes production marker', () => {
+    const map = movementTestMap()
+    const game = gameSnapshotFromMap(map)
+    game.phase = 'actions'
+    game.activePlayerId = 'player-1'
+    placeActionMarkerForTest(game, 'player-1', { q: 0, r: -7 })
+    const dest = game.cells.find((c) => c.coord.q === 1 && c.coord.r === -6)!
+    dest.controlOwnerId = 'player-2'
+    dest.ships = []
+    dest.productionMarkerId = 'prod-p2'
+    game.productionMarkers.push({
+      id: 'prod-p2',
+      ownerId: 'player-2',
+      coord: { q: 1, r: -6 },
+      targetRegionId: 'region-p2',
+    })
+    const shipId = game.cells.find((c) => c.coord.q === 0 && c.coord.r === -7)!.ships[0]!.id
+
+    expect(
+      executeMarkerMovement(game, map, 'player-1', { q: 0, r: -7 }, [
+        { shipId, to: { q: 1, r: -6 } },
+      ]).errors,
+    ).toEqual([])
+
+    expect(dest.controlOwnerId).toBe('player-1')
+    expect(dest.productionMarkerId).toBeNull()
+    expect(game.productionMarkers).toHaveLength(0)
+    expect(dest.ships.some((s) => s.id === shipId)).toBe(true)
+  })
+
   it('validateMarkerMovement allows contested cell in range and rejects out of range', () => {
     const map = movementTestMap()
     const game = gameSnapshotFromMap(map)
@@ -1430,8 +1509,12 @@ describe('movement', () => {
       type: 'destroyer',
       ownerId: 'player-1',
     })
-    game.cells.find((c) => c.coord.q === 1 && c.coord.r === -6)!.controlOwnerId = 'player-2'
-    game.cells.find((c) => c.coord.q === 1 && c.coord.r === -7)!.controlOwnerId = 'player-2'
+    const cellA = game.cells.find((c) => c.coord.q === 1 && c.coord.r === -6)!
+    const cellB = game.cells.find((c) => c.coord.q === 1 && c.coord.r === -7)!
+    cellA.controlOwnerId = 'player-2'
+    cellA.ships.push({ id: 'enemy-a', type: 'destroyer', ownerId: 'player-2' })
+    cellB.controlOwnerId = 'player-2'
+    cellB.ships.push({ id: 'enemy-b', type: 'destroyer', ownerId: 'player-2' })
 
     expect(
       validateMarkerMovement(game, map, 'player-1', { q: 0, r: -7 }, [
@@ -1529,7 +1612,8 @@ describe('movement', () => {
     ensurePlayerSlots(game, 3)
     game.participatingPlayerIds = ['player-1', 'player-2', 'player-3']
     game.phase = 'actions'
-    // Равный контроль регионов → порядок слотов player-1,2,3
+    // Нулевой контроль у всех — очередь среди равных перемешивается;
+    // маркеры только у player-2, поэтому после передачи ход заворачивается к нему.
     for (const cell of game.cells) cell.controlOwnerId = null
     game.cells.find((c) => c.coord.q === 0 && c.coord.r === 0)!.ships = [
       { id: 'p1', type: 'destroyer', ownerId: 'player-1' },
@@ -1563,12 +1647,20 @@ describe('movement', () => {
     const map = movementTestMap()
     const game = gameSnapshotFromMap(map)
     game.phase = 'planning'
-    game.activePlayerId = 'player-1'
+    const planningOrder = activePlayerOrder(game.players, null, {
+      state: gameStateFromSnapshot(game, map.id),
+      phase: 'planning',
+    })
+    game.activePlayerId = planningOrder[planningOrder.length - 1]!
     game.actionMarkerResolvedThisTurn = true
 
     expect(advanceGameSnapshot(game, map.id)).toEqual([])
     expect(game.phase).toBe('actions')
-    expect(game.activePlayerId).toBe('player-1')
+    const order = activePlayerOrder(game.players, null, {
+      state: gameStateFromSnapshot(game, map.id),
+      phase: 'actions',
+    })
+    expect(game.activePlayerId).toBe(order[0])
     expect(game.actionMarkerResolvedThisTurn).toBe(false)
   })
 
@@ -1614,7 +1706,12 @@ describe('movement', () => {
 
     expect(advanceGameSnapshot(game, map.id)).toEqual([])
     expect(game.phase).toBe('production')
-    expect(game.activePlayerId).toBe('player-1')
+    expect(game.activePlayerId).toBe(
+      activePlayerOrder(game.players, null, {
+        state: gameStateFromSnapshot(game, map.id),
+        phase: 'production',
+      })[0],
+    )
   })
 
   it('allows advance after removing all own action markers', () => {
@@ -1626,9 +1723,57 @@ describe('movement', () => {
     const markerId = game.actionMarkers[0]!.id
 
     expect(removeActionMarker(game, markerId, 'player-1')).toEqual([])
+    expect(game.actionMarkerResolvedThisTurn).toBe(true)
     expect(advanceGameSnapshot(game, map.id)).toEqual([])
     expect(game.phase).toBe('production')
-    expect(game.activePlayerId).toBe('player-1')
+    expect(game.activePlayerId).toBe(
+      activePlayerOrder(game.players, null, {
+        state: gameStateFromSnapshot(game, map.id),
+        phase: 'production',
+      })[0],
+    )
+  })
+
+  it('removing an action marker in actions counts as the turn (cannot execute another)', () => {
+    const map = movementTestMap()
+    const game = gameSnapshotFromMap(map)
+    game.phase = 'actions'
+    game.activePlayerId = 'player-1'
+    placeActionMarkerForTest(game, 'player-1', { q: 0, r: -7 })
+    game.cells.find((c) => c.coord.q === 0 && c.coord.r === -5)!.controlOwnerId = 'player-1'
+    game.cells.find((c) => c.coord.q === 0 && c.coord.r === -5)!.ships.push({
+      id: 'dd-keep',
+      type: 'destroyer',
+      ownerId: 'player-1',
+    })
+    placeActionMarkerForTest(game, 'player-1', { q: 0, r: -5 })
+    const discardId = game.actionMarkers.find(
+      (m) => m.coord.q === 0 && m.coord.r === -7,
+    )!.id
+
+    expect(removeActionMarker(game, discardId, 'player-1')).toEqual([])
+    expect(game.actionMarkerResolvedThisTurn).toBe(true)
+    expect(game.actionMarkers).toHaveLength(1)
+
+    const shipId = 'dd-keep'
+    expect(
+      validateMarkerMovement(game, map, 'player-1', { q: 0, r: -5 }, [
+        { shipId, to: { q: 0, r: -4 } },
+      ]),
+    ).toEqual([ACTION_MARKER_ALREADY_RESOLVED_MSG])
+    expect(advanceGameSnapshot(game, map.id)).toEqual([])
+    expect(game.phase).toBe('actions')
+  })
+
+  it('removing an action marker in planning does not spend the actions-phase turn', () => {
+    const map = createEmptyMap()
+    const game = gameSnapshotFromMap(map)
+    game.phase = 'planning'
+    game.activePlayerId = 'player-1'
+    addTestShip(game, 0, 0, 'player-1')
+    expect(addActionMarker(game, 'player-1', { q: 0, r: 0 })).toEqual([])
+    expect(removeActionMarker(game, game.actionMarkers[0]!.id, 'player-1')).toEqual([])
+    expect(game.actionMarkerResolvedThisTurn).toBeFalsy()
   })
 
   it('getLegalActionsForSnapshot omits advance-phase when action marker unresolved', () => {

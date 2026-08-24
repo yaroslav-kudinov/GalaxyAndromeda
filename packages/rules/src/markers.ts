@@ -215,6 +215,9 @@ export function removeActionMarker(game: GameSnapshot, markerId: string, ownerId
   game.actionMarkers.splice(idx, 1)
   const cell = cellAt(game, marker.coord)
   if (cell?.actionMarkerId === markerId) cell.actionMarkerId = null
+  if (game.phase === 'actions' && game.activePlayerId === ownerId) {
+    markActionMarkerResolvedThisTurn(game)
+  }
   return []
 }
 
@@ -287,7 +290,24 @@ export function removeProductionMarker(game: GameSnapshot, markerId: string, own
   game.productionMarkers.splice(idx, 1)
   const cell = cellAt(game, marker.coord)
   if (cell?.productionMarkerId === markerId) cell.productionMarkerId = null
+  if (game.phase === 'production' && game.activePlayerId === ownerId) {
+    markProductionMarkerResolvedThisTurn(game)
+  }
   return []
+}
+
+/** Маркер производства без контроля клетки владельца снимается (захват). Ход не тратит. */
+export function removeStaleProductionMarkerAt(game: GameSnapshot, coord: HexCoord): void {
+  const cell = cellAt(game, coord)
+  if (!cell?.productionMarkerId) return
+  const marker = game.productionMarkers.find((m) => m.id === cell.productionMarkerId)
+  if (!marker) {
+    cell.productionMarkerId = null
+    return
+  }
+  if (cell.controlOwnerId === marker.ownerId) return
+  game.productionMarkers = game.productionMarkers.filter((m) => m.id !== marker.id)
+  if (cell.productionMarkerId === marker.id) cell.productionMarkerId = null
 }
 
 export type MarkerKind = 'action' | 'production'

@@ -389,6 +389,7 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
 }
 .marker-modal {
   width: min(100%, 440px);
+  max-height: min(90vh, 720px);
   display: flex;
   flex-direction: column;
   border-radius: 12px;
@@ -396,6 +397,7 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
   background: rgba(15, 23, 42, 0.97);
   box-shadow: 0 16px 40px rgba(0, 0, 0, 0.45);
   color: #e2e8f0;
+  overflow: hidden;
 }
 @media (min-width: 640px) {
   .marker-modal-backdrop {
@@ -439,6 +441,9 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
   padding: 0 0.25rem;
 }
 .modal-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
   padding: 0.75rem 1rem;
 }
 .resource-bar {
@@ -650,6 +655,7 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 0.45rem;
+  flex-shrink: 0;
   padding: 0.65rem 1rem 0.85rem;
   border-top: 1px solid #334155;
 }

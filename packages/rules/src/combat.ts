@@ -14,6 +14,7 @@ import { SHIP_LABELS } from './constants.js'
 import { buildBombardmentPreview } from './bombardment.js'
 import { getTurnModifiers, canRetreatFromBattle } from './events.js'
 import { hexDistance } from './map.js'
+import { removeStaleProductionMarkerAt } from './markers.js'
 import type { GameSnapshot, RuntimeCellState } from './save-file.js'
 import type {
   PendingCombat,
@@ -804,7 +805,7 @@ export function shieldAbsorbForShip(scope: 'self' | 'neighbor'): number {
 /** Подпись щита для UI (на клетке — до 4, с соседа — до 2). */
 export function formatShieldContributionLabel(contribution: ShieldContribution): string {
   const scopeHint = contribution.scope === 'self' ? 'на клетке' : 'с соседа'
-  return `Щит: поглощает до ${contribution.absorbCapacity} (${scopeHint})`
+  return `щит · до ${contribution.absorbCapacity} ${scopeHint}`
 }
 
 /**
@@ -862,34 +863,30 @@ export function compareDestructionPriority(a: ShipType, b: ShipType): number {
 
 
 
-/** Клетка оспариваемая для атакующего игрока */
-
+/** Клетка оспариваемая для **движения**: есть вражеский корабль не-supply. */
 export function isCombatDestination(
-
   game: GameSnapshot,
-
   attackerId: string,
-
   dest: HexCoord,
-
 ): boolean {
-
   const cell = cellAt(game, dest)
-
   if (!cell) return false
 
+  return cell.ships.some((s) => s.ownerId !== attackerId && s.type !== 'supply')
+}
 
+/** Цель обстрела: любой вражеский корабль или чужой контроль. */
+export function isBombardmentDestination(
+  game: GameSnapshot,
+  attackerId: string,
+  dest: HexCoord,
+): boolean {
+  const cell = cellAt(game, dest)
+  if (!cell) return false
 
   const enemyShips = cell.ships.some((s) => s.ownerId !== attackerId)
-
-  const enemyControl =
-
-    cell.controlOwnerId != null && cell.controlOwnerId !== attackerId
-
-
-
+  const enemyControl = cell.controlOwnerId != null && cell.controlOwnerId !== attackerId
   return enemyShips || enemyControl
-
 }
 
 
@@ -1147,6 +1144,8 @@ function buildSidePreview(
 export interface BuildCombatPreviewOptions extends Pick<CombatOptions, 'supportSides'> {
   /** Планы движения атакующего: мирные назначения учитываются для supportDice */
   attackerMovementPlans?: ReadonlyArray<{ shipId: string; to: HexCoord }>
+  /** Обстрел: оспариваемость по isBombardmentDestination */
+  forBombardment?: boolean
 }
 
 export function buildCombatPreview(
@@ -1158,7 +1157,10 @@ export function buildCombatPreview(
 ): CombatPreview | null {
   const cell = cellAt(game, coord)
   if (!cell) return null
-  if (!isCombatDestination(game, attackerId, coord)) return null
+  const contested = options.forBombardment
+    ? isBombardmentDestination(game, attackerId, coord)
+    : isCombatDestination(game, attackerId, coord)
+  if (!contested) return null
 
   const defenderId = inferDefenderId(cell, attackerId)
   if (!defenderId) return null
@@ -1169,9 +1171,10 @@ export function buildCombatPreview(
 
   const attackerShips = incomingAttackerShips.filter((s) => s.ownerId === attackerId)
 
-
-
-  const shieldContributions = collectShieldContributions(game, coord, defenderId)
+  const shieldContributions = [
+    ...collectShieldContributions(game, coord, attackerId),
+    ...collectShieldContributions(game, coord, defenderId),
+  ]
 
 
 
@@ -1251,7 +1254,7 @@ export function buildCombatPreview(
 
       'Раунд: priority skip → кубики → победитель → уничтожение по приоритету.',
 
-      `Щит на клетке: до ${SHIELD_ABSORB_SELF}; с соседа: до ${SHIELD_ABSORB_NEIGHBOR} (пример 4+2).`,
+      `Щит проигравшей стороны: до ${SHIELD_ABSORB_SELF} на клетке, до ${SHIELD_ABSORB_NEIGHBOR} с соседа (пример 4+2).`,
 
       'Priority skip — бесплатное объявление по типу корабля (один skip на тип).',
 
@@ -1863,6 +1866,7 @@ function maybeTransferControl(
   if (defenderRemaining) return
 
   cell.controlOwnerId = attackerId
+  removeStaleProductionMarkerAt(game, coord)
 }
 
 /**
@@ -1968,9 +1972,11 @@ export function resolveCombatAtCell(
   })
 
   const rawDamage = computeRoundDamage(round)
+  const loserId = attackerWon ? preview.defenderId : preview.attackerId
+  const loserShields = preview.shieldContributions.filter((c) => c.ownerId === loserId)
   const shieldResult = applyShieldAbsorption(
     rawDamage,
-    preview.shieldContributions,
+    loserShields,
   )
 
   log.push({
@@ -1983,7 +1989,8 @@ export function resolveCombatAtCell(
       rawDamage,
       absorbed: shieldResult.absorbed,
       remainingDamage: shieldResult.remainingDamage,
-      contributions: preview.shieldContributions,
+      contributions: loserShields,
+      loserId,
     },
   })
 

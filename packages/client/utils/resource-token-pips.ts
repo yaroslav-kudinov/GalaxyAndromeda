@@ -69,6 +69,8 @@ export const PIP_LAYOUTS: Record<number, { x: number; y: number }[]> = {
 export const TOKEN_CHIP_RADIUS = 12
 export const TOKEN_PIP_SPREAD = 6.1
 export const TOKEN_PIP_RADIUS = 2.05
+/** Половина стороны квадратного пипа производства ≈ площадь круглого. */
+export const TOKEN_PIP_SQUARE_HALF = TOKEN_PIP_RADIUS * 0.88
 
 export const TOKEN_COLORS = {
   credits: {

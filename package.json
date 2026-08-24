@@ -4,10 +4,12 @@
   "type": "module",
   "scripts": {
     "dev": "pnpm -r --parallel --filter @galaxy/client --filter @galaxy/server run dev",
+    "dev:tunnel": "node harness/scripts/dev-tunnel.mjs",
     "build": "pnpm -r run build",
     "test": "pnpm -r run test",
     "typecheck": "pnpm -r run typecheck",
-    "smoke": "tsx harness/agent-smoke/run-smoke.ts"
+    "smoke": "tsx harness/agent-smoke/run-smoke.ts",
+    "tabletop:print": "tsx harness/scripts/build-tabletop-print.mjs"
   },
   "devDependencies": {
     "tsx": "^4.19.2"

@@ -50,6 +50,8 @@ import {
 
   freeLobbyPlayerIds,
 
+  beginMatchForParticipants,
+  isPristineMatchSnapshot,
   type GalaxySaveFile,
 
 } from '@galaxy/rules'
@@ -77,6 +79,12 @@ export interface Room {
   playerIds: string[]
 
   maxPlayers: number
+
+  /** Пока 'lobby' — ждём игроков; партия не идёт. */
+  status: 'lobby' | 'playing'
+
+  /** Первый вошедший; только он стартует матч. */
+  hostPlayerId: string | null
 
   /** Последний результат боя — в observation до следующего действия (кроме update-combat-prep) */
   lastCombatResult?: import('@galaxy/rules').CombatResolutionResult
@@ -225,7 +233,9 @@ export function listLobbies(now = Date.now()) {
       mapName: room.map.name,
       maxPlayers: room.maxPlayers,
       playerCount: room.playerIds.length,
-      phase: room.state.phase,
+      status: room.status,
+      hostPlayerId: room.hostPlayerId,
+      phase: room.status === 'lobby' ? 'lobby' : room.state.phase,
       turnNumber: room.state.turnNumber,
       activePlayerId: room.state.activePlayerId,
       players: slots,
@@ -265,7 +275,10 @@ function maybeAdvanceCombatPrep(room: Room): {
   combatResult?: import('@galaxy/rules').CombatResolutionResult
   changed: boolean
 } {
-  const prepBefore = combatPrepOf(room.state.pendingCombat)
+  const pendingBefore = room.state.pendingCombat
+  const prepBefore = combatPrepOf(pendingBefore)
+  const attackerId = pendingBefore?.attackerId
+  const defenderId = pendingBefore?.defenderIds?.[0] ?? combatPrepOf(pendingBefore)?.defenderId
   if (!tickCombatPrepCountdown(room.state)) return { changed: false }
   const { errors, combatResult } = resolveCombatPrep(room.state, room.map)
   if (errors.length) {
@@ -273,12 +286,26 @@ function maybeAdvanceCombatPrep(room: Room): {
     return { changed: true }
   }
   if (combatResult) room.lastCombatResult = combatResult
+  const loserId =
+    combatResult?.winnerId == null
+      ? undefined
+      : combatResult.winnerId === attackerId
+        ? defenderId
+        : attackerId
+  const shieldAbsorbEntry = combatResult?.log.find((e) => e.step === 'shield-absorb')
+  const shieldContributions = (shieldAbsorbEntry?.data as { contributions?: unknown[] } | undefined)?.contributions
   debugLog(combatResult ? 'combat.auto-resolve' : 'combat.countdown', {
     roomId: room.id,
     phaseBefore: prepBefore?.phase,
     countdownStartedAt: prepBefore?.countdownStartedAt,
     phaseAfter: combatPrepOf(room.state.pendingCombat)?.phase ?? null,
     winnerId: combatResult?.winnerId,
+    attackerId,
+    defenderId,
+    loserId,
+    shieldAbsorbed: combatResult?.shieldAbsorbed,
+    rawDamage: combatResult?.rawDamage,
+    shieldContributionCount: Array.isArray(shieldContributions) ? shieldContributions.length : undefined,
   })
   return { combatResult, changed: true }
 }
@@ -305,7 +332,9 @@ function roomObservation(
   playerId: string,
   includeGeometry: boolean,
 ): GameObservation {
-  const legal = getLegalActionsForSnapshot(room.state, room.map.id, playerId)
+  const legal = room.status === 'playing'
+    ? getLegalActionsForSnapshot(room.state, room.map.id, playerId)
+    : []
   const s = room.state
 
   const state: Record<string, unknown> = {
@@ -329,6 +358,8 @@ function roomObservation(
     overtimeRegionByPlayer: s.overtimeRegionByPlayer ?? null,
     lastCombatResult: room.lastCombatResult ?? null,
     observationRevision: room.observationRevision,
+    roomStatus: room.status,
+    hostPlayerId: room.hostPlayerId,
   }
 
   return buildObservation(state as unknown as Parameters<typeof buildObservation>[0], legal, {
@@ -361,6 +392,10 @@ export function createRoom(map: MapDefinition, maxPlayers = 6): Room {
     playerIds: [],
 
     maxPlayers: effectiveMax,
+
+    status: 'lobby',
+
+    hostPlayerId: null,
 
     observationRevision: 0,
 
@@ -401,6 +436,8 @@ export function createRoomFromSave(save: GalaxySaveFile, maxPlayers = 6): Room {
     state,
     playerIds: [],
     maxPlayers: effectiveMax,
+    status: 'lobby',
+    hostPlayerId: null,
     observationRevision: 0,
     lastActivityAt: Date.now(),
   }
@@ -446,6 +483,7 @@ function assignPlayerToSlot(room: Room, playerId: string, playerName: string): b
   if (!room.playerIds.includes(playerId)) {
     room.playerIds.push(playerId)
   }
+  if (!room.hostPlayerId) room.hostPlayerId = playerId
   if (!room.state.activePlayerId) room.state.activePlayerId = playerId
 
   syncParticipatingPlayerIds(room.state, room.playerIds)
@@ -462,6 +500,14 @@ export function joinRoom(
   const room = rooms.get(roomId)
   if (!room) {
     return { ok: false, error: 'Комната не найдена', availablePlayerIds: [] }
+  }
+
+  if (room.status === 'playing') {
+    return {
+      ok: false,
+      error: 'Игра уже началась — новые слоты закрыты',
+      availablePlayerIds: [],
+    }
   }
 
   const resolved = resolveJoinPlayerId(room.playerIds, room.maxPlayers, preferredPlayerId)
@@ -510,8 +556,19 @@ export function rejoinRoom(
     }
   }
 
+  if (room.status === 'playing' && resolved.previousPlayerId) {
+    return {
+      ok: false,
+      error: 'После старта слот менять нельзя',
+      availablePlayerIds: freeLobbyPlayerIds(room.playerIds, room.maxPlayers),
+    }
+  }
+
   if (resolved.previousPlayerId) {
     room.playerIds = room.playerIds.filter((id) => id !== resolved.previousPlayerId)
+    if (room.hostPlayerId === resolved.previousPlayerId) {
+      room.hostPlayerId = resolved.playerId
+    }
     syncParticipatingPlayerIds(room.state, room.playerIds)
   }
 
@@ -530,6 +587,41 @@ export function rejoinRoom(
     playerName: playerName?.trim() || undefined,
   })
   return { ok: true, playerId: resolved.playerId, room }
+}
+
+export type RoomStartFailure = { ok: false; error: string }
+export type RoomStartResult = { ok: true; room: Room } | RoomStartFailure
+
+export function startRoom(roomId: string, playerId: string): RoomStartResult {
+  const room = rooms.get(roomId)
+  if (!room) return { ok: false, error: 'Комната не найдена' }
+  if (room.status === 'playing') return { ok: false, error: 'Игра уже началась' }
+  if (!room.playerIds.includes(playerId)) {
+    return { ok: false, error: 'Игрок не зарегистрирован в комнате' }
+  }
+  if (room.hostPlayerId && room.hostPlayerId !== playerId) {
+    return { ok: false, error: 'Начать игру может только создатель комнаты' }
+  }
+  if (!room.playerIds.length) {
+    return { ok: false, error: 'В комнате нет игроков' }
+  }
+
+  room.hostPlayerId = room.hostPlayerId ?? playerId
+  syncParticipatingPlayerIds(room.state, room.playerIds)
+  if (isPristineMatchSnapshot(room.state)) {
+    beginMatchForParticipants(room.state, room.map.id, room.playerIds)
+  } else {
+    ensureActivePlayerParticipating(room.state)
+  }
+  room.status = 'playing'
+  bumpObservationRevision(room, 'room.start')
+  debugLog('room.start', {
+    roomId,
+    hostPlayerId: room.hostPlayerId,
+    players: room.playerIds,
+    activePlayerId: room.state.activePlayerId,
+  })
+  return { ok: true, room }
 }
 
 export function reportPresence(
@@ -596,6 +688,10 @@ export function submitAction(
 
   ensureRoomParticipatingSynced(room)
   assertRoomMember(room, playerId)
+
+  if (room.status !== 'playing') {
+    throw new Error('Игра ещё не начата — дождитесь старта в комнате подготовки')
+  }
 
   if (room.state.gameOver) {
     throw new Error('Игра завершена')
@@ -761,6 +857,18 @@ export function registerHttpRoutes(app: FastifyInstance): void {
     },
   )
 
+  app.post<{
+    Params: { id: string }
+    Body: { playerId: string }
+  }>(
+    '/rooms/:id/start',
+    async (req, reply) => {
+      const result = startRoom(req.params.id, req.body.playerId)
+      if (!result.ok) return reply.status(400).send({ error: result.error })
+      return { ok: true, code: result.room.code, status: result.room.status }
+    },
+  )
+
 
 
   app.get<{ Params: { id: string } }>('/rooms/:id/bootstrap', async (req, reply) => {
@@ -777,6 +885,8 @@ export function registerHttpRoutes(app: FastifyInstance): void {
       map: room.map,
       maxPlayers: room.maxPlayers,
       playerCount: room.playerIds.length,
+      status: room.status,
+      hostPlayerId: room.hostPlayerId,
       joinedPlayerIds: [...room.playerIds],
       players: room.state.players.slice(0, room.maxPlayers).map((p) => ({
         id: p.id,
@@ -829,6 +939,8 @@ export function registerHttpRoutes(app: FastifyInstance): void {
       if (!room.playerIds.includes(req.query.playerId)) {
         return reply.status(403).send({ error: 'Игрок не зарегистрирован в комнате' })
       }
+
+      if (room.status !== 'playing') return []
 
       return getLegalActionsForSnapshot(room.state, room.map.id, req.query.playerId)
 

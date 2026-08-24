@@ -203,7 +203,7 @@ const oddsSummaryParts = computed(() => {
               :class="{ 'ship-chip--shield': s.type === 'shield' }"
             >
               <template v-if="s.type === 'shield'">
-                {{ shieldOnCellLabel(s.shipId) ?? `Щит: поглощает до ${getShieldAbsorbCapacity('self')}` }}
+                {{ shieldOnCellLabel(s.shipId) ?? `щит · до ${getShieldAbsorbCapacity('self')} на клетке` }}
               </template>
               <template v-else>
                 {{ SHIP_LABELS[s.type] }}
