@@ -8,7 +8,7 @@ export type SymmetryAxisKind = 'line' | 'edge'
 export interface SymmetrySettings {
   enabled: boolean
   playerCount: SymmetryPlayerCount
-  /** For 2 players: mirror through hex-center line vs hex edge */
+  /** For 2 and 4 players: mirror through a line of hex centers vs through edges between cells */
   axisKind: SymmetryAxisKind
   /** 0–2: one of three equivalent axes (60° apart) */
   axisIndex: number
@@ -46,16 +46,39 @@ export function rotateHex(coord: HexCoord, steps: number): HexCoord {
   return cubeToAxial({ x, y, z })
 }
 
-function reflectBase(coord: HexCoord): HexCoord {
-  return { q: coord.r, r: coord.q }
+/**
+ * Reflections through a line of adjacent hex centers (cube-axis negation).
+ * index 0: r = 0 (horizontal when hexes are pointy-top).
+ */
+function reflectThroughCenters(coord: HexCoord, index: number): HexCoord {
+  const i = ((index % 3) + 3) % 3
+  if (i === 0) return { q: coord.q + coord.r, r: -coord.r }
+  if (i === 1) return { q: -coord.q, r: coord.q + coord.r }
+  return { q: -coord.r, r: -coord.q }
 }
 
-/** Mirror across an axis through the origin; axisSteps = 0..5 (60° increments) */
+/**
+ * Reflections through hex vertices / edges between cells (cube-coordinate swap).
+ * index 0: horizontal when hexes are flat-top.
+ */
+function reflectThroughEdges(coord: HexCoord, index: number): HexCoord {
+  const i = ((index % 3) + 3) % 3
+  if (i === 0) return { q: coord.q, r: -coord.q - coord.r }
+  if (i === 1) return { q: coord.r, r: coord.q }
+  return { q: -coord.q - coord.r, r: coord.r }
+}
+
+/**
+ * Mirror across an axis through the origin.
+ * Even steps (0, 2, 4): through adjacent hex centers.
+ * Odd steps (1, 3, 5): through vertices / edges between cells.
+ * Conjugating a single reflection by 60° only yields 3 axes (one family);
+ * the other family must be the other involution type.
+ */
 export function reflectHex(coord: HexCoord, axisSteps: number): HexCoord {
   const axis = ((axisSteps % 6) + 6) % 6
-  const unrotated = rotateHex(coord, -axis)
-  const reflected = reflectBase(unrotated)
-  return rotateHex(reflected, axis)
+  if (axis % 2 === 0) return reflectThroughCenters(coord, axis / 2)
+  return reflectThroughEdges(coord, (axis - 1) / 2)
 }
 
 export function reflectionAxisSteps(settings: Pick<SymmetrySettings, 'axisKind' | 'axisIndex'>): number {
@@ -157,10 +180,34 @@ export function remapCellContent(
   }
 }
 
-export const SYMMETRY_AXIS_LABELS = {
-  line: ['↔ горизонталь', '↔ 60°', '↔ 120°'],
-  edge: ['| вертикаль', '| 60°', '| 120°'],
-} as const
+export type HexGridOrientation = 'flat' | 'pointy'
+
+/** Screen labels for the three axes of a family; angles depend on hex orientation. */
+export const SYMMETRY_AXIS_LABELS: Record<
+  HexGridOrientation,
+  Record<SymmetryAxisKind, readonly [string, string, string]>
+> = {
+  pointy: {
+    line: ['↔ горизонталь', '↔ 60°', '↔ 120°'],
+    edge: ['↔ 150°', '↔ 30°', '| вертикаль'],
+  },
+  flat: {
+    line: ['↔ 30°', '| вертикаль', '↔ 150°'],
+    edge: ['↔ горизонталь', '↔ 60°', '↔ 120°'],
+  },
+}
+
+export function getSymmetryAxisLabels(
+  kind: SymmetryAxisKind,
+  orientation: HexGridOrientation = 'flat',
+): readonly [string, string, string] {
+  return SYMMETRY_AXIS_LABELS[orientation][kind]
+}
+
+/** Horizontal mirror through a line of hex centers exists only for pointy-top drawing. */
+export function horizontalThroughCentersPossible(orientation: HexGridOrientation): boolean {
+  return orientation === 'pointy'
+}
 
 export const SYMMETRY_PLAYER_OPTIONS: {
   count: SymmetryPlayerCount

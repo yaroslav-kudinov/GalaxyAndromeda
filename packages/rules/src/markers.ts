@@ -1,13 +1,15 @@
 import {
+  countProductionMarkersForPlayer,
   gameStateFromSnapshot,
   resolveRegionIdForCell,
-  MAX_ACTION_MARKERS_PER_PLAYER,
-  maxProductionMarkersForPlayer,
-  countProductionMarkersForPlayer,
   type ActionMarker,
   type GameSnapshot,
   type ProductionMarker,
 } from './save-file.js'
+import {
+  actionMarkerLimitForPlayer,
+  productionMarkerLimitForPlayer,
+} from './marker-pools.js'
 import { MIN_VALID_PRODUCTION_REGION_SIZE } from './regions.js'
 import type { HexCoord, MapDefinition, Phase } from './types.js'
 import { hexKey } from './types.js'
@@ -39,6 +41,18 @@ export const PRODUCTION_MARKER_REMOVE_BLOCKED_MSG =
 
 export const PRODUCTION_MARKER_MUST_RESOLVE_BEFORE_ADVANCE_MSG =
   'Используйте маркер производства, перезарядите ресурсы или снимите его с карты'
+
+export const PRODUCTION_MARKER_ALREADY_BOUGHT_MSG =
+  'За этот ход можно купить только один дополнительный маркер производства'
+
+export const PRODUCTION_MARKER_REGION_TAKEN_MSG =
+  '«Нормирование производства»: в этом регионе уже стоит ваш маркер производства'
+
+export function isOneProductionMarkerPerRegionActive(game: GameSnapshot): boolean {
+  const ev = game.turnEvent
+  if (!ev || ev.turnNumber !== game.turnNumber || !ev.resolvedAt) return false
+  return ev.eventId === 'mandatory-overtime'
+}
 
 export function productionMarkerAdvanceBlockMessage(
   game: GameSnapshot,
@@ -106,6 +120,15 @@ export function syncActionMarkerTurnTracking(
 
 export function hasResolvedProductionMarkerThisTurn(game: GameSnapshot): boolean {
   return !!game.productionMarkerResolvedThisTurn
+}
+
+export function hasBoughtProductionMarkerThisTurn(game: GameSnapshot, playerId: string): boolean {
+  return !!game.productionMarkerBoughtByPlayerThisTurn?.[playerId]
+}
+
+export function markProductionMarkerBoughtThisTurn(game: GameSnapshot, playerId: string): void {
+  game.productionMarkerBoughtByPlayerThisTurn ??= {}
+  game.productionMarkerBoughtByPlayerThisTurn[playerId] = true
 }
 
 export function canExecuteProductionMarkerThisTurn(game: GameSnapshot, ownerId: string): boolean {
@@ -187,8 +210,9 @@ export function addActionMarker(
   if (cell.actionMarkerId) return ['На клетке уже есть маркер действия']
 
   const count = game.actionMarkers.filter((m) => m.ownerId === ownerId).length
-  if (count >= MAX_ACTION_MARKERS_PER_PLAYER) {
-    return [`Не более ${MAX_ACTION_MARKERS_PER_PLAYER} маркеров действий на игрока`]
+  const limit = actionMarkerLimitForPlayer(game, ownerId)
+  if (count >= limit) {
+    return [`Не более ${limit} маркеров действий на игрока`]
   }
 
   const id = newMarkerId('action')
@@ -256,14 +280,14 @@ export function addProductionMarker(
     const existingRegionId = resolveRegionIdForCell(state, m.coord, ownerId)
     return existingRegionId === regionId
   })
-  if (regionTaken) {
-    return ['В этом регионе уже стоит маркер производства']
+  if (regionTaken && isOneProductionMarkerPerRegionActive(game)) {
+    return [PRODUCTION_MARKER_REGION_TAKEN_MSG]
   }
 
-  const limit = maxProductionMarkersForPlayer(state, ownerId)
+  const limit = productionMarkerLimitForPlayer(game, ownerId)
   const count = countProductionMarkersForPlayer(game, ownerId)
   if (count >= limit) {
-    return [`Не более ${limit} маркеров производства (по одному на регион)`]
+    return [`Не более ${limit} маркеров производства`]
   }
 
   const id = newMarkerId('production')
@@ -294,6 +318,26 @@ export function removeProductionMarker(game: GameSnapshot, markerId: string, own
     markProductionMarkerResolvedThisTurn(game)
   }
   return []
+}
+
+/** Снять все маркеры игрока с карты без траты хода фазы (сдача, выбытие). */
+export function clearMarkersOwnedByPlayer(game: GameSnapshot, playerId: string): void {
+  const actionIds = new Set(
+    game.actionMarkers.filter((marker) => marker.ownerId === playerId).map((marker) => marker.id),
+  )
+  const productionIds = new Set(
+    game.productionMarkers
+      .filter((marker) => marker.ownerId === playerId)
+      .map((marker) => marker.id),
+  )
+  game.actionMarkers = game.actionMarkers.filter((marker) => marker.ownerId !== playerId)
+  game.productionMarkers = game.productionMarkers.filter((marker) => marker.ownerId !== playerId)
+  for (const cell of game.cells) {
+    if (cell.actionMarkerId && actionIds.has(cell.actionMarkerId)) cell.actionMarkerId = null
+    if (cell.productionMarkerId && productionIds.has(cell.productionMarkerId)) {
+      cell.productionMarkerId = null
+    }
+  }
 }
 
 /** Маркер производства без контроля клетки владельца снимается (захват). Ход не тратит. */
@@ -374,7 +418,7 @@ export function togglePhaseMarkerAtCell(
 
 export function hasUnplacedActionMarkerCapacity(game: GameSnapshot, ownerId: string): boolean {
   const count = game.actionMarkers.filter((m) => m.ownerId === ownerId).length
-  if (count >= MAX_ACTION_MARKERS_PER_PLAYER) return false
+  if (count >= actionMarkerLimitForPlayer(game, ownerId)) return false
   return game.cells.some((cell) => {
     if (!cell.ships.some((s) => s.ownerId === ownerId)) return false
     if (!cell.actionMarkerId) return true
@@ -385,11 +429,10 @@ export function hasUnplacedActionMarkerCapacity(game: GameSnapshot, ownerId: str
 
 export function hasUnplacedProductionMarkerCapacity(
   game: GameSnapshot,
-  map: MapDefinition,
+  _map: MapDefinition,
   ownerId: string,
 ): boolean {
-  const state = gameStateFromSnapshot(game, map.id)
-  const limit = maxProductionMarkersForPlayer(state, ownerId)
+  const limit = productionMarkerLimitForPlayer(game, ownerId)
   const count = countProductionMarkersForPlayer(game, ownerId)
   return count < limit
 }

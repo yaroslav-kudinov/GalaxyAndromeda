@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import type { MapCellDefinition, PlayerState } from '@galaxy/rules'
-import { PLAYER_COLORS, getCellResourceToken, hexKey } from '@galaxy/rules'
+import type { GameSnapshot, MapCellDefinition, PlayerState, RegionInfo, ShipType } from '@galaxy/rules'
+import { PLAYER_COLORS, findRegionAtCell, gameStateFromSnapshot, getCellResourceToken, getEffectiveTokenValue, getRegionInfo, hexKey } from '@galaxy/rules'
 import {
   HEX_ORIENTATIONS,
   type HexOrientation,
@@ -16,6 +16,7 @@ import { effectiveGlyphScale, overlayContentScale } from '~/utils/board-glyphs'
 import { STRATEGIC_ZOOM_THRESHOLD } from '~/utils/board-overview'
 import { buildTerritoryOverlay } from '~/utils/hex-territory'
 import type { TerritoryLabelPlayer } from '~/composables/usePlayerTerritoryLabels'
+import { useShipMoveTweens } from '~/composables/useShipMoveTweens'
 
 const props = withDefaults(
   defineProps<{
@@ -27,6 +28,8 @@ const props = withDefaults(
     productionMarkerKeys?: string[]
     availableActionMarkerKeys?: string[]
     availableProductionMarkerKeys?: string[]
+    /** Доп. клетки, с которыми можно взаимодействовать (поверх reachable / маркеров). */
+    interactiveKeys?: string[]
     reachableKeys?: string[]
     destinationKeys?: string[]
     contestedKeys?: string[]
@@ -41,6 +44,13 @@ const props = withDefaults(
       shipId?: string
       combat?: boolean
     }[]
+    previewPlacements?: {
+      q: number
+      r: number
+      type: ShipType
+      player: number
+    }[]
+    previewPlacementsPulse?: boolean
     territoryLabelPlayers?: TerritoryLabelPlayer[]
     zoomable?: boolean
     orientation?: HexOrientation
@@ -52,6 +62,22 @@ const props = withDefaults(
     fillViewport?: boolean
     players?: PlayerState[]
     cellHoverTooltip?: boolean
+    /** Полупрозрачная заливка гексов — космос за картой просвечивает (игровая комната). */
+    translucentCells?: boolean
+    combatPulseKeys?: string[]
+    incomingShipIds?: string[]
+    /** Корабли, для которых сейчас выбирают клетку назначения (пульс глифа). */
+    activeShipIds?: string[]
+    combatGhosts?: {
+      id: string
+      type: ShipType
+      player: number
+      q: number
+      r: number
+    }[]
+    observationRevision?: number
+    snapshot?: GameSnapshot | null
+    mapId?: string | null
   }>(),
   {
     zoomable: true,
@@ -64,6 +90,7 @@ const props = withDefaults(
     productionMarkerKeys: () => [],
     availableActionMarkerKeys: () => [],
     availableProductionMarkerKeys: () => [],
+    interactiveKeys: () => [],
     reachableKeys: () => [],
     destinationKeys: () => [],
     contestedKeys: () => [],
@@ -72,12 +99,22 @@ const props = withDefaults(
     hideTerritoryPlayers: () => [],
     movementSourceKey: null,
     previewMoves: () => [],
+    previewPlacements: () => [],
+    previewPlacementsPulse: false,
     territoryLabelPlayers: () => [],
     toolbarPlacement: 'overlay',
     mode: 'editor',
     fillViewport: true,
     players: () => [],
     cellHoverTooltip: undefined,
+    translucentCells: false,
+    combatPulseKeys: () => [],
+    incomingShipIds: () => [],
+    activeShipIds: () => [],
+    combatGhosts: () => [],
+    observationRevision: 0,
+    snapshot: null,
+    mapId: null,
   },
 )
 
@@ -88,7 +125,11 @@ const showCellHoverTooltip = computed(
 const hoverTooltipCell = ref<MapCellDefinition | null>(null)
 const hoverTooltipVisible = ref(false)
 const hoverTooltipPos = ref({ x: 0, y: 0 })
+const hoverTooltipRegionInfo = ref<RegionInfo | null>(null)
 let hoverTooltipTimer: ReturnType<typeof setTimeout> | null = null
+/** Клетка под курсором, с которой сейчас можно взаимодействовать. */
+const hoveredInteractiveKey = ref<string | null>(null)
+const hoveredGhostKey = ref<string | null>(null)
 
 function clearHoverTooltipTimer() {
   if (hoverTooltipTimer) {
@@ -107,11 +148,50 @@ function clampTooltipPos(x: number, y: number) {
   }
 }
 
+function isInteractiveTarget(key: string): boolean {
+  if (props.mode === 'editor') return true
+  if (props.interactiveKeys.includes(key)) return true
+  return (
+    isReachable(key) ||
+    isContested(key) ||
+    isDestination(key) ||
+    isAvailableActionMarker(key) ||
+    isAvailableProductionMarker(key)
+  )
+}
+
+function isHoveredInteractive(key: string): boolean {
+  return hoveredInteractiveKey.value === key && !dragging.value
+}
+
+function regionInfoForCell(cell: MapCellDefinition): RegionInfo | null {
+  if (!props.snapshot || !props.mapId) return null
+  const state = gameStateFromSnapshot(props.snapshot, props.mapId)
+  const region = findRegionAtCell(state, { q: cell.q, r: cell.r })
+  if (!region) return null
+  return getRegionInfo(state, region, {
+    productionMarkers: props.snapshot.productionMarkers,
+    effectiveTokenValue: (value) => getEffectiveTokenValue(props.snapshot!, value),
+  })
+}
+
+function hideCellTooltip() {
+  clearHoverTooltipTimer()
+  hoverTooltipCell.value = null
+  hoverTooltipVisible.value = false
+  hoverTooltipRegionInfo.value = null
+}
+
 function onCellMouseEnter(cell: MapCellDefinition, e: MouseEvent) {
+  const key = hexKey(cell.q, cell.r)
+  hoveredGhostKey.value = null
+  hoveredInteractiveKey.value = isInteractiveTarget(key) && !dragging.value ? key : null
+
   if (!showCellHoverTooltip.value) return
   clearHoverTooltipTimer()
   hoverTooltipVisible.value = false
   hoverTooltipCell.value = cell
+  hoverTooltipRegionInfo.value = regionInfoForCell(cell)
   const { clientX, clientY } = e
   hoverTooltipTimer = setTimeout(() => {
     hoverTooltipPos.value = clampTooltipPos(clientX, clientY)
@@ -120,9 +200,30 @@ function onCellMouseEnter(cell: MapCellDefinition, e: MouseEvent) {
 }
 
 function onCellMouseLeave() {
+  hoveredInteractiveKey.value = null
+  hideCellTooltip()
+}
+
+function onCellContextMenu(cell: MapCellDefinition, e: MouseEvent) {
+  if (!showCellHoverTooltip.value) return
+  const info = regionInfoForCell(cell)
+  if (!info) return
+  e.preventDefault()
   clearHoverTooltipTimer()
-  hoverTooltipCell.value = null
-  hoverTooltipVisible.value = false
+  hoverTooltipCell.value = cell
+  hoverTooltipRegionInfo.value = info
+  hoverTooltipPos.value = clampTooltipPos(e.clientX, e.clientY)
+  hoverTooltipVisible.value = true
+}
+
+function onDocumentDismissTooltip(e: MouseEvent | KeyboardEvent) {
+  if (!hoverTooltipVisible.value) return
+  if (e instanceof KeyboardEvent && e.key !== 'Escape') return
+  hideCellTooltip()
+}
+
+function onSvgContextMenu(e: MouseEvent) {
+  e.preventDefault()
 }
 
 function onCellMouseMove(_cell: MapCellDefinition, e: MouseEvent) {
@@ -130,7 +231,32 @@ function onCellMouseMove(_cell: MapCellDefinition, e: MouseEvent) {
   hoverTooltipPos.value = clampTooltipPos(e.clientX, e.clientY)
 }
 
-onUnmounted(clearHoverTooltipTimer)
+function onGhostMouseEnter(q: number, r: number) {
+  if (dragging.value) return
+  hoveredInteractiveKey.value = null
+  hoveredGhostKey.value = hexKey(q, r)
+}
+
+function onGhostMouseLeave() {
+  hoveredGhostKey.value = null
+}
+
+onMounted(() => {
+  document.addEventListener('click', onDocumentDismissTooltip)
+  document.addEventListener('keydown', onDocumentDismissTooltip)
+  if (props.orientation == null) {
+    internalOrientation.value = loadStoredOrientation()
+  }
+  if (props.autoFitOnMapChange == null) {
+    internalAutoFit.value = loadStoredAutoFit()
+  }
+})
+
+onUnmounted(() => {
+  clearHoverTooltipTimer()
+  document.removeEventListener('click', onDocumentDismissTooltip)
+  document.removeEventListener('keydown', onDocumentDismissTooltip)
+})
 
 const emit = defineEmits<{
   select: [q: number, r: number]
@@ -156,7 +282,7 @@ const orientation = computed({
   },
 })
 
-const internalAutoFit = ref(true)
+const internalAutoFit = ref(loadStoredAutoFit())
 const autoFitOnMapChange = computed({
   get: () => props.autoFitOnMapChange ?? internalAutoFit.value,
   set: (value: boolean) => {
@@ -164,15 +290,6 @@ const autoFitOnMapChange = computed({
     storeAutoFit(value)
     emit('update:autoFitOnMapChange', value)
   },
-})
-
-onMounted(() => {
-  if (props.orientation == null) {
-    internalOrientation.value = loadStoredOrientation()
-  }
-  if (props.autoFitOnMapChange == null) {
-    internalAutoFit.value = loadStoredAutoFit()
-  }
 })
 
 function center(q: number, r: number) {
@@ -184,6 +301,12 @@ function points(q: number, r: number) {
 }
 
 const NEUTRAL_CELL_FILL = '#6a7483'
+/** Умеренная прозрачность: космос виден, клетка не «растворяется». */
+const TRANSLUCENT_CELL_FILL_OPACITY = 0.68
+
+const cellFillOpacity = computed(() =>
+  props.translucentCells ? TRANSLUCENT_CELL_FILL_OPACITY : 1,
+)
 
 const territoryOverlay = computed(() =>
   buildTerritoryOverlay(
@@ -204,6 +327,7 @@ function cellOutlineClass(cell: MapCellDefinition): Record<string, boolean> {
     'movement-source': isMovementSource(key),
     reachable: isReachable(key) && !isContested(key),
     contested: isContested(key),
+    'combat-pulse': isCombatPulse(key),
     'supply-chain': isSupplyChain(key),
     destination: isDestination(key),
     symmetric: isSymmetricMate(key),
@@ -217,20 +341,47 @@ function hasCellOutline(cell: MapCellDefinition): boolean {
     c['movement-source'] ||
     c.reachable ||
     c.contested ||
+    c['combat-pulse'] ||
     c['supply-chain'] ||
     c.destination ||
     c.symmetric
   )
 }
 
+type CellShipRender = {
+  type: ShipType
+  player: number
+  id?: string
+  preview?: boolean
+}
+
+function previewShipsOnCell(q: number, r: number): CellShipRender[] {
+  return (props.previewPlacements ?? [])
+    .filter((ship) => ship.q === q && ship.r === r)
+    .map((ship) => ({
+      type: ship.type,
+      player: ship.player,
+      preview: true,
+    }))
+}
+
+function shipsOnCell(cell: MapCellDefinition): CellShipRender[] {
+  const existing: CellShipRender[] = (cell.startingShips ?? []).map((ship) => ({
+    type: ship.type,
+    player: ship.player,
+    id: boardShipId(ship),
+  }))
+  return [...existing, ...previewShipsOnCell(cell.q, cell.r)]
+}
+
 function shipPositions(cell: MapCellDefinition): { x: number; y: number }[] {
   const c = center(cell.q, cell.r)
-  const offsets = layoutShipPositions(cell.startingShips ?? [])
+  const offsets = layoutShipPositions(shipsOnCell(cell))
   return offsets.map((o) => ({ x: c.x + o.x, y: c.y + o.y }))
 }
 
 function cellShipScale(cell: MapCellDefinition): number {
-  return effectiveGlyphScale(shipBoardScale(cell.startingShips ?? []), zoom.value, props.mode)
+  return effectiveGlyphScale(shipBoardScale(shipsOnCell(cell)), zoom.value, props.mode)
 }
 
 const overlayScale = computed(() => overlayContentScale(zoom.value))
@@ -282,6 +433,10 @@ function isContested(key: string): boolean {
   return props.contestedKeys.includes(key)
 }
 
+function isCombatPulse(key: string): boolean {
+  return props.combatPulseKeys.includes(key)
+}
+
 function isSupplyChain(key: string): boolean {
   return props.supplyChainKeys.includes(key)
 }
@@ -292,18 +447,64 @@ function isMovementSource(key: string): boolean {
 
 function shipAnchorAt(q: number, r: number, shipId?: string): { x: number; y: number } {
   const cell = props.cells.find((c) => c.q === q && c.r === r)
-  if (!cell?.startingShips?.length) return center(q, r)
+  if (!cell) return center(q, r)
+  const ships = shipsOnCell(cell)
+  if (!ships.length) return center(q, r)
 
   const positions = shipPositions(cell)
   if (shipId) {
-    const idx = cell.startingShips.findIndex(
-      (s) => (s as { id?: string }).id === shipId,
-    )
+    const idx = ships.findIndex((s) => s.id === shipId)
     if (idx >= 0 && positions[idx]) return positions[idx]
   }
 
   return positions.length === 1 ? positions[0] : center(q, r)
 }
+
+function cellScaleAt(q: number, r: number): number {
+  const cell = props.cells.find((c) => c.q === q && c.r === r)
+  return cell ? cellShipScale(cell) : 1
+}
+
+function boardShipId(ship: object): string | undefined {
+  const id = (ship as { id?: unknown }).id
+  return typeof id === 'string' ? id : undefined
+}
+
+const { flyingShips, isFlying } = useShipMoveTweens({
+  enabled: () => props.mode === 'game',
+  cells: () => props.cells,
+  shipAnchor: (q, r, shipId) => shipAnchorAt(q, r, shipId),
+  cellScale: (q, r) => cellScaleAt(q, r),
+  layoutEpoch: () => orientation.value,
+  interruptEpoch: () => props.observationRevision,
+})
+
+const incomingShipIdSet = computed(() => new Set(props.incomingShipIds))
+const activeShipIdSet = computed(() => new Set(props.activeShipIds))
+
+const combatGhostGroups = computed(() => {
+  const groups = new Map<string, typeof props.combatGhosts>()
+  for (const ghost of props.combatGhosts) {
+    const key = hexKey(ghost.q, ghost.r)
+    const list = groups.get(key) ?? []
+    list.push(ghost)
+    groups.set(key, list)
+  }
+  return [...groups.entries()].map(([key, ghosts]) => {
+    const first = ghosts[0]!
+    const c = center(first.q, first.r)
+    const offsets = layoutShipPositions(ghosts)
+    return {
+      key,
+      items: ghosts.map((ghost, idx) => ({
+        ghost,
+        x: c.x + (offsets[idx]?.x ?? 0),
+        y: c.y + (offsets[idx]?.y ?? 0),
+        scale: shipBoardScale(ghosts),
+      })),
+    }
+  })
+})
 
 const previewArrowPaths = computed(() =>
   props.previewMoves.map((move, idx) => {
@@ -411,6 +612,8 @@ function onPointerDown(e: PointerEvent) {
   if (!props.zoomable || e.button !== 2) return
   e.preventDefault()
   dragging.value = true
+  hoveredInteractiveKey.value = null
+  hoveredGhostKey.value = null
   dragStart.value = { x: e.clientX, y: e.clientY, panX: pan.value.x, panY: pan.value.y }
   ;(e.currentTarget as Element).setPointerCapture(e.pointerId)
 }
@@ -437,7 +640,14 @@ function onPointerUp(e: PointerEvent) {
 </script>
 
 <template>
-  <div class="hex-board-wrap" :class="{ 'fill-viewport': fillViewport, overlay: toolbarPlacement === 'overlay' }">
+  <div
+    class="hex-board-wrap"
+    :class="{
+      'fill-viewport': fillViewport,
+      overlay: toolbarPlacement === 'overlay',
+      'hex-board-wrap--translucent': translucentCells,
+    }"
+  >
     <div
       v-if="zoomable"
       class="zoom-bar"
@@ -468,10 +678,11 @@ function onPointerUp(e: PointerEvent) {
           type="button"
           class="tool-label autofit-btn"
           :class="{ active: autoFitOnMapChange }"
-          title="Авто-обзор при изменении карты"
+          :aria-pressed="autoFitOnMapChange"
+          title="Подгонять масштаб под всю карту при правке. Выключите, чтобы зум и сдвиг оставались как вы их поставили."
           @click="autoFitOnMapChange = !autoFitOnMapChange"
         >
-          Авто
+          Подгонять
         </button>
       </div>
     </div>
@@ -484,6 +695,7 @@ function onPointerUp(e: PointerEvent) {
         panning: dragging,
         'hex-board--fill': fillViewport,
         'hex-board--zoomed-out': isZoomedOut,
+        'hex-board--translucent': translucentCells,
       }"
       xmlns="http://www.w3.org/2000/svg"
       @wheel="onWheel"
@@ -491,7 +703,7 @@ function onPointerUp(e: PointerEvent) {
       @pointermove="onPointerMove"
       @pointerup="onPointerUp"
       @pointercancel="onPointerUp"
-      @contextmenu.prevent
+      @contextmenu="onSvgContextMenu"
     >
       <defs>
         <marker
@@ -544,7 +756,7 @@ function onPointerUp(e: PointerEvent) {
         </linearGradient>
       </defs>
 
-      <!-- SVG paint order (bottom → top): fills → territory → content → outlines -->
+      <!-- SVG paint order (bottom → top): fills → territory → content → outlines → hover -->
       <PlayerTerritoryLabels
         :cells="cells"
         :players="territoryLabelPlayers"
@@ -553,19 +765,32 @@ function onPointerUp(e: PointerEvent) {
       />
 
       <g v-for="g in ghosts" :key="'g' + hexKey(g.q, g.r)">
-        <polygon :points="points(g.q, g.r)" class="ghost" @click="emit('addGhost', g.q, g.r)" />
+        <polygon
+          :points="points(g.q, g.r)"
+          class="ghost"
+          :class="{ 'ghost--hover': hoveredGhostKey === hexKey(g.q, g.r) && !dragging }"
+          @click="emit('addGhost', g.q, g.r)"
+          @mouseenter="onGhostMouseEnter(g.q, g.r)"
+          @mouseleave="onGhostMouseLeave"
+        />
         <text :x="center(g.q, g.r).x" :y="center(g.q, g.r).y" class="ghost-label">+</text>
       </g>
 
       <g v-for="cell in cells" :key="hexKey(cell.q, cell.r)">
         <polygon
           :points="points(cell.q, cell.r)"
-          :class="{ hex: true, owned: cell.startPlayer != null }"
+          :class="{
+            hex: true,
+            owned: cell.startPlayer != null,
+            interactive: isInteractiveTarget(hexKey(cell.q, cell.r)),
+          }"
           :fill="NEUTRAL_CELL_FILL"
+          :fill-opacity="cellFillOpacity"
           @click="emit('select', cell.q, cell.r)"
           @mouseenter="onCellMouseEnter(cell, $event)"
           @mouseleave="onCellMouseLeave"
           @mousemove="onCellMouseMove(cell, $event)"
+          @contextmenu="onCellContextMenu(cell, $event)"
         />
         <polygon
           v-if="isReachable(hexKey(cell.q, cell.r))"
@@ -577,6 +802,12 @@ function onPointerUp(e: PointerEvent) {
           v-if="isContested(hexKey(cell.q, cell.r))"
           :points="points(cell.q, cell.r)"
           class="hex-overlay hex-overlay--contested"
+          pointer-events="none"
+        />
+        <polygon
+          v-if="isCombatPulse(hexKey(cell.q, cell.r))"
+          :points="points(cell.q, cell.r)"
+          class="hex-overlay hex-overlay--combat-pulse"
           pointer-events="none"
         />
         <polygon
@@ -655,18 +886,64 @@ function onPointerUp(e: PointerEvent) {
 
       <g class="hex-ships-layer" aria-hidden="true">
         <g v-for="cell in cells" :key="'ships-' + hexKey(cell.q, cell.r)">
-          <g v-if="cell.startingShips?.length">
+          <g v-if="shipsOnCell(cell).length">
             <g
-              v-for="(ship, idx) in cell.startingShips"
-              :key="idx"
+              v-for="(ship, idx) in shipsOnCell(cell)"
+              v-show="!isFlying(ship.id)"
+              :key="ship.id ?? `preview-${hexKey(cell.q, cell.r)}-${idx}`"
               :transform="`translate(${shipPositions(cell)[idx].x}, ${shipPositions(cell)[idx].y})`"
             >
-              <ShipGlyph
-                :type="ship.type"
-                :player-color="PLAYER_COLORS[ship.player] ?? '#888'"
-                :scale="cellShipScale(cell)"
-              />
+              <g
+                :class="{
+                  'ship-preview-glyph': ship.preview,
+                  'ship-preview-glyph--pulse': ship.preview && previewPlacementsPulse,
+                  'ship-incoming-glyph': !!ship.id && incomingShipIdSet.has(ship.id),
+                  'ship-active-move-glyph': !!ship.id && activeShipIdSet.has(ship.id),
+                }"
+              >
+                <ShipGlyph
+                  :type="ship.type"
+                  :player-color="PLAYER_COLORS[ship.player] ?? '#888'"
+                  :scale="cellShipScale(cell)"
+                />
+              </g>
             </g>
+          </g>
+        </g>
+      </g>
+
+      <g class="hex-ships-fly-layer" aria-hidden="true" pointer-events="none">
+        <g
+          v-for="fly in flyingShips"
+          :key="'fly-' + fly.id"
+          :transform="`translate(${fly.x}, ${fly.y})`"
+        >
+          <ShipGlyph
+            :type="fly.type"
+            :player-color="PLAYER_COLORS[fly.player] ?? '#888'"
+            :scale="fly.scale"
+          />
+        </g>
+      </g>
+
+      <g class="hex-ships-ghost-layer" aria-hidden="true" pointer-events="none">
+        <g v-for="group in combatGhostGroups" :key="'ghosts-' + group.key">
+          <g
+            v-for="item in group.items"
+            :key="'ghost-' + item.ghost.id"
+            class="ship-death-glyph"
+            :transform="`translate(${item.x}, ${item.y})`"
+          >
+            <ShipGlyph
+              :type="item.ghost.type"
+              :player-color="PLAYER_COLORS[item.ghost.player] ?? '#888'"
+              :scale="item.scale"
+            />
+            <path
+              class="ship-death-crack"
+              d="M-7,-7 L7,7 M7,-7 L-7,7"
+              fill="none"
+            />
           </g>
         </g>
       </g>
@@ -691,12 +968,24 @@ function onPointerUp(e: PointerEvent) {
           />
         </template>
       </g>
+
+      <!-- Hover поверх границ регионов, маркеров и прочих обводок -->
+      <g class="hex-hover-layer" pointer-events="none" aria-hidden="true">
+        <template v-for="cell in cells" :key="'hover-' + hexKey(cell.q, cell.r)">
+          <polygon
+            v-if="isHoveredInteractive(hexKey(cell.q, cell.r))"
+            :points="points(cell.q, cell.r)"
+            class="hex-overlay hex-overlay--interactive-hover"
+          />
+        </template>
+      </g>
     </svg>
 
     <Teleport to="body">
-      <HexCellTooltip
+      <RegionCellTooltip
         v-if="showCellHoverTooltip && hoverTooltipVisible && hoverTooltipCell"
         :cell="hoverTooltipCell"
+        :region-info="hoverTooltipRegionInfo"
         :players="players"
         :x="hoverTooltipPos.x"
         :y="hoverTooltipPos.y"
@@ -799,6 +1088,9 @@ function onPointerUp(e: PointerEvent) {
   user-select: none;
   display: block;
 }
+.hex-board--translucent {
+  background: transparent;
+}
 .hex-board--fill {
   height: 100%;
   min-height: 0;
@@ -813,8 +1105,16 @@ function onPointerUp(e: PointerEvent) {
 .hex {
   stroke: #334155;
   stroke-width: 1.4;
-  cursor: pointer;
+  cursor: default;
   opacity: 0.95;
+  transition: stroke 0.12s ease, stroke-width 0.12s ease;
+}
+.hex.interactive {
+  cursor: pointer;
+}
+.hex-board-wrap--translucent .hex {
+  opacity: 1;
+  stroke: rgba(148, 163, 184, 0.55);
 }
 .hex.owned {
   stroke: rgba(15, 23, 42, 0.4);
@@ -842,8 +1142,10 @@ function onPointerUp(e: PointerEvent) {
   filter: drop-shadow(0 0 4px rgba(250, 204, 21, 0.55));
 }
 .hex-overlay {
-  stroke: none;
   pointer-events: none;
+}
+.hex-overlay:not(.hex-overlay--interactive-hover) {
+  stroke: none;
 }
 .hex-overlay--reachable {
   fill: rgba(74, 222, 128, 0.22);
@@ -854,6 +1156,20 @@ function onPointerUp(e: PointerEvent) {
 .hex-overlay--contested {
   fill: rgba(248, 113, 113, 0.32);
 }
+.hex-overlay--combat-pulse {
+  fill: rgba(248, 113, 113, 0.22);
+  animation: combat-hex-pulse 1.15s ease-in-out infinite;
+}
+.hex-overlay--interactive-hover {
+  fill: rgba(255, 255, 255, 0.18);
+  stroke: rgba(248, 250, 252, 0.98);
+  stroke-width: 2.8;
+  filter: drop-shadow(0 0 6px rgba(226, 232, 240, 0.65));
+  transition: fill 0.12s ease, stroke 0.12s ease;
+}
+.hex-hover-layer {
+  pointer-events: none;
+}
 .hex.reachable {
   stroke: rgba(74, 222, 128, 0.85);
   stroke-width: 2;
@@ -861,6 +1177,11 @@ function onPointerUp(e: PointerEvent) {
 .hex.contested {
   stroke: rgba(248, 113, 113, 0.95);
   stroke-width: 2.5;
+}
+.hex.combat-pulse {
+  stroke: rgba(248, 113, 113, 1);
+  stroke-width: 3.1;
+  filter: drop-shadow(0 0 6px rgba(248, 113, 113, 0.7));
 }
 .hex.supply-chain {
   stroke: rgba(52, 211, 153, 0.75);
@@ -935,6 +1256,12 @@ function onPointerUp(e: PointerEvent) {
   stroke: #475569;
   stroke-dasharray: 4 2;
   cursor: pointer;
+  transition: fill 0.12s ease, stroke 0.12s ease;
+}
+.ghost--hover {
+  fill: rgba(56, 189, 248, 0.2);
+  stroke: #7dd3fc;
+  filter: drop-shadow(0 0 5px rgba(125, 211, 252, 0.5));
 }
 .ghost-label {
   fill: #94a3b8;
@@ -943,7 +1270,121 @@ function onPointerUp(e: PointerEvent) {
   dominant-baseline: middle;
   pointer-events: none;
 }
-.hex-ships-layer {
+.hex-ships-layer,
+.hex-ships-fly-layer,
+.hex-ships-ghost-layer {
   pointer-events: none;
+}
+.ship-incoming-glyph {
+  animation: ship-incoming-pulse 1.1s ease-in-out infinite;
+  filter: drop-shadow(0 0 5px rgba(248, 113, 113, 0.9));
+}
+.ship-death-glyph {
+  animation: ship-death 1.05s ease-out forwards;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+.ship-death-crack {
+  stroke: #fecaca;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  opacity: 0.9;
+}
+@keyframes combat-hex-pulse {
+  0%,
+  100% {
+    fill-opacity: 0.35;
+  }
+  50% {
+    fill-opacity: 0.85;
+  }
+}
+@keyframes ship-incoming-pulse {
+  0%,
+  100% {
+    opacity: 0.85;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+@keyframes ship-death {
+  0% {
+    opacity: 1;
+    filter: none;
+    transform: scale(1);
+  }
+  40% {
+    opacity: 1;
+    filter: grayscale(0.25) brightness(1.15);
+    transform: scale(1.18) rotate(-8deg);
+  }
+  100% {
+    opacity: 0.42;
+    filter: grayscale(0.85) brightness(1.2);
+    transform: scale(0.82) rotate(8deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .hex-overlay--combat-pulse,
+  .ship-incoming-glyph,
+  .ship-active-move-glyph,
+  .ship-death-glyph {
+    animation: none;
+  }
+  .ship-death-glyph {
+    opacity: 0.45;
+    filter: grayscale(0.6);
+  }
+  .ship-active-move-glyph {
+    filter: drop-shadow(0 0 4px rgba(249, 168, 212, 0.85));
+    opacity: 1;
+  }
+}
+.ship-preview-glyph {
+  opacity: 0.9;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+.ship-preview-glyph--pulse {
+  opacity: 1;
+  animation: production-ship-grow-shrink 0.7s ease-in-out 2;
+}
+/** Активный корабль при выборе назначения — как неразмещённый в полоске производства. */
+.ship-active-move-glyph {
+  opacity: 0.9;
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: ship-place-wait-pulse 1.05s ease-in-out infinite;
+}
+@keyframes production-ship-grow-shrink {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  40% {
+    transform: scale(1.35);
+  }
+  70% {
+    transform: scale(0.9);
+  }
+}
+@keyframes ship-place-wait-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+    filter: none;
+  }
+  50% {
+    transform: scale(1.16);
+    filter: drop-shadow(0 0 4px rgba(249, 168, 212, 0.85));
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ship-active-move-glyph {
+    animation: none;
+    filter: drop-shadow(0 0 4px rgba(249, 168, 212, 0.85));
+    opacity: 1;
+  }
 }
 </style>

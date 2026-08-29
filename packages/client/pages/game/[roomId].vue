@@ -17,6 +17,7 @@ import {
   parseGalaxySave,
   phaseAdvanceActionLabelForSnapshot,
   serializeGalaxySave,
+  galaxySaveDownloadFileName,
   toggleMarkerAtCell,
   advanceGameSnapshot,
   canExecuteActionMarkerThisTurn,
@@ -36,18 +37,25 @@ import {
   canExecuteProductionMarkerThisTurn,
   canRemoveProductionMarkerThisTurn,
   hasResolvedProductionMarkerThisTurn,
+  hasBoughtProductionMarkerThisTurn,
   mustResolveProductionMarkerBeforeAdvance,
   PRODUCTION_MARKER_ALREADY_RESOLVED_MSG,
   PRODUCTION_MARKER_MUST_RESOLVE_BEFORE_ADVANCE_MSG,
   PRODUCTION_MARKER_REMOVE_BLOCKED_MSG,
+  PRODUCTION_MARKER_REGION_TAKEN_MSG,
   productionMarkerAdvanceBlockMessage,
+  isOneProductionMarkerPerRegionActive,
   removeProductionMarker,
   syncParticipatingPlayerIds,
   ensureActivePlayerParticipating,
   shouldConfirmPlanningPhaseAdvance,
   hasUnplacedActionMarkerCapacity,
   MAX_LOBBY_PLAYERS,
-  MAX_ACTION_MARKERS_PER_PLAYER,
+  actionMarkerLimitForPlayer,
+  executeBuyProductionMarker,
+  isExtraMarkerBuyBlocked,
+  nextProductionMarkerExpandCost,
+  productionMarkerLimitForPlayer,
   buildCombatPreviewFromPending,
   combatPrepOf,
   combatRoundStateOf,
@@ -67,10 +75,28 @@ import {
   type CombatUiExpectation,
   type CombatUiPresentation,
 } from '~/composables/useCombatUiConsistency'
+import {
+  combatContinueDecisionRole,
+  combatContinueUiExpectation,
+  combatResultRollsKey,
+  isCombatDefender,
+  shouldKeepCombatResultDismiss,
+  shouldShowCombatContinueBanner,
+  shouldShowForeignCombatBanner,
+} from '~/utils/combat-continue-ui'
 import type { LobbyPlayerSlot } from '~/components/LobbyPlayerList.vue'
 import { useMarkerMapPick, type MarkerOrderConfirmResult } from '~/composables/useMarkerMapPick'
 import { useProductionShipPick } from '~/composables/useProductionShipPick'
+import { useProductionMarkerBuyPick } from '~/composables/useProductionMarkerBuyPick'
+import { placementsToPreviewShips } from '~/utils/production-order-slots'
 import { snapshotToBoardCells } from '~/utils/board-adapter'
+import {
+  combatDestroyedGhosts,
+  combatIncomingApproachMoves,
+  combatIncomingShipIds,
+  combatPulseHexKey,
+} from '~/utils/combat-map-fx'
+import { useCombatDeathGhosts } from '~/composables/useCombatDeathGhosts'
 import {
   gameHelpForPhase,
   legalActionChipIcon,
@@ -247,9 +273,12 @@ const pendingOrderAfterBattle = ref<MarkerOrderConfirmResult | null>(null)
 const battleResolution = ref<CombatResolutionResult | null>(null)
 /** Fingerprint итога, который игрок уже закрыл — чтобы poll не открывал модалку снова */
 const dismissedCombatResultKey = ref<string | null>(null)
+/** Броски закрытого итога: после уничтожения fingerprint меняется, броски те же — модалку не открываем */
+const dismissedCombatRollsKey = ref<string | null>(null)
 /** После первого снимка комнаты не всплывает чужой/старый lastCombatResult */
 const combatResultsHydrated = ref(false)
 const battleResolving = ref(false)
+const appliedObservationRevision = ref(0)
 const productionModalOpen = ref(false)
 const productionMarkerSource = ref<HexCoord | null>(null)
 const productionMarkerId = ref<string | null>(null)
@@ -275,8 +304,25 @@ watch(
 
 const markerMapPick = useMarkerMapPick(snapshot, mapDefinition, playerId)
 const productionShipPick = useProductionShipPick(snapshot, mapDefinition, playerId)
+const productionMarkerBuyPick = useProductionMarkerBuyPick(snapshot, playerId)
 const markerMapPickActive = markerMapPick.active
 const markerMapPickBannerText = markerMapPick.bannerText
+const markerMapPickBannerShipName = markerMapPick.bannerShipName
+const markerMapPickBannerShipType = markerMapPick.bannerShipType
+const markerMapPickBannerDestinationMeta = markerMapPick.bannerDestinationMeta
+const markerMapPickBannerSlots = computed(() => {
+  const type = markerMapPickBannerShipType.value
+  if (!type) return []
+  return [
+    {
+      index: 0,
+      type,
+      placed: false,
+      active: true,
+      coord: null,
+    },
+  ]
+})
 const markerMapPickError = markerMapPick.error
 const markerMapPickPendingControl = markerMapPick.pendingControlChoice
 const markerMapPickCombatPreview = markerMapPick.combatPreview
@@ -286,8 +332,15 @@ const markerMapPickHasPendingCombat = markerMapPick.hasPendingCombat
 const markerMapPickConfirmLabel = markerMapPick.confirmButtonLabel
 const markerMapPickPreviewMoves = markerMapPick.previewMoves
 const productionShipPickActive = productionShipPick.active
+const productionShipPickConfirming = productionShipPick.confirming
 const productionShipPickBannerText = productionShipPick.bannerText
 const productionShipPickError = productionShipPick.error
+const productionShipPickOrderSlots = productionShipPick.orderSlots
+const productionShipPickAllPlaced = productionShipPick.allPlaced
+const productionMarkerBuyPickActive = productionMarkerBuyPick.active
+const productionMarkerBuyPickBannerText = productionMarkerBuyPick.bannerText
+const productionMarkerBuyPickError = productionMarkerBuyPick.error
+const productionMarkerBuyPickCanConfirm = productionMarkerBuyPick.canConfirm
 const boardCells = computed(() =>
   snapshot.value ? snapshotToBoardCells(snapshot.value) : [],
 )
@@ -376,6 +429,18 @@ const myPlayer = computed(() =>
 
 const myPlayerColor = computed(() => myPlayer.value?.color ?? '#3B82F6')
 
+const myPlayerSlot = computed(() => {
+  const players = snapshot.value?.players ?? []
+  const idx = players.findIndex((p) => p.id === playerId.value)
+  return idx >= 0 ? idx + 1 : 1
+})
+
+const productionPreviewShips = computed(() =>
+  productionShipPickActive.value
+    ? placementsToPreviewShips(productionShipPick.placements.value, myPlayerSlot.value)
+    : [],
+)
+
 const territoryLabelPlayers = computed(() =>
   (snapshot.value?.players ?? []).map((player, index) => ({
     slot: index + 1,
@@ -407,7 +472,6 @@ const gameOverWinnerName = computed(() => {
 })
 
 const GAME_OVER_REASON_LABELS: Record<string, string> = {
-  four_regions: 'Контроль 4 регионов от 7 клеток',
   power_centers: 'Большинство центров власти',
   last_standing: 'Последний игрок на карте',
 }
@@ -446,8 +510,7 @@ const combatParticipantRole = computed<'attacker' | 'defender' | 'supporter' | n
   const pending = pendingCombatState.value
   if (!pending) return null
   if (pending.attackerId === playerId.value) return 'attacker'
-  if (pending.defenderIds.includes(playerId.value)) return 'defender'
-  if (combatPrepState.value?.defenderId === playerId.value) return 'defender'
+  if (isCombatDefender(pending, playerId.value)) return 'defender'
   if (combatSupportCandidate.value) return 'supporter'
   return null
 })
@@ -488,17 +551,11 @@ const combatPrepDefenderReady = computed(() => {
   return prep.readyBy[prep.defenderId] === true
 })
 
-const combatDecisionRole = computed<'attacker' | 'defender' | null>(() => {
-  const pending = pendingCombatState.value
-  if (pending?.phase !== 'awaiting-continue') return null
-  if (pending.attackerId === playerId.value && pending.continueDecisions?.attacker == null) return 'attacker'
-  if (
-    pending.defenderIds.includes(playerId.value)
-    && pending.continueDecisions?.attacker === true
-    && pending.continueDecisions?.defender == null
-  ) return 'defender'
-  return null
-})
+const combatDecisionRole = computed(() =>
+  combatContinueDecisionRole(pendingCombatState.value, playerId.value),
+)
+
+const currentCombatRollsKey = computed(() => combatResultRollsKey(battleResolution.value))
 
 const battleResolutionKey = computed(() =>
   combatResolutionFingerprint(battleResolution.value),
@@ -507,7 +564,16 @@ const battleResolutionKey = computed(() =>
 const roundResultsPendingView = computed(() => {
   if (!combatResultsHydrated.value) return false
   const key = battleResolutionKey.value
-  return key != null && key !== dismissedCombatResultKey.value
+  if (key == null || key === dismissedCombatResultKey.value) return false
+  // Тот же раунд уже закрыт (отпечаток меняется после уничтожения — не считаем «не просмотренным»).
+  if (
+    dismissedCombatRollsKey.value
+    && currentCombatRollsKey.value
+    && dismissedCombatRollsKey.value === currentCombatRollsKey.value
+  ) {
+    return false
+  }
+  return true
 })
 
 /**
@@ -532,23 +598,25 @@ const needsBattleModal = computed(() => {
  * Сейчас ваш ход решить: продолжить бой или отступить (после просмотра итогов).
  * Не завязано на battleModalOpen: иначе гонка reopen модалки прячет баннер (soft-lock).
  */
-const showCombatContinueDecision = computed(
-  () =>
-    combatPhase.value === 'awaiting-continue'
-    && combatDecisionRole.value != null
-    && !roundResultsPendingView.value,
+const showCombatContinueDecision = computed(() =>
+  shouldShowCombatContinueBanner({
+    decisionRole: combatDecisionRole.value,
+    battleModalOpen: battleModalOpen.value,
+  }),
 )
 
 /** Что сервер ожидает от этого игрока в UI боя */
 const combatUiExpectation = computed((): CombatUiExpectation => {
   if (serverStatus.value !== 'online' || roomId.value.startsWith('local-')) return null
-  if (!hasActivePendingCombat.value) return null
-  // Пока игрок смотрит итог, не требовать баннер continue — иначе recovery закроет модалку.
-  if (roundResultsPendingView.value) return null
-  if (combatDecisionRole.value != null) return 'continue-decision'
-  if (isCombatDestructionChooser.value) return 'destruction'
-  if (combatPhase.value === 'prep' && combatParticipantRole.value != null) return 'prep'
-  return null
+  return combatContinueUiExpectation({
+    hasPendingCombat: hasActivePendingCombat.value,
+    decisionRole: combatDecisionRole.value,
+    isDestructionChooser: isCombatDestructionChooser.value,
+    phase: combatPhase.value,
+    isParticipant: combatParticipantRole.value != null,
+    battleModalOpen: battleModalOpen.value,
+    viewingResults: roundResultsPendingView.value,
+  })
 })
 
 /** Что реально показано игроку */
@@ -573,11 +641,12 @@ const canReopenBattleResults = computed(
 )
 
 /** Идёт бой, в котором вы сейчас ничего не решаете */
-const showForeignCombatBanner = computed(
-  () =>
-    hasActivePendingCombat.value
-    && !needsBattleModal.value
-    && !showCombatContinueDecision.value,
+const showForeignCombatBanner = computed(() =>
+  shouldShowForeignCombatBanner({
+    hasPendingCombat: hasActivePendingCombat.value,
+    battleModalOpen: battleModalOpen.value,
+    showContinueBanner: showCombatContinueDecision.value,
+  }),
 )
 
 const foreignCombatBannerText = computed(() => {
@@ -653,7 +722,20 @@ watch(
     if (!key || key === prev) return
     // Уже закрывали именно этот итог — не сбрасываем (poll/null→key мерцание).
     if (dismissedCombatResultKey.value === key) return
+    // Тот же раунд awaiting-continue: fingerprint меняется после уничтожения — не открывать итог снова.
+    if (
+      shouldKeepCombatResultDismiss({
+        previousFingerprint: prev,
+        nextFingerprint: key,
+        dismissedRollsKey: dismissedCombatRollsKey.value,
+        currentRollsKey: currentCombatRollsKey.value,
+      })
+    ) {
+      dismissedCombatResultKey.value = key
+      return
+    }
     dismissedCombatResultKey.value = null
+    dismissedCombatRollsKey.value = null
   },
 )
 
@@ -662,15 +744,18 @@ function markCombatResultsHydrated() {
   combatResultsHydrated.value = true
   const key = combatResolutionFingerprint(battleResolution.value)
   if (key) dismissedCombatResultKey.value = key
+  if (currentCombatRollsKey.value) dismissedCombatRollsKey.value = currentCombatRollsKey.value
 }
 
 function openBattleModalFromPending() {
   if (!needsBattleModal.value || !snapshot.value) return
-  // Жёсткий инвариант: после dismiss этого итога в awaiting-continue модалку не открываем.
+  // Жёсткий инвариант: после dismiss этого итога / раунда в awaiting-continue модалку не открываем.
   if (
     combatPhase.value === 'awaiting-continue'
-    && battleResolutionKey.value != null
-    && dismissedCombatResultKey.value === battleResolutionKey.value
+    && (
+      (battleResolutionKey.value != null && dismissedCombatResultKey.value === battleResolutionKey.value)
+      || (currentCombatRollsKey.value != null && dismissedCombatRollsKey.value === currentCombatRollsKey.value)
+    )
   ) {
     return
   }
@@ -679,6 +764,7 @@ function openBattleModalFromPending() {
     // Нельзя показать итоги — не блокируем баннер continue/retreat.
     if (combatPhase.value === 'awaiting-continue' && battleResolutionKey.value) {
       dismissedCombatResultKey.value = battleResolutionKey.value
+      if (currentCombatRollsKey.value) dismissedCombatRollsKey.value = currentCombatRollsKey.value
     }
     return
   }
@@ -689,6 +775,7 @@ function openBattleModalFromPending() {
 function reopenBattleResults() {
   if (!battleResolution.value || !snapshot.value) return
   dismissedCombatResultKey.value = null
+  dismissedCombatRollsKey.value = null
   const preview = buildCombatPreviewFromPending(snapshot.value) ?? battlePreviewSnapshot.value
   if (!preview) return
   battlePreviewSnapshot.value = preview
@@ -699,6 +786,9 @@ function recoverCombatUiForExpectation(expectation: CombatUiExpectation) {
   if (expectation === 'continue-decision') {
     if (battleResolutionKey.value) {
       dismissedCombatResultKey.value = battleResolutionKey.value
+    }
+    if (currentCombatRollsKey.value) {
+      dismissedCombatRollsKey.value = currentCombatRollsKey.value
     }
     battleModalOpen.value = false
     return
@@ -821,6 +911,7 @@ watch(
     if (prev === 'countdown' && phase === 'prep') {
       battleResolution.value = null
       dismissedCombatResultKey.value = null
+      dismissedCombatRollsKey.value = null
     }
   },
 )
@@ -974,8 +1065,14 @@ function helpStepSymbol(icon: HelpStepIcon): string {
 
 const currentPhase = computed(() => snapshot.value?.phase)
 
+const myActionMarkerLimit = computed(() =>
+  saveFile.value?.game
+    ? actionMarkerLimitForPlayer(saveFile.value.game, playerId.value)
+    : 3,
+)
+
 const sidePanelActionRemaining = computed(() =>
-  Math.max(0, MAX_ACTION_MARKERS_PER_PLAYER - myActionMarkerCount.value),
+  Math.max(0, myActionMarkerLimit.value - myActionMarkerCount.value),
 )
 
 const sidePanelProdRemaining = computed(() =>
@@ -1003,6 +1100,7 @@ function applyObservation(
   const mechExtra = obs.mechanics as Record<string, unknown>
   const revision = mechExtra.observationRevision as number | undefined
   if (!observationSync.observe(revision, source)) return false
+  if (revision != null) appliedObservationRevision.value = revision
 
   legalActions.value = obs.legalActions ?? []
   if (mechExtra.roomStatus === 'lobby' || mechExtra.roomStatus === 'playing') {
@@ -1104,9 +1202,8 @@ const myProductionMarkerCount = computed(
 )
 
 const maxProductionRegions = computed(() => {
-  if (!saveFile.value?.game || !saveFile.value?.map) return 0
-  const state = gameStateFromSnapshot(saveFile.value.game, saveFile.value.map.id)
-  return maxProductionMarkersForPlayer(state, playerId.value)
+  if (!saveFile.value?.game) return 0
+  return maxProductionMarkersForPlayer(saveFile.value.game, playerId.value)
 })
 
 const activeEvent = computed((): import('@galaxy/rules').ActiveEventObservation | null => {
@@ -1127,17 +1224,28 @@ const showTurnEventsPanel = computed(
   () => !!activeEvent.value || turnEventHistory.value.length > 0,
 )
 
+const turnNumber = computed(() => snapshot.value?.turnNumber ?? 1)
+const {
+  visible: turnEventAnnounceVisible,
+  announced: turnEventAnnounced,
+  announcedTurn: turnEventAnnouncedTurn,
+  dismiss: dismissTurnEventAnnounce,
+} = useTurnEventAnnounce(roomId, activeEvent, turnNumber)
+
 const phaseGuidance = computed(() =>
   phaseGuidanceForTurn(snapshot.value?.phase, isMyTurn.value, {
     planningSubStep: planningSubStep.value,
     actionMarkersPlaced: myActionMarkerCount.value,
-    actionMarkersMax: MAX_ACTION_MARKERS_PER_PLAYER,
+    actionMarkersMax: myActionMarkerLimit.value,
     productionMarkersPlaced: myProductionMarkerCount.value,
     productionMarkersMax: maxProductionRegions.value,
     actionMarkerUsedThisTurn: actionMarkerUsedThisTurn.value,
     actionMarkerUnresolved: mustResolveActionMarker.value,
     productionMarkerUsedThisTurn: productionMarkerUsedThisTurn.value,
     eventResolved: activeEvent.value?.resolved ?? false,
+    oneProductionMarkerPerRegion: saveFile.value?.game
+      ? isOneProductionMarkerPerRegionActive(saveFile.value.game)
+      : false,
   }),
 )
 
@@ -1234,23 +1342,101 @@ const availableProductionMarkerKeys = computed(() => {
   return []
 })
 
+/** Клетки планирования, куда сейчас можно поставить (или снять) маркер. */
+const boardInteractiveKeys = computed(() => {
+  if (!canPlaceMarkers.value || !saveFile.value?.game || !saveFile.value.map) return [] as string[]
+  const game = saveFile.value.game
+  const kind = effectiveMarkerKind.value
+  const keys: string[] = []
+
+  if (kind === 'action') {
+    for (const cell of game.cells) {
+      const key = hexKey(cell.coord.q, cell.coord.r)
+      const hasMyShip = cell.ships.some((ship) => ship.ownerId === playerId.value)
+      const hasMyMarker =
+        !!cell.actionMarkerId &&
+        game.actionMarkers.some((m) => m.id === cell.actionMarkerId && m.ownerId === playerId.value)
+      if (hasMyShip || hasMyMarker) keys.push(key)
+    }
+    return keys
+  }
+
+  const state = gameStateFromSnapshot(game, saveFile.value.map.id)
+  for (const cell of game.cells) {
+    const key = hexKey(cell.coord.q, cell.coord.r)
+    const hasMyMarker =
+      !!cell.productionMarkerId &&
+      game.productionMarkers.some(
+        (m) => m.id === cell.productionMarkerId && m.ownerId === playerId.value,
+      )
+    if (hasMyMarker) {
+      keys.push(key)
+      continue
+    }
+    if (cell.controlOwnerId !== playerId.value) continue
+    if (!resolveRegionIdForCell(state, cell.coord, playerId.value)) continue
+    if (
+      isOneProductionMarkerPerRegionActive(game) &&
+      game.productionMarkers.some((m) => {
+        if (m.ownerId !== playerId.value) return false
+        const existing = resolveRegionIdForCell(state, m.coord, playerId.value)
+        return existing === resolveRegionIdForCell(state, cell.coord, playerId.value)
+      })
+    ) {
+      continue
+    }
+    keys.push(key)
+  }
+  return keys
+})
+
 const boardReachableKeys = computed(() => {
   if (markerMapPickActive.value) return markerMapPick.reachableKeys.value
   if (productionShipPickActive.value) return productionShipPick.reachableKeys.value
+  if (productionMarkerBuyPickActive.value) return productionMarkerBuyPick.reachableKeys.value
   if (showCombatContinueDecision.value) return retreatDestinationKeys.value
   return []
 })
 const boardContestedKeys = computed(() => {
   if (markerMapPickActive.value) return markerMapPick.contestedKeys.value
-  // Клетка боя — ориентир, куда сейчас идёт сражение.
-  if (showCombatContinueDecision.value && pendingCombatState.value?.cellKey) {
-    return [pendingCombatState.value.cellKey]
-  }
-  return []
+  const pulse = combatPulseHexKey(pendingCombatState.value)
+  return pulse ? [pulse] : []
+})
+const boardCombatPulseKeys = computed(() => {
+  const pulse = combatPulseHexKey(pendingCombatState.value)
+  return pulse ? [pulse] : []
+})
+const boardIncomingShipIds = computed(() => combatIncomingShipIds(pendingCombatState.value))
+const boardActiveShipIds = computed(() => {
+  if (!markerMapPickActive.value) return [] as string[]
+  const pending = markerMapPickPendingControl.value?.shipId
+  if (pending) return [pending]
+  const id = markerMapPick.activeShipId.value
+  return id ? [id] : []
+})
+const boardCombatGhostSource = computed(() =>
+  combatDestroyedGhosts({
+    result: battleResolution.value,
+    pending: pendingCombatState.value,
+    players: snapshot.value?.players ?? [],
+    cells: boardCells.value,
+  }),
+)
+const { visibleGhosts: boardCombatGhosts } = useCombatDeathGhosts({
+  ghosts: () => boardCombatGhostSource.value,
+  playKey: () => {
+    const rolls = currentCombatRollsKey.value
+    const ids = battleResolution.value?.destroyedShipIds.join(',') ?? ''
+    if (!rolls || !ids) return null
+    return `${rolls}:${ids}`
+  },
+  observationRevision: () => appliedObservationRevision.value,
+  combatStillPending: () => !!pendingCombatState.value,
 })
 const boardDestinationKeys = computed(() => {
   if (markerMapPickActive.value) return markerMapPick.destinationKeys.value
   if (productionShipPickActive.value) return productionShipPick.destinationKeys.value
+  if (productionMarkerBuyPickActive.value) return productionMarkerBuyPick.destinationKeys.value
   if (showCombatContinueDecision.value && retreatHoverKey.value) {
     return [retreatHoverKey.value]
   }
@@ -1265,7 +1451,10 @@ const boardPreviewMoves = computed(() => {
       combat: m.combat,
     }))
   }
-  return []
+  return combatIncomingApproachMoves({
+    pending: pendingCombatState.value,
+    cells: boardCells.value,
+  })
 })
 const boardMovementSourceKey = computed(() => {
   if (markerMapPickActive.value) return markerMapPick.sourceKey.value
@@ -1318,10 +1507,19 @@ function closeProductionModal() {
   productionMarkerId.value = null
 }
 
-function startProductionShipPick(orders: import('~/composables/useProductionShipPick').ShipBuildOrder[]) {
+function startProductionShipPick(payload: {
+  orders: import('~/composables/useProductionShipPick').ShipBuildOrder[]
+}) {
   if (!productionMarkerId.value) return
   productionModalOpen.value = false
-  productionShipPick.start(productionMarkerId.value, orders)
+  if (!payload.orders.length) {
+    void confirmProductionBatch({
+      markerId: productionMarkerId.value,
+      ships: [],
+    })
+    return
+  }
+  productionShipPick.start(productionMarkerId.value, payload.orders)
   productionHint.value = null
 }
 
@@ -1330,9 +1528,31 @@ function cancelProductionShipPick() {
   productionMarkerSource.value = null
   productionMarkerId.value = null
   productionHint.value = null
+  productionModalOpen.value = false
 }
 
-async function confirmProductionBatch(plan: { markerId: string; ships: import('@galaxy/rules').ShipPlacement[] }) {
+function backProductionShipConfirm() {
+  productionShipPick.backToPlacement()
+}
+
+function onConfirmProductionPlace() {
+  const result = productionShipPick.confirm()
+  productionModalOpen.value = false
+  if (result) void confirmProductionBatch(result)
+}
+
+watch(productionShipPickConfirming, (on) => {
+  if (on) {
+    productionModalOpen.value = true
+    return
+  }
+  if (productionShipPickActive.value) productionModalOpen.value = false
+})
+
+async function confirmProductionBatch(plan: {
+  markerId: string
+  ships: import('@galaxy/rules').ShipPlacement[]
+}) {
   if (!saveFile.value?.game || productionBusy.value) return
   productionBusy.value = true
   productionHint.value = null
@@ -1344,13 +1564,15 @@ async function confirmProductionBatch(plan: { markerId: string; ships: import('@
         roomId.value,
         playerId.value,
         'execute-production',
-        plan,
+        { ...plan },
       )
       applyObservation(obs)
       persistLocal()
       productionMarkerSource.value = null
       productionMarkerId.value = null
-      productionHint.value = `Построено кораблей: ${plan.ships.length}`
+      productionHint.value = plan.ships.length
+        ? `Построено кораблей: ${plan.ships.length}`
+        : 'Маркер производства исполнен'
       return
     }
 
@@ -1358,7 +1580,7 @@ async function confirmProductionBatch(plan: { markerId: string; ships: import('@
       saveFile.value.game,
       saveFile.value.map.id,
       playerId.value,
-      plan,
+      { ...plan },
     )
     if (errors.length) {
       productionHint.value = errors[0] ?? null
@@ -1368,7 +1590,9 @@ async function confirmProductionBatch(plan: { markerId: string; ships: import('@
     refreshLocalLegalActions()
     productionMarkerSource.value = null
     productionMarkerId.value = null
-    productionHint.value = `Построено кораблей: ${plan.ships.length}`
+    productionHint.value = plan.ships.length
+      ? `Построено кораблей: ${plan.ships.length}`
+      : 'Маркер производства исполнен'
   } catch (e) {
     productionHint.value = actionErrorMessage(e, 'Не удалось выполнить постройку')
   } finally {
@@ -1418,6 +1642,122 @@ async function confirmProductionRecharge(markerId: string) {
     productionHint.value = actionErrorMessage(e, 'Не удалось перезарядить фишки ресурсов')
   } finally {
     productionBusy.value = false
+  }
+}
+
+const canBuyProductionMarkerSlot = computed(() => {
+  if (!snapshot.value || !isMyTurn.value || snapshot.value.phase !== 'production') return false
+  if (snapshot.value.gameOver) return false
+  if (isExtraMarkerBuyBlocked(snapshot.value)) return false
+  if (hasBoughtProductionMarkerThisTurn(snapshot.value, playerId.value)) return false
+  return nextProductionMarkerExpandCost(productionMarkerLimitForPlayer(snapshot.value, playerId.value)) != null
+})
+
+const showBuyProductionMarkerSlot = computed(() => {
+  if (!snapshot.value || !isMyTurn.value || snapshot.value.phase !== 'production') return false
+  if (snapshot.value.gameOver) return false
+  const next = nextProductionMarkerExpandCost(
+    productionMarkerLimitForPlayer(snapshot.value, playerId.value),
+  )
+  return next != null || hasBoughtProductionMarkerThisTurn(snapshot.value, playerId.value)
+})
+
+const productionMarkerBuyHudTitle = computed(() => {
+  if (!snapshot.value) return undefined
+  if (hasBoughtProductionMarkerThisTurn(snapshot.value, playerId.value)) {
+    return 'За этот ход уже куплен один маркер производства'
+  }
+  if (isExtraMarkerBuyBlocked(snapshot.value)) return 'Событие запрещает покупку'
+  return 'Купить дополнительный маркер производства'
+})
+
+const canSurrender = computed(() => {
+  if (!snapshot.value || snapshot.value.gameOver) return false
+  if (roomMatchStatus.value === 'lobby') return false
+  const me = snapshot.value.players.find((p) => p.id === playerId.value)
+  return !!me && !me.eliminated
+})
+
+function startProductionMarkerBuyPick() {
+  if (!canBuyProductionMarkerSlot.value) return
+  productionModalOpen.value = false
+  productionMarkerBuyPick.start()
+  productionHint.value = null
+}
+
+function cancelProductionMarkerBuyPick() {
+  productionMarkerBuyPick.cancel()
+}
+
+async function onConfirmProductionMarkerBuy() {
+  const tokens = productionMarkerBuyPick.tryConfirm()
+  if (tokens) await confirmProductionMarkerBuy(tokens)
+}
+
+async function confirmProductionMarkerBuy(spentTokens: import('@galaxy/rules').TokenSpendRef[]) {
+  if (!saveFile.value?.game || productionBusy.value) return
+  productionBusy.value = true
+  productionHint.value = null
+  try {
+    if (serverStatus.value === 'online' && !roomId.value.startsWith('local-')) {
+      bumpObservationEpoch()
+      const obs = await submitGameAction(
+        roomId.value,
+        playerId.value,
+        'execute-buy-production-marker',
+        { spentTokens },
+      )
+      applyObservation(obs)
+      persistLocal()
+      productionHint.value = 'Куплен дополнительный маркер производства'
+      if (productionMarkerId.value && productionMarkerSource.value) {
+        productionModalOpen.value = true
+      }
+      return
+    }
+    const errors = executeBuyProductionMarker(
+      saveFile.value.game,
+      saveFile.value.map.id,
+      playerId.value,
+      spentTokens,
+    )
+    if (errors.length) {
+      productionHint.value = errors[0] ?? null
+      return
+    }
+    persistLocal()
+    refreshLocalLegalActions()
+    productionHint.value = 'Куплен дополнительный маркер производства'
+    if (productionMarkerId.value && productionMarkerSource.value) {
+      productionModalOpen.value = true
+    }
+  } catch (e) {
+    productionHint.value = actionErrorMessage(e, 'Не удалось купить маркер производства')
+  } finally {
+    productionBusy.value = false
+  }
+}
+
+async function surrenderMatch() {
+  if (!saveFile.value?.game || !canSurrender.value) return
+  if (!window.confirm('Сдаться? Контроль и маркеры снимутся, корабли останутся на карте.')) return
+  try {
+    if (serverStatus.value === 'online' && !roomId.value.startsWith('local-')) {
+      bumpObservationEpoch()
+      const obs = await submitGameAction(roomId.value, playerId.value, 'surrender')
+      applyObservation(obs)
+      persistLocal()
+      return
+    }
+    const errors = applyGameActionOnSnapshot(saveFile.value.game, saveFile.value.map, playerId.value, 'surrender')
+    if (errors.errors.length) {
+      phaseHint.value = errors.errors[0] ?? null
+      return
+    }
+    persistLocal()
+    refreshLocalLegalActions()
+  } catch (e) {
+    phaseHint.value = actionErrorMessage(e, 'Не удалось сдаться')
   }
 }
 
@@ -1507,6 +1847,9 @@ function closeBattleModal() {
   const resultKey = battleResolutionKey.value
   if (resultKey) {
     dismissedCombatResultKey.value = resultKey
+  }
+  if (currentCombatRollsKey.value) {
+    dismissedCombatRollsKey.value = currentCombatRollsKey.value
   }
 
   battleModalOpen.value = false
@@ -1681,6 +2024,9 @@ async function confirmBattleDestruction(destructionSelection: string[]) {
       if (battleResolutionKey.value) {
         dismissedCombatResultKey.value = battleResolutionKey.value
       }
+      if (currentCombatRollsKey.value) {
+        dismissedCombatRollsKey.value = currentCombatRollsKey.value
+      }
       markerActionHint.value = 'Уничтожение применено'
     } else {
       markerActionHint.value = 'Уничтожение применено'
@@ -1712,6 +2058,7 @@ async function continuePendingCombatAction() {
       // после «продолжить» атакующего — иначе модалка снова перекроет баннер защитника.
       if (nextKey && nextKey !== prevResultKey) {
         dismissedCombatResultKey.value = null
+        dismissedCombatRollsKey.value = null
       }
     }
     markerActionHint.value = role === 'attacker'
@@ -1878,7 +2225,16 @@ function onMapPickKeydown(e: KeyboardEvent) {
   }
   if (productionShipPickActive.value) {
     e.preventDefault()
+    if (productionShipPickConfirming.value) {
+      backProductionShipConfirm()
+      return
+    }
     cancelProductionShipPick()
+    return
+  }
+  if (productionMarkerBuyPickActive.value) {
+    e.preventDefault()
+    cancelProductionMarkerBuyPick()
   }
 }
 
@@ -2259,6 +2615,11 @@ async function selectCell(q: number, r: number) {
     return
   }
 
+  if (productionMarkerBuyPickActive.value) {
+    productionMarkerBuyPick.handleMapSelect(q, r)
+    return
+  }
+
   if (markerMapPickActive.value) {
     markerMapPick.handleMapSelect(q, r)
     return
@@ -2321,6 +2682,17 @@ async function toggleMarkerOnCell(q: number, r: number) {
     const state = gameStateFromSnapshot(game, saveFile.value.map.id)
     if (!resolveRegionIdForCell(state, { q, r }, playerId.value)) {
       markerHint.value = 'Маркер производства ставится только в контролируемом регионе (от 3 клетки)'
+      return
+    }
+    if (
+      isOneProductionMarkerPerRegionActive(game)
+      && game.productionMarkers.some((m) => {
+        if (m.ownerId !== playerId.value) return false
+        const existing = resolveRegionIdForCell(state, m.coord, playerId.value)
+        return existing === resolveRegionIdForCell(state, { q, r }, playerId.value)
+      })
+    ) {
+      markerHint.value = PRODUCTION_MARKER_REGION_TAKEN_MSG
       return
     }
   }
@@ -2439,6 +2811,42 @@ function removeMarkerAtSourceFromModal() {
   refreshLocalLegalActions()
 }
 
+function removeProductionMarkerFromModal() {
+  if (!saveFile.value?.game || !productionMarkerId.value) return
+
+  if (serverStatus.value === 'online' && !roomId.value.startsWith('local-')) {
+    bumpObservationEpoch()
+    submitGameAction(roomId.value, playerId.value, 'remove-marker', {
+      markerId: productionMarkerId.value,
+      kind: 'production',
+    })
+      .then((obs) => {
+        applyObservation(obs)
+        persistLocal()
+        closeProductionModal()
+        productionHint.value = 'Маркер производства снят'
+      })
+      .catch((e) => {
+        productionHint.value = actionErrorMessage(e, 'Не удалось снять маркер')
+      })
+    return
+  }
+
+  const errors = removeProductionMarker(
+    saveFile.value.game,
+    productionMarkerId.value,
+    playerId.value,
+  )
+  if (errors.length) {
+    productionHint.value = errors[0]
+    return
+  }
+  closeProductionModal()
+  productionHint.value = 'Маркер производства снят'
+  persistLocal()
+  refreshLocalLegalActions()
+}
+
 function removeSelectedActionMarker() {
   if (!saveFile.value?.game || !selectedKey.value) return
   if (!confirmRemoveActionMarker()) return
@@ -2520,15 +2928,11 @@ function removeSelectedProductionMarker() {
 }
 
 function resolveExportDownloadName(): string {
-  if (!saveFile.value) return 'galaxy-save.galaxy.json'
-  const fallback = `${saveFile.value.map.id}.galaxy.json`
-  const raw = exportFileName.value.trim() || defaultExportBaseName.value
-  const base = raw
-    .replace(/\.(galaxy\.)?json$/i, '')
-    .replace(/[<>:"/\\|?*]/g, '_')
-    .trim()
-    .slice(0, 120)
-  return base ? `${base}.galaxy.json` : fallback
+  if (!saveFile.value) return galaxySaveDownloadFileName(undefined, '')
+  return galaxySaveDownloadFileName(
+    exportFileName.value.trim() || saveFile.value.map.name,
+    saveFile.value.map.id,
+  )
 }
 
 function exportGameSave() {
@@ -2700,6 +3104,7 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
           <p v-else class="join-as">Ждём, пока создатель комнаты начнёт игру…</p>
           <NuxtLink to="/" class="join-back">← Выйти в лобби</NuxtLink>
         </template>
+        <SoundtrackPanel placement="lobby" />
       </div>
     </div>
 
@@ -2708,18 +3113,30 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
         v-if="boardCells.length"
         :cells="boardCells"
         mode="game"
+        :auto-fit-on-map-change="true"
         :show-auto-fit-toggle="false"
         :selected-key="selectedKey"
         :reachable-keys="boardReachableKeys"
         :contested-keys="boardContestedKeys"
+        :combat-pulse-keys="boardCombatPulseKeys"
+        :incoming-ship-ids="boardIncomingShipIds"
+        :active-ship-ids="boardActiveShipIds"
+        :combat-ghosts="boardCombatGhosts"
+        :observation-revision="appliedObservationRevision"
         :destination-keys="boardDestinationKeys"
         :preview-moves="boardPreviewMoves"
+        :preview-placements="productionPreviewShips"
+        :preview-placements-pulse="productionShipPickConfirming"
         :territory-label-players="territoryLabelPlayers"
         :movement-source-key="boardMovementSourceKey"
         :available-action-marker-keys="availableActionMarkerKeys"
         :available-production-marker-keys="availableProductionMarkerKeys"
+        :interactive-keys="boardInteractiveKeys"
         :supply-chain-keys="supplyChainHighlightKeys"
         :players="snapshot?.players ?? []"
+        :snapshot="snapshot"
+        :map-id="mapDefinition?.id ?? null"
+        translucent-cells
         @select="selectCell"
       />
       <p v-else class="empty-hint">Нет данных карты — импортируйте .galaxy.json</p>
@@ -2871,6 +3288,13 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
       </div>
     </div>
 
+    <TurnEventAnnounceModal
+      v-if="turnEventAnnounceVisible && turnEventAnnounced"
+      :event="turnEventAnnounced"
+      :turn-number="turnEventAnnouncedTurn"
+      @close="dismissTurnEventAnnounce"
+    />
+
     <MarkerActionModal
       v-if="markerActionOpen && snapshot && saveFile && markerActionSource"
       :snapshot="snapshot"
@@ -2889,17 +3313,61 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
       :player-id="playerId"
       :source="productionMarkerSource"
       :marker-id="productionMarkerId"
+      :phase="productionShipPickConfirming ? 'confirm' : 'order'"
+      :order-slots="productionShipPickOrderSlots"
       @close="closeProductionModal"
       @recharge="confirmProductionRecharge(productionMarkerId)"
       @start-pick="startProductionShipPick"
+      @buy-production-marker="startProductionMarkerBuyPick"
+      @remove-marker="removeProductionMarkerFromModal"
+      @confirm-place="onConfirmProductionPlace"
+      @back-to-pick="backProductionShipConfirm"
     />
 
-    <div v-if="productionShipPickActive" class="map-pick-banner map-pick-banner--production" role="status">
+    <div
+      v-if="productionShipPickActive && !productionShipPickConfirming"
+      class="map-pick-banner map-pick-banner--production"
+      role="status"
+    >
       <p class="map-pick-text">{{ productionShipPickBannerText }}</p>
+      <ProductionOrderStrip
+        :slots="productionShipPickOrderSlots"
+        :player-color="myPlayerColor"
+        pulse-unplaced
+        @select="productionShipPick.undoFromIndex"
+      />
       <p v-if="productionShipPickError" class="map-pick-error">{{ productionShipPickError }}</p>
-      <button type="button" class="map-pick-cancel" @click.stop="cancelProductionShipPick">
-        Отмена (Esc)
-      </button>
+      <div class="map-pick-actions">
+        <button
+          v-if="productionShipPickAllPlaced"
+          type="button"
+          class="map-pick-primary"
+          @click.stop="productionShipPick.enterConfirm()"
+        >
+          Разместить эти корабли
+        </button>
+        <button type="button" class="map-pick-cancel" @click.stop="cancelProductionShipPick">
+          Отмена (Esc)
+        </button>
+      </div>
+    </div>
+
+    <div v-if="productionMarkerBuyPickActive" class="map-pick-banner map-pick-banner--production" role="status">
+      <p class="map-pick-text">{{ productionMarkerBuyPickBannerText }}</p>
+      <p v-if="productionMarkerBuyPickError" class="map-pick-error">{{ productionMarkerBuyPickError }}</p>
+      <div class="map-pick-actions">
+        <button
+          type="button"
+          class="map-pick-primary"
+          :disabled="!productionMarkerBuyPickCanConfirm"
+          @click="onConfirmProductionMarkerBuy"
+        >
+          Купить
+        </button>
+        <button type="button" class="map-pick-cancel" @click.stop="cancelProductionMarkerBuyPick">
+          Отмена (Esc)
+        </button>
+      </div>
     </div>
 
     <BattleModal
@@ -2933,7 +3401,30 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
     />
 
     <div v-if="markerMapPickActive" class="map-pick-banner" role="status">
-      <p class="map-pick-text">{{ markerMapPickBannerText }}</p>
+      <p v-if="markerMapPickBannerDestinationMeta && markerMapPickBannerShipName" class="map-pick-text">
+        <template v-if="markerMapPickBannerDestinationMeta.bombardment">
+          Кликните цель обстрела для «{{ markerMapPickBannerShipName }}»
+        </template>
+        <template v-else-if="markerMapPickBannerDestinationMeta.single">
+          Кликните клетку назначения для «{{ markerMapPickBannerShipName }}»
+        </template>
+        <template v-else>
+          Кликните клетку для «{{ markerMapPickBannerShipName }}»
+        </template>
+        <template v-if="markerMapPickBannerDestinationMeta.single">
+          (от ({{ markerMapPickBannerDestinationMeta.source.q }}, {{ markerMapPickBannerDestinationMeta.source.r }}))
+        </template>
+        <template v-else>
+          · осталось {{ markerMapPickBannerDestinationMeta.pending }} корабл(я/ей)
+        </template>
+      </p>
+      <p v-else class="map-pick-text">{{ markerMapPickBannerText }}</p>
+      <ProductionOrderStrip
+        v-if="markerMapPickBannerSlots.length"
+        :slots="markerMapPickBannerSlots"
+        :player-color="myPlayerColor"
+        pulse-unplaced
+      />
       <p v-if="markerMapPickError" class="map-pick-error">{{ markerMapPickError }}</p>
       <div v-if="markerMapPickPendingControl" class="map-pick-actions">
         <button type="button" class="map-pick-primary" @click.stop="resolveMarkerOccupyChoice(true)">
@@ -3004,6 +3495,16 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
           >
             {{ advancingPhase ? '…' : advancePhaseLabel }}
           </button>
+          <button
+            v-if="showBuyProductionMarkerSlot"
+            type="button"
+            class="planning-step-btn planning-step-btn--hero"
+            :disabled="!canBuyProductionMarkerSlot"
+            :title="productionMarkerBuyHudTitle"
+            @click="startProductionMarkerBuyPick"
+          >
+            Купить маркер производства
+          </button>
           <p v-if="phaseHint" class="hud-center-hint err">{{ phaseHint }}</p>
           <p v-else-if="phaseAdvanceBlockedReason" class="hud-center-hint err">
             {{ phaseAdvanceBlockedReason }}
@@ -3012,6 +3513,15 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
         <div v-else class="hud-top-center hud-top-center--idle" aria-hidden="true" />
 
         <div class="hud-top-right">
+          <button
+            v-if="canSurrender"
+            type="button"
+            class="sfx-mute-btn"
+            title="Сдаться"
+            @click="surrenderMatch"
+          >
+            Сдаться
+          </button>
           <PhasePanel
             v-if="snapshot"
             variant="hero"
@@ -3037,6 +3547,7 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
           >
             {{ sfxMuted ? '🔇' : '🔊' }}
           </button>
+          <SoundtrackPanel placement="hud" />
           <button
             type="button"
             class="bug-report-btn"
@@ -3168,10 +3679,10 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
           <div class="metric-row">
             <span
               class="metric-pill metric-pill--action"
-              :title="`Маркеры действия: ваши ${myActionMarkerCount}/${MAX_ACTION_MARKERS_PER_PLAYER}, на карте ${actionMarkers.length}`"
+              :title="`Маркеры действия: ваши ${myActionMarkerCount}/${myActionMarkerLimit} (два плюс число центров власти на начало хода), на карте ${actionMarkers.length}`"
             >
               <span class="metric-glyph metric-glyph--action" aria-hidden="true" />
-              <span class="metric-value">{{ myActionMarkerCount }}/{{ MAX_ACTION_MARKERS_PER_PLAYER }}</span>
+              <span class="metric-value">{{ myActionMarkerCount }}/{{ myActionMarkerLimit }}</span>
               <span class="metric-sub">осталось {{ sidePanelActionRemaining }}</span>
             </span>
             <span
@@ -3212,7 +3723,7 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
               <span
                 v-else
                 class="status-chip status-chip--prod"
-                title="Клик по маркеру — постройка или перезарядка. Снять — в карточке клетки."
+                title="Клик по маркеру — постройка, перезарядка или бесплатное снятие. Снять — в модалке или карточке клетки."
               >
                 ■ клик по маркеру
               </span>
@@ -3366,6 +3877,13 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
   min-height: 0;
   color: #e2e8f0;
   overflow: hidden;
+  background-color: #020617;
+  background-image:
+    linear-gradient(180deg, rgba(2, 6, 23, 0.28) 0%, rgba(2, 6, 23, 0.4) 100%),
+    url('/images/space-bg.jpg');
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
 }
 .game-over-overlay {
   position: fixed;
@@ -3545,6 +4063,7 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
 .map-pick-banner--production {
   border-color: rgba(244, 114, 182, 0.65);
   background: rgba(131, 24, 67, 0.92);
+  max-width: min(94vw, 640px);
 }
 .map-pick-text {
   margin: 0;
@@ -4202,8 +4721,13 @@ button,
   background: rgba(69, 26, 3, 0.85);
   color: #fef3c7;
 }
-.planning-step-btn:hover {
+.planning-step-btn:hover:not(:disabled) {
   filter: brightness(1.08);
+}
+.planning-step-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  filter: none;
 }
 .phase-advance-btn {
   display: block;

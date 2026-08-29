@@ -7,7 +7,6 @@ export const SHIP_MOVE_RANGE: Record<ShipType, number> = {
   battleship: 1,
   shield: 2,
   hyper: 1,
-  supply: 3,
 }
 
 export interface ShipProductionCost {
@@ -22,7 +21,6 @@ export const SHIP_PRODUCTION_COST: Record<ShipType, ShipProductionCost> = {
   battleship: { credits: 7, production: 6 },
   shield: { credits: 3, production: 4 },
   hyper: { credits: 12, production: 12 },
-  supply: { credits: 3, production: 1 },
 }
 
 /**
@@ -32,10 +30,9 @@ export const SHIP_PRODUCTION_COST: Record<ShipType, ShipProductionCost> = {
 export const SHIP_PRODUCTION_REGION_MIN: Record<ShipType, number> = {
   destroyer: 3,
   cruiser: 5,
-  battleship: 7,
-  shield: 5,
-  hyper: 9,
-  supply: 1,
+  battleship: 18,
+  shield: 12,
+  hyper: 21,
 }
 
 export function getShipMoveRange(type: ShipType): number {

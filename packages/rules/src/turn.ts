@@ -1,8 +1,7 @@
+import { maybeApplyProductionHexClaims } from './claim.js'
 import { trimGameEventLog } from './event-log.js'
-import {
-  ensureTurnEventForPhase,
-  isTurnEventResolved,
-} from './events.js'
+import { ensureTurnEventForPhase, resolveTurnEvent } from './events.js'
+import { refreshActionMarkerCapacity } from './marker-pools.js'
 import {
   syncActionMarkerTurnTracking,
   syncProductionMarkerTurnTracking,
@@ -183,6 +182,7 @@ function applyTurnState(game: GameSnapshot, state: GameState, prevPhase: Phase, 
   game.eventLog = state.eventLog
   syncActionMarkerTurnTracking(game, prevPhase, prevActivePlayerId)
   syncProductionMarkerTurnTracking(game, prevPhase, prevActivePlayerId)
+  maybeApplyProductionHexClaims(game, prevPhase)
 }
 
 /**
@@ -263,24 +263,20 @@ function skipPlayersWithoutPhaseActions(
   state.activePlayerId = order.at(-1) ?? state.activePlayerId
   const errors = advanceGamePhase(state, game.participatingPlayerIds)
   if (errors.length) return errors
-  if (prevPhase === 'production') ensureTurnEventForPhase(game)
   applyTurnState(game, state, prevPhase, prevActivePlayerId)
-  return []
+  return completeEventsPhaseIfActive(game, mapId)
 }
 
 /** Label for the primary «advance / pass turn» action in UI */
 export function phaseAdvanceActionLabel(
   state: GameState,
   participatingPlayerIds?: string[] | null,
-  game?: GameSnapshot,
+  _game?: GameSnapshot,
 ): string {
   const phase = state.phase
   const ctx = turnOrderContext(state)
 
   if (phase === 'events') {
-    if (game && !isTurnEventResolved(game)) {
-      return 'Применить событие'
-    }
     return 'К планированию'
   }
 
@@ -383,6 +379,21 @@ export function advanceGamePhase(
   return []
 }
 
+function applyTurnEventIfInEventsPhase(game: GameSnapshot): string[] {
+  if (game.phase !== 'events') return []
+  ensureTurnEventForPhase(game)
+  return resolveTurnEvent(game)
+}
+
+/** Вытянуть и применить карту события, затем уйти из фазы «События» без действия игрока. */
+export function completeEventsPhaseIfActive(game: GameSnapshot, mapId: string): string[] {
+  if (game.phase !== 'events') return []
+  const errors = applyTurnEventIfInEventsPhase(game)
+  if (errors.length) return errors
+  refreshActionMarkerCapacity(game)
+  return advanceGameSnapshot(game, mapId)
+}
+
 export function advanceGameSnapshot(game: GameSnapshot, mapId: string): string[] {
   const advanceErrors = [
     ...validateActionMarkerBeforeAdvance(game),
@@ -390,12 +401,8 @@ export function advanceGameSnapshot(game: GameSnapshot, mapId: string): string[]
   ]
   if (advanceErrors.length) return advanceErrors
 
-  if (game.phase === 'events') {
-    ensureTurnEventForPhase(game)
-    if (!isTurnEventResolved(game)) {
-      return ['Сначала примените событие хода']
-    }
-  }
+  const eventErrors = applyTurnEventIfInEventsPhase(game)
+  if (eventErrors.length) return eventErrors
 
   const prevPhase = game.phase
   const prevActivePlayerId = game.activePlayerId
@@ -414,12 +421,13 @@ export function advanceGameSnapshot(game: GameSnapshot, mapId: string): string[]
   const errors = advanceGamePhase(state, participating)
   if (errors.length) return errors
 
-  if (state.phase === 'events') {
-    ensureTurnEventForPhase(game)
-  }
-
   applyTurnState(game, state, prevPhase, prevActivePlayerId)
+  if (game.phase === 'planning' && prevPhase === 'events') {
+    refreshActionMarkerCapacity(game)
+  }
   applyVictoryAndDefeatChecks(game, mapId)
+  const afterEvents = completeEventsPhaseIfActive(game, mapId)
+  if (afterEvents.length) return afterEvents
   return game.phase === prevPhase ? skipPlayersWithoutPhaseActions(game, mapId) : []
 }
 

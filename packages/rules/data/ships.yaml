@@ -8,6 +8,7 @@ destroyer:
 cruiser:
   move: 2
   combatDice: 2
+  combatDieFaces: 4
   supportDice: 1
   supportDieFaces: 4
   fireRange: 1
@@ -22,14 +23,14 @@ battleship:
   supportDieFaces: 4
   fireRange: 2
   destroyCost: 9
-  productionRegionSize: [7, 8]
+  productionRegionSize: [18, 19]
   cost: { credits: 7, production: 6 }
 
 shield:
   move: 2
   shieldAbsorb: { self: 4, neighbor: 2 }
   destroyCost: 4
-  productionRegionSize: [5, 6]
+  productionRegionSize: [12, 13]
   cost: { credits: 3, production: 4 }
 
 hyper:
@@ -38,14 +39,8 @@ hyper:
   supportDieFaces: 4
   fireRange: [2, 3]
   destroyCost: 4
-  productionRegionSize: [9, 999]
+  productionRegionSize: [21, 999]
   cost: { credits: 12, production: 12 }
-
-supply:
-  move: 3
-  destroyCost: 4
-  productionRegionSize: [1, 2]
-  cost: { credits: 3, production: 1 }
 
 destructionPriority:
   - destroyer
@@ -53,4 +48,3 @@ destructionPriority:
   - shield
   - cruiser
   - battleship
-  - supply

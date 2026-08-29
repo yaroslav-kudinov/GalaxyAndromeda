@@ -1,10 +1,10 @@
-import { buildSpatialSummary } from './observation/ascii-map.js'
 import { trimGameEventLog } from './event-log.js'
+import { clearMarkersOwnedByPlayer } from './markers.js'
 import type { GameSnapshot } from './save-file.js'
 import { gameStateFromSnapshot } from './save-file.js'
 import type { GameState } from './types.js'
 
-export type VictoryReason = 'four_regions' | 'power_centers' | 'last_standing'
+export type VictoryReason = 'power_centers' | 'last_standing'
 
 export type GameOverReason = VictoryReason
 
@@ -13,22 +13,13 @@ export interface GameOverState {
   reason: GameOverReason
 }
 
-const VICTORY_REGION_MIN_SIZE = 7
-const VICTORY_REGION_COUNT = 4
-
 const REASON_LABELS: Record<VictoryReason, string> = {
-  four_regions: 'контроль 4 регионов от 7 клеток',
   power_centers: 'большинство центров власти',
   last_standing: 'единственный оставшийся игрок',
 }
 
 function activePlayers(state: GameState): string[] {
   return state.players.filter((p) => !p.eliminated).map((p) => p.id)
-}
-
-function regionsOfSizeForPlayer(state: GameState, playerId: string, minSize: number): number {
-  const summary = buildSpatialSummary(state)
-  return summary.regions.filter((r) => r.ownerId === playerId && r.size >= minSize).length
 }
 
 function powerCenterCounts(state: GameState): Map<string, number> {
@@ -55,9 +46,6 @@ function playerControlsAnyPowerCenter(state: GameState, playerId: string): boole
 }
 
 function detectVictoryReason(state: GameState, winnerId: string): VictoryReason {
-  if (regionsOfSizeForPlayer(state, winnerId, VICTORY_REGION_MIN_SIZE) >= VICTORY_REGION_COUNT) {
-    return 'four_regions'
-  }
   const pc = powerCenterCounts(state).get(winnerId) ?? 0
   const total = totalPowerCentersOnMap(state)
   if (total > 0 && pc > total / 2) return 'power_centers'
@@ -69,12 +57,6 @@ export function checkVictory(state: GameState): { winnerId: string; reason: Vict
   const players = activePlayers(state)
   if (players.length <= 1 && players.length > 0) {
     return { winnerId: players[0]!, reason: 'last_standing' }
-  }
-
-  for (const playerId of players) {
-    if (regionsOfSizeForPlayer(state, playerId, VICTORY_REGION_MIN_SIZE) >= VICTORY_REGION_COUNT) {
-      return { winnerId: playerId, reason: 'four_regions' }
-    }
   }
 
   const pcCounts = powerCenterCounts(state)
@@ -136,6 +118,7 @@ export function applyVictoryAndDefeatChecks(
     const player = game.players.find((p) => p.id === playerId)
     if (player && !player.eliminated) {
       player.eliminated = true
+      clearMarkersOwnedByPlayer(game, playerId)
       game.eventLog.push({
         id: `evt-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
         turn: game.turnNumber,

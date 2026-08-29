@@ -37,3 +37,7 @@ Open new Cursor window on worktree path. Use separate chat per agent.
 ## Contract changes
 
 Changes to `packages/rules/src/types.ts` require ADR in `docs/decisions/`.
+
+## Patch notes
+
+Any code/rules/API/UI change: add a structured note in `docs/patch-notes/` (see `.cursor/rules/patch-notes.mdc` — write for the player, glossary, no abbreviations). Changelog stays a short feed; patch notes explain impact for agents and players.

@@ -19,3 +19,20 @@ export * from './ships.js'
 export * from './movement.js'
 export * from './regions.js'
 export * from './supply-chains.js'
+export * from './claim.js'
+export * from './surrender.js'
+export {
+  START_PRODUCTION_MARKER_LIMIT,
+  MAX_PRODUCTION_MARKERS_PER_PLAYER,
+  PRODUCTION_MARKER_EXPAND_COST,
+  ACTION_MARKER_LIMIT_BASE,
+  countControlledPowerCenters,
+  computeActionMarkerLimit,
+  actionMarkerLimitForPlayer,
+  productionMarkerLimitForPlayer,
+  nextProductionMarkerExpandCost,
+  ensureMarkerLimits,
+  refreshActionMarkerCapacity,
+  trimExcessActionMarkers,
+  syncActionMarkerLimits,
+} from './marker-pools.js'

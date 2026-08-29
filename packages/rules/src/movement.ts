@@ -9,18 +9,19 @@ import {
   markActionMarkerResolvedThisTurn,
   removeActionMarker,
   removeProductionMarker,
-  removeStaleProductionMarkerAt,
   toggleMarkerAtCell,
   PRODUCTION_MARKER_ALREADY_RESOLVED_MSG,
   PRODUCTION_MARKER_MUST_RESOLVE_BEFORE_ADVANCE_MSG,
   mustResolveProductionMarkerBeforeAdvance,
   type MarkerKind,
 } from './markers.js'
+import { transferControlIfEnemyOwned } from './claim.js'
 import type { GameSnapshot, RuntimeCellState } from './save-file.js'
 import { gameStateFromSnapshot } from './save-file.js'
 import {
   executeProductionBatch,
   executeProductionRecharge,
+  executeBuyProductionMarker,
   type ProductionBatchPlan,
   type ShipPlacement,
   type TokenSpendRef,
@@ -55,19 +56,14 @@ import {
   type CombatOptions,
   type CombatResolutionResult,
 } from './combat.js'
-import {
-  ensureTurnEventForPhase,
-  getEffectiveMoveRange,
-  isMovementIntoCellBlocked,
-  isTurnEventResolved,
-  resolveTurnEvent,
-} from './events.js'
+import { getEffectiveMoveRange, isMovementIntoCellBlocked } from './events.js'
 import { getShipMoveRange } from './ships.js'
-import { advanceGameSnapshot } from './turn.js'
+import { advanceGameSnapshot, completeEventsPhaseIfActive } from './turn.js'
 import type { HexCoord, LegalAction, MapDefinition, ShipType, ShipUnit } from './types.js'
 import { hexKey } from './types.js'
 import { getLegalActions } from './game.js'
 import { applyVictoryAndDefeatChecks } from './victory.js'
+import { surrenderPlayer } from './surrender.js'
 
 export interface ShipMovePlan {
   shipId: string
@@ -99,38 +95,6 @@ function cellAt(game: GameSnapshot, coord: HexCoord): RuntimeCellState | undefin
   return game.cells.find((c) => hexKey(c.coord.q, c.coord.r) === key)
 }
 
-/** Мирный вход: чужой контроль без боевого флота переходит входящему; маркер производства снимается. */
-function applyPeacefulControlCapture(
-  game: GameSnapshot,
-  dest: RuntimeCellState,
-  playerId: string,
-): void {
-  const owner = effectiveControlOwnerId(game, dest.controlOwnerId)
-  if (owner == null || owner === playerId) {
-    removeStaleProductionMarkerAt(game, dest.coord)
-    return
-  }
-  if (isCombatDestination(game, playerId, dest.coord)) return
-  if (!dest.ships.some((ship) => ship.ownerId === playerId)) return
-  dest.controlOwnerId = playerId
-  removeStaleProductionMarkerAt(game, dest.coord)
-}
-
-function capturePeacefulDestinations(
-  game: GameSnapshot,
-  playerId: string,
-  destinations: HexCoord[],
-): void {
-  const seen = new Set<string>()
-  for (const to of destinations) {
-    const key = hexKey(to.q, to.r)
-    if (seen.has(key)) continue
-    seen.add(key)
-    const cell = cellAt(game, to)
-    if (cell) applyPeacefulControlCapture(game, cell, playerId)
-  }
-}
-
 function findShipOnBoard(
   game: GameSnapshot,
   shipId: string,
@@ -158,7 +122,6 @@ function countIncomingMoves(
   let total = 0
   for (const move of moves) {
     if (hexKey(move.to.q, move.to.r) !== destKey) continue
-    if (move.declareControl) continue
     const ship = findShipOnBoard(game, move.shipId)
     if (!ship) continue
     total += 1
@@ -263,15 +226,13 @@ export function hexPathDistance(
   return null
 }
 
+/** @deprecated Мирный захват с хода убран (ADR 008); всегда false. */
 export function canDeclareControlForMove(
-  game: GameSnapshot,
-  ship: ShipUnit,
-  dest: RuntimeCellState,
+  _game: GameSnapshot,
+  _ship: ShipUnit,
+  _dest: RuntimeCellState,
 ): boolean {
-  return (
-    ship.type === 'supply'
-    && effectiveControlOwnerId(game, dest.controlOwnerId) === null
-  )
+  return false
 }
 
 export function validateDestinationForMove(
@@ -310,8 +271,6 @@ export function validateDestinationForMove(
 
   if (effectiveControlOwnerId(game, dest.controlOwnerId) != null
     && effectiveControlOwnerId(game, dest.controlOwnerId) !== playerId) {
-    // Бой только если isCombatDestination (есть враг не-supply).
-    // Мирный вход на чужой контроль без боевого флота захватывает клетку.
     if (isCombatDestination(game, playerId, to)) {
       return errors
     }
@@ -321,13 +280,7 @@ export function validateDestinationForMove(
     return errors
   }
 
-  if (declareControl) {
-    if (ship.type !== 'supply') errors.push('Контроль может объявить только корабль снабжения')
-    if (effectiveControlOwnerId(game, dest.controlOwnerId) !== null) {
-      errors.push('Клетка уже под контролем')
-    }
-    return errors
-  }
+  void declareControl
 
   const incoming = countIncomingMoves(priorMoves, toKey, playerId, game)
   const playerCount = countPlayerShipsAt(dest, playerId) + incoming.player
@@ -480,18 +433,10 @@ function finishPendingMovementPlans(
     const destCell = cellAt(game, move.to)!
     const [ship] = sourceCell.ships.splice(shipIdx, 1)
 
-    if (move.declareControl && canDeclareControlForMove(game, ship, destCell)) {
-      destCell.controlOwnerId = playerId
-      summaries.push(
-        `${SHIP_LABELS[ship.type]} занял (${move.to.q},${move.to.r}), снят с карты`,
-      )
-    } else {
-      destCell.ships.push(ship)
-      summaries.push(`${SHIP_LABELS[ship.type]} → (${move.to.q},${move.to.r})`)
-    }
+    destCell.ships.push(ship)
+    transferControlIfEnemyOwned(game, destCell, ship.ownerId)
+    summaries.push(`${SHIP_LABELS[ship.type]} → (${move.to.q},${move.to.r})`)
   }
-
-  capturePeacefulDestinations(game, playerId, moves.map((move) => move.to))
 
   const marker = game.actionMarkers.find(
     (m) =>
@@ -680,18 +625,10 @@ export function executeMarkerMovement(
     const destCell = cellAt(game, move.to)!
     const [ship] = sourceCell.ships.splice(shipIdx, 1)
 
-    if (move.declareControl && canDeclareControlForMove(game, ship, destCell)) {
-      destCell.controlOwnerId = playerId
-      summaries.push(
-        `${SHIP_LABELS[ship.type]} занял (${move.to.q},${move.to.r}), снят с карты`,
-      )
-    } else {
-      destCell.ships.push(ship)
-      summaries.push(`${SHIP_LABELS[ship.type]} → (${move.to.q},${move.to.r})`)
-    }
+    destCell.ships.push(ship)
+    transferControlIfEnemyOwned(game, destCell, ship.ownerId)
+    summaries.push(`${SHIP_LABELS[ship.type]} → (${move.to.q},${move.to.r})`)
   }
-
-  capturePeacefulDestinations(game, playerId, moves.map((move) => move.to))
 
   const marker = game.actionMarkers.find(
     (m) =>
@@ -784,11 +721,18 @@ export function getLegalActionsForSnapshot(
   mapId: string,
   playerId: string,
 ): LegalAction[] {
-  if (game.phase === 'events') {
-    ensureTurnEventForPhase(game)
-  }
+  completeEventsPhaseIfActive(game, mapId)
   const state = gameStateFromSnapshot(game, mapId)
   const actions = getLegalActions(state, playerId)
+
+  const me = game.players.find((p) => p.id === playerId)
+  if (!game.gameOver && me && !me.eliminated) {
+    actions.push({
+      id: 'surrender',
+      type: 'surrender',
+      description: 'Сдаться',
+    })
+  }
 
   if (game.phase === 'actions' && game.activePlayerId === playerId) {
     const ownMarkers = game.actionMarkers.filter((m) => m.ownerId === playerId)
@@ -841,6 +785,10 @@ export function applyGameActionOnSnapshot(
   params?: Record<string, unknown>,
 ): { errors: string[]; combatResult?: CombatResolutionResult } {
   if (game.gameOver) return { errors: ['Игра завершена'] }
+
+  if (actionId === 'surrender') {
+    return { errors: surrenderPlayer(game, map.id, playerId) }
+  }
 
   const isPrepAction = actionId === 'update-combat-prep' || actionId === 'cancel-combat-prep'
   if (game.pendingCombat?.phase === 'prep' && !isPrepAction && actionId !== 'abort-combat') {
@@ -1029,18 +977,11 @@ export function applyGameActionOnSnapshot(
   }
 
   if (actionId === 'advance-phase') {
-    if (game.phase === 'events') {
-      ensureTurnEventForPhase(game)
-      if (!isTurnEventResolved(game)) {
-        return { errors: resolveTurnEvent(game) }
-      }
-    }
     return { errors: advanceGameSnapshot(game, map.id) }
   }
 
   if (actionId === 'resolve-event') {
-    ensureTurnEventForPhase(game)
-    return { errors: resolveTurnEvent(game) }
+    return { errors: completeEventsPhaseIfActive(game, map.id) }
   }
 
   if (actionId === 'execute-marker-movement') {
@@ -1063,13 +1004,28 @@ export function applyGameActionOnSnapshot(
 
   if (actionId === 'execute-production') {
     const markerId = params?.markerId as string | undefined
-    const ships = params?.ships as ShipPlacement[] | undefined
+    const ships = (params?.ships as ShipPlacement[] | undefined) ?? []
     const spentTokens = params?.spentTokens as TokenSpendRef[] | undefined
-    if (!markerId || !Array.isArray(ships) || ships.length === 0) {
+    const buyActionMarkers = Math.max(0, Math.floor(Number(params?.buyActionMarkers ?? 0)))
+    if (!markerId || !Array.isArray(ships)) {
+      return { errors: ['Некорректные параметры действия'] }
+    }
+    if (buyActionMarkers > 0) {
+      return { errors: ['Покупка маркеров действия отключена — лимит равен двум плюс число центров власти'] }
+    }
+    if (ships.length === 0) {
       return { errors: ['Некорректные параметры действия'] }
     }
     const plan: ProductionBatchPlan = { markerId, ships }
     return { errors: executeProductionBatch(game, map.id, playerId, plan, spentTokens) }
+  }
+
+  if (actionId === 'execute-buy-production-marker') {
+    const spentTokens = params?.spentTokens as TokenSpendRef[] | undefined
+    if (!Array.isArray(spentTokens) || spentTokens.length === 0) {
+      return { errors: ['Некорректные параметры действия'] }
+    }
+    return { errors: executeBuyProductionMarker(game, map.id, playerId, spentTokens) }
   }
 
   if (actionId === 'execute-production-recharge') {

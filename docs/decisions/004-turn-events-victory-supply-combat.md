@@ -24,7 +24,7 @@ turnEvent?: {
 }
 ```
 
-Drawn when entering the events phase after production. Immediate effects (saboteurs, popular_donation, all_for_front) apply on resolve. Modifiers apply for the rest of the turn via `getTurnModifiers(game)`.
+Drawn when entering the events phase after production. Immediate effects (mandatory-overtime) apply on resolve. Modifiers apply for the rest of the turn via `getTurnModifiers(game)`.
 
 ### `gameOver`
 

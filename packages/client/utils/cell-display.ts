@@ -101,7 +101,6 @@ export function markerSummary(cell: BoardCellView): string | null {
 }
 
 const SHIP_LABELS_PLURAL: Record<ShipType, string> = {
-  supply: 'Корабли снабжения',
   destroyer: 'Эсминцы',
   cruiser: 'Крейсеры',
   battleship: 'Линкоры',

@@ -5,6 +5,7 @@ import { getActiveEventObservation } from './events.js'
 import type { GameSnapshot } from './save-file.js'
 import { buildSpatialSummary, renderAsciiMap } from './observation/index.js'
 import { PLAYER_COLORS } from './constants.js'
+import { actionMarkerLimitForPlayer } from './marker-pools.js'
 import { activePlayerOrder, advanceGamePhase, phaseAdvanceActionLabel } from './turn.js'
 
 const EMPTY_GEOMETRY: GameObservation['geometry'] = {
@@ -92,6 +93,7 @@ export function buildObservation(
     'gameOver',
     'pendingCombat',
     'productionTokensSpentThisTurn',
+    'productionMarkerBoughtByPlayerThisTurn',
     'overtimeRegionByPlayer',
     'eventLog',
     'lastCombatResult',
@@ -99,6 +101,8 @@ export function buildObservation(
     'roomStatus',
     'hostPlayerId',
     'eventDeck',
+    'actionMarkerLimitByPlayer',
+    'productionMarkerLimitByPlayer',
   ] as const) {
     if (key in stateExtra) {
       mechanicsExtra[key] = stateExtra[key] ?? null
@@ -108,6 +112,15 @@ export function buildObservation(
   if (Array.isArray(mechanicsExtra.participatingPlayerIds)) {
     mechanicsExtra.participatingPlayerIds = [...(mechanicsExtra.participatingPlayerIds as string[])]
   }
+
+  const snapshotLike = state as unknown as GameSnapshot
+  const actionMarkerLimitByPlayer: Record<string, number> = {
+    ...(snapshotLike.actionMarkerLimitByPlayer ?? {}),
+  }
+  for (const player of state.players) {
+    actionMarkerLimitByPlayer[player.id] = actionMarkerLimitForPlayer(snapshotLike, player.id)
+  }
+  mechanicsExtra.actionMarkerLimitByPlayer = actionMarkerLimitByPlayer
 
   const activeEvent = getActiveEventObservation(state as unknown as GameSnapshot)
   if (activeEvent) {

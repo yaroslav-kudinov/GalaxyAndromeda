@@ -48,11 +48,6 @@ export const SHIP_GLYPHS: Record<ShipType, ShipGlyphDef> = {
   hyper: {
     body: 'M0,-10.5 L2.4,-2.4 L10.5,0 L2.4,2.4 L0,10.5 L-2.4,2.4 L-10.5,0 L-2.4,-2.4 Z',
   },
-
-  /** Square */
-  supply: {
-    body: 'M-7,-7 L7,-7 L7,7 L-7,7 Z',
-  },
 }
 
 /** Editor / single-player cluster (up to 4 ships) */

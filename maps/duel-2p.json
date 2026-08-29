@@ -19,7 +19,7 @@
       "startPlayer": 1,
       "resourceToken": { "type": "credits", "value": 5, "faceUp": true },
       "startingShips": [
-        { "type": "supply", "player": 1 },
+        { "type": "destroyer", "player": 1 },
         { "type": "destroyer", "player": 1 }
       ]
     },
@@ -39,7 +39,7 @@
       "startPlayer": 2,
       "resourceToken": { "type": "credits", "value": 5, "faceUp": true },
       "startingShips": [
-        { "type": "supply", "player": 2 },
+        { "type": "destroyer", "player": 2 },
         { "type": "destroyer", "player": 2 }
       ]
     },

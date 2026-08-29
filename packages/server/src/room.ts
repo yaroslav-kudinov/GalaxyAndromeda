@@ -356,6 +356,8 @@ function roomObservation(
     pendingCombat: s.pendingCombat ?? null,
     productionTokensSpentThisTurn: s.productionTokensSpentThisTurn ?? null,
     overtimeRegionByPlayer: s.overtimeRegionByPlayer ?? null,
+    actionMarkerLimitByPlayer: s.actionMarkerLimitByPlayer ?? null,
+    productionMarkerLimitByPlayer: s.productionMarkerLimitByPlayer ?? null,
     lastCombatResult: room.lastCombatResult ?? null,
     observationRevision: room.observationRevision,
     roomStatus: room.status,

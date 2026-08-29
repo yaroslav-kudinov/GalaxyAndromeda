@@ -6,7 +6,7 @@ import {
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js'
 
-const GAME_SERVER_URL = process.env.GAME_SERVER_URL ?? 'http://127.0.0.1:3001'
+const GAME_SERVER_URL = (process.env.GAME_SERVER_URL ?? 'http://127.0.0.1:3001').replace(/\/$/, '')
 
 interface MapDefinition {
   id: string
@@ -15,7 +15,8 @@ interface MapDefinition {
 }
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${GAME_SERVER_URL}${path}`, {
+  const url = path.startsWith('/api') ? `${GAME_SERVER_URL}${path}` : `${GAME_SERVER_URL}/api${path}`
+  const res = await fetch(url, {
     headers: { 'Content-Type': 'application/json' },
     ...init,
   })

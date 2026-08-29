@@ -13,9 +13,9 @@ import {
   type MapDefinition,
 } from '@galaxy/rules'
 import type { LobbyPlayerSlot } from '~/components/LobbyPlayerList.vue'
-import { checkServerHealth, createRoom, createRoomFromSave, fetchRoomBootstrap, GameApiError, joinRoom } from '~/composables/useGameApi'
+import { checkServerHealth, createRoom, createRoomFromSave, fetchLobbies, fetchRoomBootstrap, GameApiError, joinRoom, type LobbyListEntry } from '~/composables/useGameApi'
 import { gameSaveStorageKey, saveGameSession } from '~/composables/useGameSession'
-import { savePlayerClaim } from '~/composables/usePlayerClaim'
+import { loadPlayerClaim, savePlayerClaim } from '~/composables/usePlayerClaim'
 import { bootstrapToLobbySlots, defaultSlotForRoom, joinAsLabel, roomHasFreeSlot } from '~/utils/lobby-slot'
 import { loadLobbySaves, upsertLobbySave } from '~/composables/useLobbySaves'
 import { usePlayerProfile } from '~/composables/usePlayerProfile'
@@ -24,6 +24,10 @@ import {
   mapCellsToBoardCells,
   snapshotToBoardCells,
 } from '~/utils/board-adapter'
+
+definePageMeta({
+  landing: true,
+})
 
 const MAPS_STORAGE_KEY = 'galaxy-maps'
 const DRAFT_STORAGE_KEY = 'galaxy-editor-draft'
@@ -40,6 +44,16 @@ const importBusy = ref(false)
 
 const router = useRouter()
 const { nickname, hasNickname, confirmNickname, resetNickname } = usePlayerProfile()
+
+const landingView = ref<'menu' | 'play'>('menu')
+
+function openPlay() {
+  landingView.value = 'play'
+}
+
+function backToMenu() {
+  landingView.value = 'menu'
+}
 
 const nicknameDraft = ref('')
 const nicknameError = ref<string | null>(null)
@@ -428,6 +442,85 @@ async function joinExistingGame() {
   }
 }
 
+const roomList = ref<LobbyListEntry[]>([])
+const roomListLoading = ref(false)
+const roomListError = ref<string | null>(null)
+const enteringListedRoomId = ref<string | null>(null)
+let roomListTimer: ReturnType<typeof setInterval> | null = null
+
+function slotsForListedRoom(lobby: LobbyListEntry): LobbyPlayerSlot[] {
+  const claim = loadPlayerClaim(lobby.roomId)
+  return lobby.players.map((player) => ({
+    id: player.id,
+    name: player.name,
+    color: player.color,
+    joined: player.joined,
+    active: player.active,
+    isYou: claim?.playerId === player.id,
+  }))
+}
+
+function canEnterListedRoom(lobby: LobbyListEntry): boolean {
+  const claim = loadPlayerClaim(lobby.roomId)
+  if (claim && lobby.players.some((player) => player.id === claim.playerId && player.joined)) return true
+  if (lobby.status === 'playing') return false
+  return lobby.playerCount < lobby.maxPlayers
+}
+
+async function refreshRoomList() {
+  if (!serverOnline.value) {
+    roomList.value = []
+    roomListLoading.value = false
+    return
+  }
+  try {
+    const data = await fetchLobbies()
+    roomList.value = data.lobbies
+    roomListError.value = null
+  } catch (e) {
+    roomListError.value = e instanceof Error ? e.message : 'Не удалось загрузить список комнат'
+  } finally {
+    roomListLoading.value = false
+  }
+}
+
+function stopRoomListPoll() {
+  if (roomListTimer) {
+    clearInterval(roomListTimer)
+    roomListTimer = null
+  }
+}
+
+function startRoomListPoll() {
+  stopRoomListPoll()
+  roomListLoading.value = true
+  void refreshRoomList()
+  roomListTimer = setInterval(() => {
+    void refreshRoomList()
+  }, 3000)
+}
+
+async function enterListedRoom(lobby: LobbyListEntry) {
+  enteringListedRoomId.value = lobby.roomId
+  error.value = null
+  try {
+    await router.push(`/game/${lobby.roomId}`)
+  } finally {
+    enteringListedRoomId.value = null
+  }
+}
+
+watch(
+  () => [landingView.value, serverOnline.value, lobbyReady.value] as const,
+  ([view, online, ready]) => {
+    if (view === 'play' && online && ready) {
+      startRoomListPoll()
+      return
+    }
+    stopRoomListPoll()
+  },
+)
+
 onMounted(async () => {
   await loadBundledDefaultMap()
   refreshMapList()
@@ -441,13 +534,55 @@ onMounted(async () => {
 
 onUnmounted(() => {
   if (joinPreviewTimer) clearTimeout(joinPreviewTimer)
+  stopRoomListPoll()
 })
 </script>
 
 <template>
-  <div class="lobby-page">
+  <div class="landing">
+    <GalaxyBackdrop />
+    <LandingMusicControl />
+
+    <div class="landing-center" :class="{ 'landing-center--play': landingView === 'play' }">
+      <header class="landing-brand">
+        <h1 class="landing-title">Галактика Андромеда</h1>
+      </header>
+
+      <div class="landing-body">
+      <nav v-if="landingView === 'menu'" class="landing-menu" aria-label="Главное меню">
+        <p class="landing-tagline">
+          <span>Вооружайся.</span>
+          <span>Договаривайся.</span>
+          <span>Побеждай.</span>
+        </p>
+
+        <div class="landing-nav">
+          <button type="button" class="landing-link landing-link--play" @click="openPlay">
+            Играть
+          </button>
+          <NuxtLink class="landing-link" to="/editor">Редактор карт</NuxtLink>
+          <NuxtLink class="landing-link" to="/patch-notes">Патчноуты</NuxtLink>
+        </div>
+
+        <p class="landing-meta">
+          <span v-if="hasNickname" class="landing-you">Вы: <strong>{{ nickname }}</strong></span>
+          <span class="server" :class="{ online: serverOnline, offline: serverOnline === false }">
+            {{
+              serverOnline === null
+                ? 'Сервер…'
+                : serverOnline
+                  ? 'Сервер доступен'
+                  : 'Сервер недоступен — локальная игра'
+            }}
+          </span>
+        </p>
+      </nav>
+
+      <div v-else class="landing-play">
+        <button type="button" class="landing-back" @click="backToMenu">К меню</button>
+
+        <div class="lobby-page">
     <section v-if="!lobbyReady" class="nickname-gate card">
-      <h1>Galaxy Andromeda</h1>
       <p class="gate-lead">Выберите никнейм — он будет виден другим игрокам в комнате.</p>
 
       <label class="field">
@@ -469,28 +604,21 @@ onUnmounted(() => {
       </button>
 
       <p class="gate-foot">
-        <NuxtLink to="/editor">Редактор карт</NuxtLink>
-        <span class="dot">·</span>
         <span class="server" :class="{ online: serverOnline, offline: serverOnline === false }">
-          {{ serverOnline === null ? '…' : serverOnline ? 'Сервер online' : 'Offline' }}
+          {{ serverOnline === null ? '…' : serverOnline ? 'Сервер доступен' : 'Сервер недоступен' }}
         </span>
       </p>
     </section>
 
     <div v-else class="lobby">
       <header class="lobby-header">
-        <h1>Galaxy Andromeda</h1>
         <p class="you-line">
           <span class="you-badge">Вы: <strong>{{ nickname }}</strong></span>
           <button type="button" class="linkish" @click="changeNickname">Сменить никнейм</button>
         </p>
         <p>
-          <NuxtLink to="/editor">Редактор карт</NuxtLink>
-          <span class="dot">·</span>
-          <NuxtLink to="/lobbies">Список лобби</NuxtLink>
-          <span class="dot">·</span>
           <span class="server" :class="{ online: serverOnline, offline: serverOnline === false }">
-            {{ serverOnline === null ? '…' : serverOnline ? 'Сервер online' : 'Offline — локальная игра' }}
+            {{ serverOnline === null ? '…' : serverOnline ? 'Сервер доступен' : 'Сервер недоступен — локальная игра' }}
           </span>
         </p>
       </header>
@@ -539,21 +667,25 @@ onUnmounted(() => {
           <h3 class="preview-title">
             {{ isContinueSave ? 'Текущее состояние карты' : 'Карта и стартовая позиция' }}
           </h3>
-          <HexBoard
-            class="map-preview"
-            mode="game"
-            :cells="previewBoardCells"
-            :ghosts="[]"
-            :selected-key="null"
-            :action-marker-keys="previewMarkerKeys.action"
-            :production-marker-keys="previewMarkerKeys.production"
-            :territory-label-players="previewTerritoryPlayers"
-            :auto-fit-on-map-change="true"
-            :zoomable="false"
-            :show-orientation-toggle="false"
-            :show-auto-fit-toggle="false"
-            :fill-viewport="false"
-          />
+          <div class="map-preview-frame">
+            <HexBoard
+              class="map-preview"
+              style="position: relative; inset: auto; height: 220px; max-height: 220px; overflow: hidden"
+              mode="game"
+              :cells="previewBoardCells"
+              :ghosts="[]"
+              :selected-key="null"
+              :action-marker-keys="previewMarkerKeys.action"
+              :production-marker-keys="previewMarkerKeys.production"
+              :territory-label-players="previewTerritoryPlayers"
+              :auto-fit-on-map-change="true"
+              :zoomable="false"
+              :show-orientation-toggle="false"
+              :show-auto-fit-toggle="false"
+              :fill-viewport="false"
+              toolbar-placement="inline"
+            />
+          </div>
           <template v-if="(serverOnline || !isContinueSave) && creatorSlots.length">
             <p class="hint">
               {{
@@ -620,15 +752,314 @@ onUnmounted(() => {
           {{ busy ? 'Вход…' : joinAsLabel(nickname, selectedJoinSlot) }}
         </button>
       </section>
-    </div>
-  </div>
+
+      <section v-if="serverOnline" class="card card--rooms">
+        <h2>Открытые комнаты</h2>
+        <p class="hint">Войдите в комнату со свободным местом или вернитесь в свою.</p>
+        <p v-if="roomListError" class="err">{{ roomListError }}</p>
+        <p v-else-if="roomListLoading && !roomList.length" class="preview-hint">Загрузка списка…</p>
+        <p v-else-if="!roomList.length" class="hint">Пока нет открытых комнат — создайте новую выше.</p>
+        <ul v-else class="room-list">
+          <li v-for="lobby in roomList" :key="lobby.roomId" class="room-card">
+            <div class="room-head">
+              <div>
+                <h3 class="preview-title">{{ lobby.mapName }}</h3>
+                <p class="room-meta">
+                  {{
+                    lobby.status === 'lobby'
+                      ? 'Подготовка'
+                      : `Ход ${lobby.turnNumber}`
+                  }}
+                  <span v-if="lobby.code"> · код {{ lobby.code }}</span>
+                </p>
+              </div>
+              <div class="room-actions">
+                <span class="preview-count">{{ lobby.playerCount }}/{{ lobby.maxPlayers }}</span>
+                <button
+                  v-if="canEnterListedRoom(lobby)"
+                  type="button"
+                  class="secondary room-enter"
+                  :disabled="enteringListedRoomId === lobby.roomId"
+                  @click="enterListedRoom(lobby)"
+                >
+                  {{ enteringListedRoomId === lobby.roomId ? 'Переход…' : 'Войти' }}
+                </button>
+                <span v-else class="room-full">Комната заполнена</span>
+              </div>
+            </div>
+            <LobbyPlayerList :slots="slotsForListedRoom(lobby)" compact />
+          </li>
+        </ul>
+      </section>
+        </div><!-- .lobby -->
+        </div><!-- .lobby-page -->
+      </div><!-- .landing-play -->
+      </div><!-- .landing-body -->
+    </div><!-- .landing-center -->
+  </div><!-- .landing -->
 </template>
 
 <style scoped>
+.landing {
+  position: relative;
+  z-index: 1;
+  isolation: isolate;
+  min-height: 100dvh;
+  overflow: visible;
+}
+
+.landing-center {
+  position: relative;
+  z-index: 2;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 100dvh;
+  height: auto;
+  overflow: visible;
+  padding: 5.5rem 1.25rem 9rem;
+}
+
+.landing-center--play {
+  justify-content: flex-start;
+  min-height: 100dvh;
+  height: auto;
+  max-height: none;
+  overflow: visible;
+  padding: 9.85rem 1.25rem 3rem;
+}
+
+.landing-body {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+}
+
+.landing-brand {
+  position: relative;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: max-content;
+  max-width: calc(100vw - 1.5rem);
+  margin: 0 auto 1.2rem;
+  padding: 0.45rem 0.95rem 0.5rem;
+  border-radius: 16px;
+  background: #02061773;
+  box-shadow: 0 0 40px #02061788;
+  text-align: center;
+  backdrop-filter: blur(8px);
+  transform: none;
+  transition: transform 0.55s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.landing-center--play .landing-brand {
+  position: absolute;
+  top: 4.35rem;
+  left: 50%;
+  margin: 0;
+  padding: 0.32rem 0.9rem 0.36rem;
+  transform: translate(-50%, 0);
+}
+
+.landing-title {
+  margin: 0;
+  font-family: Orbitron, Manrope, system-ui, sans-serif;
+  font-size: clamp(0.95rem, 4.4vw, 2.35rem);
+  font-weight: 800;
+  line-height: 1.2;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  color: #e8f1ff;
+  text-shadow:
+    0 0 22px #3b82f68a,
+    0 0 48px #1d4ed866,
+    0 2px 14px #000000cc;
+  animation: landing-title-twinkle 4.8s ease-in-out infinite;
+}
+
+@keyframes landing-title-twinkle {
+  0%,
+  100% {
+    opacity: 1;
+    text-shadow:
+      0 0 18px #3b82f66e,
+      0 0 40px #1d4ed855,
+      0 2px 14px #000000cc;
+  }
+  42% {
+    opacity: 0.8;
+    text-shadow:
+      0 0 8px #3b82f633,
+      0 0 18px #1d4ed822,
+      0 2px 12px #000000cc;
+  }
+  58% {
+    opacity: 1;
+    text-shadow:
+      0 0 28px #93c5fdb3,
+      0 0 56px #3b82f67a,
+      0 2px 14px #000000cc;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .landing-brand {
+    transition: none;
+  }
+  .landing-title {
+    animation: none;
+  }
+}
+
+.landing-menu {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: min(22rem, 92vw);
+  margin-top: 0;
+  text-align: center;
+}
+
+.landing-tagline {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.15rem 0.85rem;
+  margin: 0.35rem 0 0.15rem;
+  max-width: 26rem;
+  color: #e8eef8;
+  font-size: clamp(1.02rem, 2.6vw, 1.18rem);
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  line-height: 1.4;
+  text-shadow:
+    0 0 14px #67e8f655,
+    0 0 28px #fde68a33,
+    0 1px 10px #000000cc;
+}
+
+.landing-tagline span {
+  position: relative;
+  padding: 0 0.05rem 0.32rem;
+}
+
+.landing-tagline span::after {
+  content: '';
+  position: absolute;
+  left: 10%;
+  right: 10%;
+  bottom: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, #fde68aaa 35%, #7dd3fcbb 65%, transparent);
+}
+
+.landing-nav {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  width: 100%;
+  gap: 0.7rem;
+  margin: 1.6rem 0 1.2rem;
+}
+
+.landing-link {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  padding: 0.88rem 1.1rem;
+  border: 1px solid #64748b99;
+  border-radius: 12px;
+  background: #0f172ae6;
+  color: #f8fafc;
+  font-family: Manrope, system-ui, sans-serif;
+  font-size: 1.02rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-align: center;
+  text-decoration: none;
+  cursor: pointer;
+  backdrop-filter: blur(10px);
+}
+
+.landing-link:hover {
+  border-color: #93c5fd;
+  background: #1e293bf2;
+}
+
+.landing-link--play {
+  border-color: #3b82f6cc;
+  background: #1d4ed8e6;
+}
+
+.landing-link--play:hover {
+  border-color: #93c5fd;
+  background: #2563ebe6;
+}
+
+.landing-meta {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.35rem;
+  margin: 0;
+  color: #94a3b8;
+  font-size: 0.82rem;
+  line-height: 1.4;
+}
+
+.landing-you strong {
+  color: #f8fafc;
+}
+
+.landing-play {
+  position: relative;
+  z-index: 2;
+  box-sizing: border-box;
+  width: min(32rem, calc(100vw - 1.5rem));
+  margin: 0 auto;
+  flex: 0 0 auto;
+  overflow: visible;
+  max-height: none;
+}
+
+.landing-back {
+  position: relative;
+  z-index: 4;
+  display: inline-block;
+  margin: 0 0 0.85rem;
+  padding: 0.2rem 0;
+  border: none;
+  background: none;
+  color: #93c5fd;
+  font-size: 0.88rem;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.landing .card {
+  background: #1e293bf5;
+  box-shadow: 0 12px 40px #00000073;
+  overflow: visible;
+  height: auto;
+  max-height: none;
+  flex-shrink: 0;
+  color: #e2e8f0;
+}
+
 .lobby-page,
 .lobby {
-  max-width: 420px;
+  max-width: 32rem;
   margin: 0 auto;
+  overflow: visible;
+  height: auto;
 }
 .nickname-gate h1 {
   margin: 0 0 0.35rem;
@@ -757,6 +1188,50 @@ onUnmounted(() => {
 .card--join {
   margin-top: 1rem;
 }
+.card--rooms {
+  margin-top: 1rem;
+}
+.room-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+.room-card {
+  padding: 0.65rem 0.7rem;
+  border: 1px solid #334155;
+  border-radius: 8px;
+  background: #0f172acc;
+}
+.room-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.65rem;
+  margin-bottom: 0.45rem;
+}
+.room-meta {
+  margin: 0.15rem 0 0;
+  color: #94a3b8;
+  font-size: 0.75rem;
+}
+.room-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.3rem;
+  flex-shrink: 0;
+}
+.room-enter {
+  width: auto;
+  padding: 0.32rem 0.65rem;
+  font-size: 0.8rem;
+}
+.room-full {
+  font-size: 0.75rem;
+  color: #94a3b8;
+}
 .hint {
   margin: 0 0 0.75rem;
   color: #94a3b8;
@@ -770,11 +1245,32 @@ onUnmounted(() => {
 .preview-block {
   margin-bottom: 0.75rem;
 }
-.map-preview {
-  margin-bottom: 0.65rem;
-}
-.map-preview :deep(.hex-board) {
+.map-preview-frame {
+  position: relative;
+  z-index: 0;
+  isolation: isolate;
+  contain: layout;
+  box-sizing: border-box;
+  width: 100%;
   height: 220px;
+  max-height: 220px;
+  margin-bottom: 0.65rem;
+  overflow: hidden;
+  border-radius: 8px;
+}
+.map-preview-frame :deep(.hex-board-wrap) {
+  position: relative !important;
+  inset: auto !important;
+  width: 100%;
+  height: 220px;
+  max-height: 220px;
+  overflow: hidden;
+}
+.map-preview-frame :deep(.hex-board) {
+  display: block;
+  width: 100%;
+  height: 220px !important;
+  min-height: 0;
 }
 .preview-title {
   display: flex;

@@ -15,7 +15,6 @@ Axial hex coordinates `(q, r)`, flat-top layout.
       "resourceToken": { "type": "credits", "value": 5, "faceUp": true },
       "startPlayer": 1,
       "startingShips": [
-        { "type": "supply", "player": 1 },
         { "type": "destroyer", "player": 1 }
       ]
     }
@@ -48,7 +47,7 @@ Axial hex coordinates `(q, r)`, flat-top layout.
 
 ## Ships (`startingShips`)
 
-Types: `supply`, `destroyer`, `cruiser`, `battleship`, `shield`, `hyper`.  
+Types: `destroyer`, `cruiser`, `battleship`, `shield`, `hyper`. Unknown types (including legacy `supply`) are dropped on normalize.  
 Max **4 ships per player** and **8 total** in one hex (e.g. two players in battle).
 
 ## Legacy

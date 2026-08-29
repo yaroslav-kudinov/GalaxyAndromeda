@@ -9,19 +9,19 @@ const props = defineProps<{
 }>()
 
 const statusLabel = computed(() => {
-  if (!props.event.resolved) return 'Ожидает применения'
+  if (!props.event.resolved) return 'Применяется'
   if (props.phase && props.phase !== 'events') return 'Действует до конца хода'
   return 'Применено'
 })
 
 const hintText = computed(() => {
   if (!props.event.resolved) {
-    return 'Нажмите «Применить», чтобы активировать эффект и перейти к планированию.'
+    return 'Карта применяется автоматически в начале хода.'
   }
   if (props.phase && props.phase !== 'events') {
     return `Эффект активен на ходу ${props.turnNumber ?? '—'}.`
   }
-  return 'Событие применено — можно переходить к следующей фазе.'
+  return 'Событие применено автоматически.'
 })
 
 const appliedWhen = computed(() => {

@@ -67,10 +67,15 @@ export function storeOrientation(orientation: HexOrientation): void {
   localStorage.setItem(ORIENTATION_STORAGE_KEY, orientation)
 }
 
+/** Stored `'1'` = follow the map. Missing/`'0'` = keep the user's zoom (editor default). */
+export function autoFitFromStorageValue(stored: string | null): boolean {
+  return stored === '1'
+}
+
 /** When true, pan/zoom resets as the map grows or orientation changes */
 export function loadStoredAutoFit(): boolean {
-  if (!import.meta.client) return true
-  return localStorage.getItem(AUTO_FIT_STORAGE_KEY) !== '0'
+  if (!import.meta.client) return false
+  return autoFitFromStorageValue(localStorage.getItem(AUTO_FIT_STORAGE_KEY))
 }
 
 export function storeAutoFit(enabled: boolean): void {

@@ -47,7 +47,6 @@ export type ShipType =
   | 'battleship'
   | 'shield'
   | 'hyper'
-  | 'supply'
 
 export interface HexCoord {
   q: number

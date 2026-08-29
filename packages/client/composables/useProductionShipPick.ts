@@ -6,6 +6,7 @@ import {
   validateProductionBatch,
   validateShipPlacements,
 } from '@galaxy/rules'
+import { buildProductionOrderSlots } from '~/utils/production-order-slots'
 
 export type ShipBuildOrder = { type: ShipType }
 
@@ -15,6 +16,7 @@ export function useProductionShipPick(
   playerId: Ref<string>,
 ) {
   const active = ref(false)
+  const confirming = ref(false)
   const markerId = ref<string | null>(null)
   const orders = ref<ShipBuildOrder[]>([])
   const activeIndex = ref(0)
@@ -39,30 +41,42 @@ export function useProductionShipPick(
 
   const activeOrder = computed(() => orders.value[activeIndex.value] ?? null)
 
-  const allPlaced = computed(() => placements.value.length === orders.value.length)
+  const allPlaced = computed(() =>
+    orders.value.length > 0 && placements.value.length === orders.value.length,
+  )
 
   const activeShipLabel = computed(() => {
     const order = activeOrder.value
     return order ? SHIP_LABELS[order.type] : null
   })
 
+  const orderSlots = computed(() =>
+    buildProductionOrderSlots(orders.value, placements.value, {
+      confirming: confirming.value,
+    }),
+  )
+
   const bannerText = computed(() => {
-    if (!active.value || !marker.value) return ''
-    if (allPlaced.value) return 'Все корабли размещены — выполняем постройку…'
+    if (!active.value || !marker.value || confirming.value) return ''
     const label = activeShipLabel.value ?? 'корабль'
     const pending = orders.value.length - placements.value.length
     const m = marker.value
-    if (pending === 1) {
-      return `Кликните клетку в регионе для «${label}» (маркер (${m.coord.q}, ${m.coord.r}))`
+    if (allPlaced.value) {
+      return 'Все корабли на клетке маркера. Можно поменять расстановку или подтвердить постройку.'
     }
-    return `Кликните клетку для «${label}» · осталось ${pending} корабл(я/ей)`
+    if (pending === 1) {
+      return `Кликните клетку маркера (${m.coord.q}, ${m.coord.r}) для «${label}»`
+    }
+    return `Кликните клетку маркера (${m.coord.q}, ${m.coord.r}) для «${label}» · осталось ${pending} кораблей`
   })
 
   const reachableKeys = computed(() => {
-    if (!active.value || !snapshot.value || !map.value || !marker.value || allPlaced.value) {
+    if (!active.value || !snapshot.value || !map.value || !marker.value || allPlaced.value || confirming.value) {
       return [] as string[]
     }
-    return regionHexKeys.value.filter((key) => canPlaceAtKey(key))
+    const key = sourceKey.value
+    if (!key || !canPlaceAtKey(key)) return [] as string[]
+    return [key]
   })
 
   const destinationKeys = computed(() =>
@@ -71,6 +85,7 @@ export function useProductionShipPick(
 
   function reset() {
     active.value = false
+    confirming.value = false
     markerId.value = null
     orders.value = []
     activeIndex.value = 0
@@ -85,6 +100,7 @@ export function useProductionShipPick(
     activeIndex.value = 0
     placements.value = []
     error.value = null
+    confirming.value = false
     active.value = true
   }
 
@@ -94,7 +110,7 @@ export function useProductionShipPick(
 
   function canPlaceAtKey(key: string): boolean {
     if (!snapshot.value || !map.value || !marker.value || !activeOrder.value) return false
-    if (!regionHexKeys.value.includes(key)) return false
+    if (key !== sourceKey.value) return false
 
     const [q, r] = key.split(',').map(Number)
     const tentative: ShipPlacement[] = [
@@ -106,12 +122,9 @@ export function useProductionShipPick(
     )
   }
 
-  function tryFinish(): { markerId: string; ships: ShipPlacement[] } | null {
+  function validatedPlan(): { markerId: string; ships: ShipPlacement[] } | null {
     if (!snapshot.value || !map.value || !marker.value) return null
-    if (!allPlaced.value) {
-      activeIndex.value = placements.value.length
-      return null
-    }
+    if (!allPlaced.value) return null
 
     const plan = { markerId: marker.value.id, ships: [...placements.value] }
     const errors = validateProductionBatch(
@@ -124,13 +137,40 @@ export function useProductionShipPick(
       error.value = errors[0] ?? null
       return null
     }
-
-    const result = plan
-    reset()
-    return result
+    return plan
   }
 
-  function assignPlacement(coord: HexCoord): { markerId: string; ships: ShipPlacement[] } | null {
+  function enterConfirm(): boolean {
+    if (!allPlaced.value) return false
+    const plan = validatedPlan()
+    if (!plan) return false
+    error.value = null
+    confirming.value = true
+    return true
+  }
+
+  function backToPlacement() {
+    confirming.value = false
+    error.value = null
+  }
+
+  function confirm(): { markerId: string; ships: ShipPlacement[] } | null {
+    if (!confirming.value) return null
+    const plan = validatedPlan()
+    if (!plan) return null
+    reset()
+    return plan
+  }
+
+  function undoFromIndex(index: number) {
+    if (confirming.value) return
+    if (index < 0 || index >= placements.value.length) return
+    placements.value = placements.value.slice(0, index)
+    activeIndex.value = placements.value.length
+    error.value = null
+  }
+
+  function assignPlacement(coord: HexCoord): null {
     if (!activeOrder.value) return null
     placements.value = [
       ...placements.value,
@@ -138,11 +178,12 @@ export function useProductionShipPick(
     ]
     error.value = null
     activeIndex.value = placements.value.length
-    return tryFinish()
+    if (allPlaced.value) enterConfirm()
+    return null
   }
 
   function handleMapSelect(q: number, r: number): { markerId: string; ships: ShipPlacement[] } | null {
-    if (!active.value || !marker.value || allPlaced.value) return null
+    if (!active.value || !marker.value || confirming.value || allPlaced.value) return null
 
     const key = hexKey(q, r)
     if (!canPlaceAtKey(key)) {
@@ -153,8 +194,16 @@ export function useProductionShipPick(
     return assignPlacement({ q, r })
   }
 
+  /** Совместимость: раньше завершало заявку само. Теперь только вход в подтверждение. */
+  function tryFinish(): { markerId: string; ships: ShipPlacement[] } | null {
+    if (confirming.value) return confirm()
+    enterConfirm()
+    return null
+  }
+
   return {
     active,
+    confirming,
     markerId,
     marker,
     sourceKey,
@@ -164,6 +213,7 @@ export function useProductionShipPick(
     destinationKeys,
     orders,
     placements,
+    orderSlots,
     activeIndex,
     activeShipLabel,
     allPlaced,
@@ -172,5 +222,9 @@ export function useProductionShipPick(
     cancel,
     handleMapSelect,
     tryFinish,
+    confirm,
+    backToPlacement,
+    enterConfirm,
+    undoFromIndex,
   }
 }

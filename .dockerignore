@@ -1,0 +1,28 @@
+# Сборка
+node_modules
+**/node_modules
+.pnpm-store
+
+# Git и IDE
+.git
+.gitignore
+.cursor
+.vscode
+**/.DS_Store
+
+# Локальные данные разработки
+.dev-rooms
+.bug-reports
+**/.nuxt
+**/.output
+**/dist
+
+# Документация и тесты (не нужны в образе)
+docs
+harness/agent-smoke
+**/*.test.ts
+**/*.test.tsx
+
+# Кэши
+**/.turbo
+**/coverage

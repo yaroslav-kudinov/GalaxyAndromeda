@@ -1,15 +1,13 @@
-import { MAX_SHIPS_PER_CELL } from './constants.js'
-import { PLAYER_COLORS } from './constants.js'
+import { MAX_SHIPS_PER_CELL, PLAYER_COLORS, SHIP_TYPES } from './constants.js'
 import { gameStateFromMap } from './game.js'
 import { normalizeMapDefinition, validateMapDefinition } from './map-editor.js'
 import { buildSpatialSummary } from './observation/ascii-map.js'
+import { isValidProductionRegionSize } from './regions.js'
 import {
-  BASE_PRODUCTION_MARKERS_PER_PLAYER,
-  isValidProductionRegionSize,
-  productionMarkerUnlockRegionCountForPlayer,
-  SECOND_PRODUCTION_MARKER_UNLOCK_REGION_COUNT,
-  THIRD_PRODUCTION_MARKER_UNLOCK_REGION_COUNT,
-} from './regions.js'
+  actionMarkerLimitForPlayer,
+  ensureMarkerLimits,
+  productionMarkerLimitForPlayer,
+} from './marker-pools.js'
 import { syncActionMarkerTurnTracking, syncProductionMarkerTurnTracking } from './markers.js'
 import type {
   CellState,
@@ -19,24 +17,48 @@ import type {
   MapDefinition,
   Phase,
   PlayerState,
+  ShipType,
 } from './types.js'
 import { hexKey, parseHexKey } from './types.js'
 
+
 export const GALAXY_SAVE_FORMAT = 'galaxy-save' as const
 export const GALAXY_SAVE_VERSION = 1 as const
-export const MAX_ACTION_MARKERS_PER_PLAYER = 6
+
+const WINDOWS_ILLEGAL_FILENAME_CHARS = /[\\/:*?"<>|]/g
+const MAX_GALAXY_SAVE_DOWNLOAD_BASE_LEN = 120
+
+function sanitizeGalaxySaveDownloadBase(raw: string): string {
+  return raw
+    .replace(/\.(galaxy\.)?json$/i, '')
+    .replace(WINDOWS_ILLEGAL_FILENAME_CHARS, '_')
+    .replace(/[. ]+$/g, '')
+    .trim()
+    .slice(0, MAX_GALAXY_SAVE_DOWNLOAD_BASE_LEN)
+    .replace(/[. ]+$/g, '')
+    .trim()
+}
 
 /**
- * Базовый маркер доступен всегда. Второй открывают 3, третий — 5 отдельных
- * контролируемых регионов от 4 клеток.
+ * Имя файла для скачивания сохранения: отображаемое название карты, не id.
+ * Русские буквы оставляем как есть; недопустимые в Windows символы заменяем на `_`.
+ * Если название пустое — fallback на id. Расширение всегда `.galaxy.json`.
  */
-export function maxProductionMarkersForPlayer(state: GameState, ownerId: string): number {
-  const unlockRegionCount = productionMarkerUnlockRegionCountForPlayer(state, ownerId)
-  return (
-    BASE_PRODUCTION_MARKERS_PER_PLAYER
-    + (unlockRegionCount >= SECOND_PRODUCTION_MARKER_UNLOCK_REGION_COUNT ? 1 : 0)
-    + (unlockRegionCount >= THIRD_PRODUCTION_MARKER_UNLOCK_REGION_COUNT ? 1 : 0)
-  )
+export function galaxySaveDownloadFileName(
+  displayName: string | undefined | null,
+  fallbackId: string,
+): string {
+  const fromName = sanitizeGalaxySaveDownloadBase(displayName ?? '')
+  if (fromName) return `${fromName}.galaxy.json`
+  const fromId = sanitizeGalaxySaveDownloadBase(fallbackId)
+  return `${fromId || 'galaxy-save'}.galaxy.json`
+}
+
+/**
+ * Лимит маркеров производства — купленный пул (ADR 008), не разблокировка регионами.
+ */
+export function maxProductionMarkersForPlayer(game: GameSnapshot, ownerId: string): number {
+  return productionMarkerLimitForPlayer(game, ownerId)
 }
 
 export { validProductionRegionsForPlayer } from './regions.js'
@@ -278,6 +300,8 @@ export interface GameSnapshot {
   actionMarkerResolvedThisTurn?: boolean
   /** Активный игрок уже построил по маркеру в текущем ходу фазы «Производство» */
   productionMarkerResolvedThisTurn?: boolean
+  /** Кто уже купил доп. маркер производства в этом игровом ходе */
+  productionMarkerBoughtByPlayerThisTurn?: Record<string, boolean>
   /** Кто реально в игре (остальные слоты карты пропускаются в очереди хода) */
   participatingPlayerIds?: string[]
   /** Глобальное событие текущего хода (одно на всех игроков) */
@@ -295,6 +319,10 @@ export interface GameSnapshot {
   overtimeRegionByPlayer?: Record<string, string>
   /** Потраченные фишки производства за ход (событие «Всё для фронта») */
   productionTokensSpentThisTurn?: Record<string, number>
+  /** Лимит маркеров действия: 2 + центры власти, заморожен в начале хода (ADR 011) */
+  actionMarkerLimitByPlayer?: Record<string, number>
+  /** Купленный лимит маркеров производства (старт 1, макс 3) */
+  productionMarkerLimitByPlayer?: Record<string, number>
 }
 
 export interface GalaxySaveFile {
@@ -307,6 +335,14 @@ export interface GalaxySaveFile {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function isKnownShipType(type: string): type is ShipType {
+  return (SHIP_TYPES as readonly string[]).includes(type)
+}
+
+function stripUnknownShips<T extends { type: string }>(ships: T[] | undefined): T[] {
+  return (ships ?? []).filter((ship) => isKnownShipType(ship.type))
 }
 
 export function isGalaxySaveFile(value: unknown): value is GalaxySaveFile {
@@ -333,7 +369,7 @@ export function galaxySaveFromMap(map: MapDefinition, savedAt = new Date().toISO
 }
 
 export function gameSnapshotFromGameState(state: GameState): GameSnapshot {
-  return {
+  const snapshot: GameSnapshot = {
     phase: state.phase,
     turnNumber: state.turnNumber,
     activePlayerId: state.activePlayerId,
@@ -341,7 +377,7 @@ export function gameSnapshotFromGameState(state: GameState): GameSnapshot {
     cells: state.cells.map((c) => ({
       ...c,
       resourceTokens: c.resourceTokens.map((t) => ({ ...t })),
-      ships: c.ships.map((s) => ({ ...s })),
+      ships: stripUnknownShips(c.ships).map((s) => ({ ...s })),
       actionMarkerId: null,
       productionMarkerId: null,
     })),
@@ -352,6 +388,8 @@ export function gameSnapshotFromGameState(state: GameState): GameSnapshot {
     actionMarkerResolvedThisTurn: false,
     productionMarkerResolvedThisTurn: false,
   }
+  ensureMarkerLimits(snapshot)
+  return snapshot
 }
 
 /** Дополняет список игроков до slotCount (player-1 … player-N) */
@@ -445,7 +483,7 @@ function normalizeGameSnapshot(game: GameSnapshot, map?: MapDefinition): GameSna
     isPowerCenter: !!c.isPowerCenter,
     controlOwnerId: c.controlOwnerId ?? null,
     resourceTokens: c.resourceTokens ?? [],
-    ships: c.ships ?? [],
+    ships: stripUnknownShips(c.ships),
     actionMarkerId: c.actionMarkerId ?? null,
     productionMarkerId: c.productionMarkerId ?? null,
   }))
@@ -487,8 +525,18 @@ function normalizeGameSnapshot(game: GameSnapshot, map?: MapDefinition): GameSna
     productionTokensSpentThisTurn: game.productionTokensSpentThisTurn
       ? { ...game.productionTokensSpentThisTurn }
       : undefined,
+    productionMarkerBoughtByPlayerThisTurn: game.productionMarkerBoughtByPlayerThisTurn
+      ? { ...game.productionMarkerBoughtByPlayerThisTurn }
+      : undefined,
+    actionMarkerLimitByPlayer: game.actionMarkerLimitByPlayer
+      ? { ...game.actionMarkerLimitByPlayer }
+      : undefined,
+    productionMarkerLimitByPlayer: game.productionMarkerLimitByPlayer
+      ? { ...game.productionMarkerLimitByPlayer }
+      : undefined,
   }
 
+  ensureMarkerLimits(normalized)
   if (map) refreshProductionMarkerRegionIds(normalized, map)
   return normalized
 }
@@ -574,8 +622,9 @@ export function validateGameSnapshot(game: GameSnapshot, map: MapDefinition): st
 
     const count = (actionByPlayer.get(marker.ownerId) ?? 0) + 1
     actionByPlayer.set(marker.ownerId, count)
-    if (count > MAX_ACTION_MARKERS_PER_PLAYER) {
-      errors.push(`Player ${marker.ownerId}: more than ${MAX_ACTION_MARKERS_PER_PLAYER} action markers`)
+    const limit = actionMarkerLimitForPlayer(game, marker.ownerId)
+    if (count > limit) {
+      errors.push(`Player ${marker.ownerId}: more than ${limit} action markers`)
     }
     if (marker.placedInPhase !== 'planning' && marker.placedInPhase !== 'actions') {
       errors.push(`Action marker ${marker.id}: invalid placedInPhase`)
@@ -583,17 +632,10 @@ export function validateGameSnapshot(game: GameSnapshot, map: MapDefinition): st
   }
 
   const productionByCell = new Map<string, string>()
-  const productionByRegion = new Map<string, string>()
   for (const marker of game.productionMarkers) {
     const key = hexKey(marker.coord.q, marker.coord.r)
     if (productionByCell.has(key)) errors.push(`${key}: multiple production markers`)
     productionByCell.set(key, marker.ownerId)
-
-    const regionKey = `${marker.ownerId}:${marker.targetRegionId}`
-    if (productionByRegion.has(regionKey)) {
-      errors.push(`Region ${marker.targetRegionId}: multiple production markers for ${marker.ownerId}`)
-    }
-    productionByRegion.set(regionKey, marker.id)
 
     if (!marker.targetRegionId?.trim()) {
       errors.push(`Production marker ${marker.id}: missing targetRegionId`)
@@ -601,8 +643,7 @@ export function validateGameSnapshot(game: GameSnapshot, map: MapDefinition): st
   }
 
   for (const player of game.players) {
-    const state = gameStateFromSnapshot(game, map.id)
-    const limit = maxProductionMarkersForPlayer(state, player.id)
+    const limit = maxProductionMarkersForPlayer(game, player.id)
     const count = game.productionMarkers.filter((m) => m.ownerId === player.id).length
     if (count > limit) {
       errors.push(
@@ -712,6 +753,11 @@ export function gameSnapshotFromObservation(
       'productionTokensSpentThisTurn',
       preserve?.productionTokensSpentThisTurn,
     ),
+    productionMarkerBoughtByPlayerThisTurn: fromObservationField(
+      mech,
+      'productionMarkerBoughtByPlayerThisTurn',
+      preserve?.productionMarkerBoughtByPlayerThisTurn,
+    ),
     overtimeRegionByPlayer: fromObservationField(
       mech,
       'overtimeRegionByPlayer',
@@ -719,6 +765,16 @@ export function gameSnapshotFromObservation(
     ),
     pendingCombat: fromObservationField(mech, 'pendingCombat', preserve?.pendingCombat),
     gameOver: fromObservationField(mech, 'gameOver', preserve?.gameOver),
+    actionMarkerLimitByPlayer: fromObservationField(
+      mech,
+      'actionMarkerLimitByPlayer',
+      preserve?.actionMarkerLimitByPlayer,
+    ),
+    productionMarkerLimitByPlayer: fromObservationField(
+      mech,
+      'productionMarkerLimitByPlayer',
+      preserve?.productionMarkerLimitByPlayer,
+    ),
   }, map)
 
   if (hasServerMarkers || !preserve) return game

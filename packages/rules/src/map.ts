@@ -57,14 +57,16 @@ export {
   DEFAULT_SYMMETRY_SETTINGS,
   SYMMETRY_AXIS_LABELS,
   SYMMETRY_PLAYER_OPTIONS,
+  getSymmetryAxisLabels,
   getSymmetryOrbit,
+  horizontalThroughCentersPossible,
   reflectHex,
   remapCellContent,
   remapPlayerSlot,
   rotateHex,
   symmetryStepIndex,
 } from './hex-symmetry.js'
-export type { SymmetryAxisKind, SymmetryPlayerCount, SymmetrySettings } from './hex-symmetry.js'
+export type { HexGridOrientation, SymmetryAxisKind, SymmetryPlayerCount, SymmetrySettings } from './hex-symmetry.js'
 export {
   addCellOrbit,
   expandMapStructure,

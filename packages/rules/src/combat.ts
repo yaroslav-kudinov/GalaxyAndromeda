@@ -14,7 +14,9 @@ import { SHIP_LABELS } from './constants.js'
 import { buildBombardmentPreview } from './bombardment.js'
 import { getTurnModifiers, canRetreatFromBattle } from './events.js'
 import { hexDistance } from './map.js'
+import { transferControlIfEnemyOwned } from './claim.js'
 import { removeStaleProductionMarkerAt } from './markers.js'
+import { canSupportCombatSide, isEliminatedPlayer } from './surrender.js'
 import type { GameSnapshot, RuntimeCellState } from './save-file.js'
 import type {
   PendingCombat,
@@ -48,8 +50,6 @@ export const SHIP_DESTROY_COST: Record<ShipType, number> = {
 
   hyper: 4,
 
-  supply: 4,
-
 }
 
 
@@ -68,6 +68,14 @@ export const SHIP_COMBAT_DICE: Partial<Record<ShipType, number>> = {
 
 
 
+/**
+ * Число граней боевого кубика на гексе (ships.yaml → combatDieFaces).
+ * По умолчанию d6; у крейсера — d4.
+ */
+export const SHIP_COMBAT_DIE_FACES: Partial<Record<ShipType, number>> = {
+  cruiser: 4,
+}
+
 /** supportDice по ships.yaml */
 
 export const SHIP_SUPPORT_DICE: Partial<Record<ShipType, number>> = {
@@ -80,7 +88,7 @@ export const SHIP_SUPPORT_DICE: Partial<Record<ShipType, number>> = {
 
 }
 
-/** Число граней кубика supportDice по ships.yaml (бой на гексе остаётся d6). */
+/** Число граней кубика supportDice по ships.yaml. */
 export const SHIP_SUPPORT_DIE_FACES: Partial<Record<ShipType, number>> = {
 
   cruiser: 4,
@@ -144,8 +152,6 @@ export const DESTRUCTION_PRIORITY: ShipType[] = [
   'cruiser',
 
   'battleship',
-
-  'supply',
 
 ]
 
@@ -863,7 +869,7 @@ export function compareDestructionPriority(a: ShipType, b: ShipType): number {
 
 
 
-/** Клетка оспариваемая для **движения**: есть вражеский корабль не-supply. */
+/** Клетка оспариваемая для **движения**: есть любой вражеский корабль. */
 export function isCombatDestination(
   game: GameSnapshot,
   attackerId: string,
@@ -872,7 +878,7 @@ export function isCombatDestination(
   const cell = cellAt(game, dest)
   if (!cell) return false
 
-  return cell.ships.some((s) => s.ownerId !== attackerId && s.type !== 'supply')
+  return cell.ships.some((s) => s.ownerId !== attackerId)
 }
 
 /** Цель обстрела: любой вражеский корабль или чужой контроль. */
@@ -1205,8 +1211,14 @@ export function buildCombatPreview(
   const assignedAttackerSupport: CombatSupportShip[] = []
   const assignedDefenderSupport: CombatSupportShip[] = []
   for (const [playerId, ships] of supportCandidates) {
-    if (options.supportSides?.[playerId] === 'attacker') assignedAttackerSupport.push(...ships)
-    if (options.supportSides?.[playerId] === 'defender') assignedDefenderSupport.push(...ships)
+    if (options.supportSides?.[playerId] === 'attacker'
+      && canSupportCombatSide(game, 'attacker', attackerId, [defenderId])) {
+      assignedAttackerSupport.push(...ships)
+    }
+    if (options.supportSides?.[playerId] === 'defender'
+      && canSupportCombatSide(game, 'defender', attackerId, [defenderId])) {
+      assignedDefenderSupport.push(...ships)
+    }
   }
 
   if (attSupport.length || defSupport.length) {
@@ -1466,7 +1478,8 @@ export function rollCombatRound(
       const diceCount = SHIP_COMBAT_DICE[participant.type] ?? 0
       if (diceCount <= 0) continue
 
-      const combatRolls = rollD6(diceCount, rng, fixedDiceValue)
+      const faces = SHIP_COMBAT_DIE_FACES[participant.type] ?? 6
+      const combatRolls = rollDice(diceCount, faces, rng, fixedDiceValue)
       const total = combatRolls.reduce((a, b) => a + b, 0)
       shipRolls.push({
         shipId: participant.shipId,
@@ -3030,6 +3043,7 @@ export function stopPendingCombat(
     found.cell.ships = found.cell.ships.filter((ship) => ship.id !== shipId)
     destination.ships.push({ id: found.id, type: found.type, ownerId: found.ownerId })
   }
+  transferControlIfEnemyOwned(game, destination, playerId)
   // Отступление / уход флота: маркер владельца без кораблей на клетке боя снимается.
   removeOrphanedActionMarkersAt(game, { q, r })
   game.pendingCombat = undefined
@@ -3272,8 +3286,14 @@ export function updateCombatPrep(
     return { errors: ['Вы не можете поддержать этот бой'] }
   }
   if (!isAttacker && !isDefender) {
+    if (isEliminatedPlayer(game, playerId)) {
+      return { errors: ['Выбывший игрок не может поддерживать'] }
+    }
     if (supportSide == null) delete prep.combatOptions.supportSides?.[playerId]
     else {
+      if (!canSupportCombatSide(game, supportSide, pending.attackerId, pending.defenderIds)) {
+        return { errors: ['Нельзя поддерживать выбывшую сторону'] }
+      }
       prep.combatOptions.supportSides = {
         ...prep.combatOptions.supportSides,
         [playerId]: supportSide,

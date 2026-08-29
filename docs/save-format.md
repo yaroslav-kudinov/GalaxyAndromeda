@@ -39,9 +39,12 @@ Plain `MapDefinition` JSON (no `format` field) is accepted on import and wrapped
 | `pendingEvents` | Legacy placeholder; use `turnEvent` |
 | `turnEvent` | `{ eventId, turnNumber, resolvedAt? }` — global event for current turn |
 | `productionTokensSpentThisTurn` | Per-player production token spend (event «Всё для фронта») |
-| `overtimeRegionByPlayer` | Region id used for overtime production this turn |
-| `actionMarkers` | Planning/Actions markers (max **6 per player**, **1 per cell**) |
-| `productionMarkers` | 1 per **region** per player (1 per hex max); applies to whole region |
+| `productionMarkerBoughtByPlayerThisTurn` | Who already bought an extra production-marker slot this game turn |
+| `overtimeRegionByPlayer` | Legacy; unused (old overtime token-spend tracking) |
+| `actionMarkers` | Planning/Actions markers (1 per cell); cap = frozen `actionMarkerLimitByPlayer` |
+| `productionMarkers` | **1 per hex**; several per **region** allowed unless event `mandatory-overtime`; bought capacity in `productionMarkerLimitByPlayer` |
+| `actionMarkerLimitByPlayer` | Frozen at turn start: **2 + controlled power centers** (not bought) |
+| `productionMarkerLimitByPlayer` | Per-player production-marker pool (default **1**, max **3**) |
 
 ### Runtime cell
 
@@ -96,9 +99,10 @@ Extends `CellState` with optional refs:
 
 ## Validation limits
 
-- `MAX_ACTION_MARKERS_PER_PLAYER = 6` (may change in future rules revision)
-- Production markers: **at most one per valid controlled region** per player (region ≥ 3 cells).
-  `maxProductionMarkersForPlayer` gives 1 base marker, 2 with 3 controlled regions of ≥ 4 cells,
-  and 3 with 5 such regions.
+- Action markers: at most one per hex; per-player cap = `actionMarkerLimitByPlayer` (**2 + power centers**, frozen at turn start, not bought)
+- Production markers: **at most one per hex**. Several per region per player are legal by default.
+  Event `mandatory-overtime` («Нормирование производства») limits to **one per region** for the turn
+  and strips extras into the unused pool (keep lowest marker id). Capacity is the bought
+  pool (`productionMarkerLimitByPlayer`: start **1**, max **3**), not unlocked by region count.
 - One action marker and one production marker per hex
 - All game cells must exist on `map`

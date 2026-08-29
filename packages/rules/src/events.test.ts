@@ -1,19 +1,20 @@
 import { describe, expect, it } from 'vitest'
 import {
-  applyEventImmediateEffects,
   buildEventDeckTemplate,
   createShuffledEventDeck,
   drawNextEventFromDeck,
   drawRandomEvent,
   ensureTurnEventForPhase,
+  enforceOneProductionMarkerPerRegion,
   EVENT_DECK_COPIES,
   EVENT_DECK_SIZE,
   getEffectiveMoveRange,
   getEffectiveTokenValue,
+  getEventCard,
   getTurnModifiers,
   getTurnEventHistory,
   isMovementIntoCellBlocked,
-  isTurnEventResolved,
+  migrateLegacyEventId,
   resolveTurnEvent,
   type EventCardId,
 } from './events.js'
@@ -100,7 +101,6 @@ describe('events', () => {
     expect(EVENT_DECK_SIZE).toBeGreaterThan(14)
     expect(EVENT_DECK_COPIES['empty-void']).toBe(3)
     expect(EVENT_DECK_COPIES['ammo-detonation']).toBe(1)
-    expect(EVENT_DECK_COPIES['saboteurs-activation']).toBe(1)
     expect(EVENT_DECK_COPIES['stand-to-death']).toBe(1)
     expect(template.filter((id) => id === 'empty-void')).toHaveLength(3)
     expect(template.filter((id) => id === 'ammo-detonation')).toHaveLength(1)
@@ -136,32 +136,9 @@ describe('events', () => {
     expect(game.eventDeck.length).toBe(beforeLen - 1)
   })
 
-  it('resolveTurnEvent applies saboteurs in controlled regions', () => {
-    const map = createEmptyMap()
-    map.cells.push(
-      { q: 1, r: 0, startPlayer: 1, resourceToken: { type: 'credits', value: 3 } },
-      { q: 2, r: 0, startPlayer: 1, resourceToken: { type: 'production', value: 2 } },
-    )
-    const game = gameSnapshotFromMap(map)
-    game.phase = 'events'
-    game.turnNumber = 1
-    game.turnEvent = { eventId: 'saboteurs-activation', turnNumber: 1 }
-    setPlayerControl(game, 'player-1', [
-      { q: 0, r: 0 },
-      { q: 1, r: 0 },
-      { q: 2, r: 0 },
-    ])
-    resolveTurnEvent(game)
-    expect(isTurnEventResolved(game)).toBe(true)
-    const p1Cell = game.cells.find((c) => c.coord.q === 1)!
-    expect(p1Cell.resourceTokens[0]?.faceUp).toBe(false)
-  })
-
-  it('peoples-donation restores all tokens face-up', () => {
-    const game = gameSnapshotFromMap(createEmptyMap())
-    game.cells[0].resourceTokens = [{ type: 'credits', value: 4, faceUp: false }]
-    applyEventImmediateEffects(game, 'peoples-donation')
-    expect(game.cells[0].resourceTokens[0]?.faceUp).toBe(true)
+  it('migrateLegacyEventId maps removed flip events to empty-void', () => {
+    expect(migrateLegacyEventId('saboteurs-activation')).toBe('empty-void')
+    expect(migrateLegacyEventId('peoples-donation')).toBe('empty-void')
   })
 
   it('magnetic storm: destroyer move 3→2, min 1', () => {
@@ -233,9 +210,10 @@ describe('events', () => {
     expect(getEffectiveDestroyCost(game, 'destroyer')).toBe(6)
   })
 
-  it('production accident blocks supply build', () => {
+  it('production accident blocks extra marker purchases', () => {
     const game = gameWithEvent('production-accident')
-    expect(getTurnModifiers(game).cannotBuildShipTypes).toContain('supply')
+    expect(getTurnModifiers(game).cannotBuyExtraMarkers).toBe(true)
+    expect(getTurnModifiers(game).cannotBuildShipTypes).toEqual([])
   })
 
   it('ammo detonation blocks combat ships only', () => {
@@ -250,15 +228,101 @@ describe('events', () => {
     expect(getTurnModifiers(game).maxProductionTokensPerPlayer).toBe(3)
   })
 
+  it('mandatory-overtime limits to one production marker per owner region', () => {
+    const game = gameWithEvent('mandatory-overtime')
+    expect(getTurnModifiers(game).oneProductionMarkerPerRegion).toBe(true)
+    const card = getEventCard('mandatory-overtime')
+    expect(card.name).toBe('Нормирование производства')
+    expect(card.description).toContain('Не больше одного маркера производства на регион')
+  })
+
+  it('mandatory-overtime strips extra production markers, keeping lowest id', () => {
+    const map = createEmptyMap()
+    map.cells.push({ q: 1, r: 0, startPlayer: 1 }, { q: 2, r: 0, startPlayer: 1 })
+    const game = gameSnapshotFromMap(map)
+    setPlayerControl(game, 'player-1', [
+      { q: 0, r: 0 },
+      { q: 1, r: 0 },
+      { q: 2, r: 0 },
+    ])
+    game.productionMarkers = [
+      {
+        id: 'prod-b',
+        ownerId: 'player-1',
+        coord: { q: 1, r: 0 },
+        targetRegionId: 'region-player-1-0,0',
+      },
+      {
+        id: 'prod-a',
+        ownerId: 'player-1',
+        coord: { q: 0, r: 0 },
+        targetRegionId: 'region-player-1-0,0',
+      },
+      {
+        id: 'prod-c',
+        ownerId: 'player-1',
+        coord: { q: 2, r: 0 },
+        targetRegionId: 'region-player-1-0,0',
+      },
+    ]
+    const cellA = game.cells.find((c) => c.coord.q === 0 && c.coord.r === 0)!
+    const cellB = game.cells.find((c) => c.coord.q === 1 && c.coord.r === 0)!
+    const cellC = game.cells.find((c) => c.coord.q === 2 && c.coord.r === 0)!
+    cellA.productionMarkerId = 'prod-a'
+    cellB.productionMarkerId = 'prod-b'
+    cellC.productionMarkerId = 'prod-c'
+    game.productionMarkerResolvedThisTurn = false
+
+    const messages = enforceOneProductionMarkerPerRegion(game)
+    expect(messages.length).toBeGreaterThan(0)
+    expect(game.productionMarkers.map((m) => m.id)).toEqual(['prod-a'])
+    expect(cellA.productionMarkerId).toBe('prod-a')
+    expect(cellB.productionMarkerId).toBeNull()
+    expect(cellC.productionMarkerId).toBeNull()
+    expect(game.productionMarkerResolvedThisTurn).toBeFalsy()
+  })
+
+  it('resolveTurnEvent applies mandatory-overtime by stripping extras', () => {
+    const map = createEmptyMap()
+    map.cells.push({ q: 1, r: 0, startPlayer: 1 }, { q: 2, r: 0, startPlayer: 1 })
+    const game = gameSnapshotFromMap(map)
+    setPlayerControl(game, 'player-1', [
+      { q: 0, r: 0 },
+      { q: 1, r: 0 },
+      { q: 2, r: 0 },
+    ])
+    game.phase = 'events'
+    game.turnNumber = 1
+    game.turnEvent = { eventId: 'mandatory-overtime', turnNumber: 1 }
+    game.productionMarkers = [
+      {
+        id: 'prod-z',
+        ownerId: 'player-1',
+        coord: { q: 0, r: 0 },
+        targetRegionId: 'stale',
+      },
+      {
+        id: 'prod-m',
+        ownerId: 'player-1',
+        coord: { q: 1, r: 0 },
+        targetRegionId: 'stale',
+      },
+    ]
+    game.cells[0]!.productionMarkerId = 'prod-z'
+    game.cells[1]!.productionMarkerId = 'prod-m'
+
+    expect(resolveTurnEvent(game)).toEqual([])
+    expect(game.productionMarkers.map((m) => m.id)).toEqual(['prod-m'])
+    expect(game.turnEvent?.resolvedAt).toBeTruthy()
+  })
+
   it('smoke: each event id produces modifiers or is no-op', () => {
     const ids: EventCardId[] = [
       'magnetic-storm',
       'empty-void',
       'stand-to-death',
-      'saboteurs-activation',
       'production-accident',
       'ammo-detonation',
-      'peoples-donation',
       'mandatory-overtime',
       'hyper-gap',
       'all-for-front',

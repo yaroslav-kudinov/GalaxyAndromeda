@@ -1,4 +1,8 @@
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
 const useHmrTunnel = process.env.NUXT_HMR_TUNNEL === '1'
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 
 export default defineNuxtConfig({
   ssr: false,
@@ -22,6 +26,9 @@ export default defineNuxtConfig({
   },
   vite: {
     server: {
+      fs: {
+        allow: [repoRoot],
+      },
       allowedHosts: ['.ru.tuna.am'],
       // Для tuna (*.ru.tuna.am) используйте NUXT_HMR_TUNNEL=1.
       // Без него Vite использует ws://localhost:3000.
@@ -46,7 +53,6 @@ export default defineNuxtConfig({
         '/api': {
           target: 'http://127.0.0.1:3001',
           changeOrigin: true,
-          rewrite: (path) => path.replace(/^\/api/, ''),
         },
       },
     },

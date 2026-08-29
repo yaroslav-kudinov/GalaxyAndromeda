@@ -11,7 +11,7 @@ function twoStartMap(): MapDefinition {
     cells: [
       { q: 0, r: 0, startPlayer: 1, startingShips: [{ type: 'destroyer', player: 1 }] },
       { q: 1, r: 0, startPlayer: 2, startingShips: [{ type: 'destroyer', player: 2 }] },
-      { q: 2, r: 0, startPlayer: 3, startingShips: [{ type: 'supply', player: 3 }] },
+      { q: 2, r: 0, startPlayer: 3, startingShips: [{ type: 'destroyer', player: 3 }] },
     ],
   })
 }

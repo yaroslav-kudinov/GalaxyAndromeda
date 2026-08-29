@@ -31,7 +31,6 @@ export const MAX_SHIPS_PER_CELL = MAX_SHIPS_PER_CELL_PER_PLAYER * 2
 /** Max ships of each class per player on the map (fleet cap for production) */
 export const MAX_FLEET_SIZE_PER_PLAYER: Record<ShipType, number> = {
   destroyer: 16,
-  supply: 10,
   cruiser: 12,
   battleship: 6,
   shield: 4,
@@ -39,7 +38,6 @@ export const MAX_FLEET_SIZE_PER_PLAYER: Record<ShipType, number> = {
 }
 
 export const SHIP_TYPES: ShipType[] = [
-  'supply',
   'destroyer',
   'cruiser',
   'battleship',
@@ -48,7 +46,6 @@ export const SHIP_TYPES: ShipType[] = [
 ]
 
 export const SHIP_LABELS: Record<ShipType, string> = {
-  supply: 'Корабль снабжения',
   destroyer: 'Эсминец',
   cruiser: 'Крейсер',
   battleship: 'Линкор',
@@ -57,7 +54,6 @@ export const SHIP_LABELS: Record<ShipType, string> = {
 }
 
 export const SHIP_ABBREV: Record<ShipType, string> = {
-  supply: 'SP',
   destroyer: 'DD',
   cruiser: 'CR',
   battleship: 'BB',

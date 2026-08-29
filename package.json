@@ -6,6 +6,8 @@
     "dev": "pnpm -r --parallel --filter @galaxy/client --filter @galaxy/server run dev",
     "dev:tunnel": "node harness/scripts/dev-tunnel.mjs",
     "build": "pnpm -r run build",
+    "build:deploy": "pnpm --filter @galaxy/rules run build && pnpm --filter @galaxy/client run generate && pnpm --filter @galaxy/server run build",
+    "start": "node packages/server/dist/index.js",
     "test": "pnpm -r run test",
     "typecheck": "pnpm -r run typecheck",
     "smoke": "tsx harness/agent-smoke/run-smoke.ts",

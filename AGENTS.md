@@ -16,8 +16,12 @@ pnpm install
 pnpm dev
 pnpm test
 pnpm typecheck
+pnpm run build:deploy   # production: rules + nuxt generate + server
+pnpm start              # один процесс: API /api/* + статика клиента
 pnpm --filter @galaxy/mcp-server dev
 ```
+
+Деплой на Railway: [docs/deploy-railway.md](./docs/deploy-railway.md).
 
 ## Package boundaries
 
@@ -55,4 +59,5 @@ See [docs/agent-workflows.md](./docs/agent-workflows.md).
 
 1. `pnpm test && pnpm typecheck` in your scope
 2. Update `docs/changelog.md`
-3. ADR for contract changes in `docs/decisions/`
+3. Structured patch note in `docs/patch-notes/` (see `.cursor/rules/patch-notes.mdc`: человеческий русский для игрока, глоссарий, без сокращений и англицизмов в прозе)
+4. ADR for contract changes in `docs/decisions/`

@@ -8,7 +8,8 @@ import {
   SHIP_LABELS,
   SHIP_TYPES,
   DEFAULT_SYMMETRY_SETTINGS,
-  SYMMETRY_AXIS_LABELS,
+  getSymmetryAxisLabels,
+  horizontalThroughCentersPossible,
   SYMMETRY_PLAYER_OPTIONS,
   addCellOrbit,
   applyCellContent,
@@ -33,10 +34,12 @@ import {
   type SymmetrySettings,
   type GalaxySaveFile,
   galaxySaveFromMap,
+  galaxySaveDownloadFileName,
   parseGalaxySave,
   serializeGalaxySave,
   validateMapDefinition,
 } from '@galaxy/rules'
+import { loadStoredOrientation, storeOrientation, type HexOrientation } from '~/utils/hex-layout'
 
 definePageMeta({ layout: 'immersive' })
 
@@ -159,6 +162,28 @@ const playerSlots = computed(() =>
 const symmetryHint = computed(
   () => SYMMETRY_PLAYER_OPTIONS.find((opt) => opt.count === symmetry.value.playerCount)?.hint ?? '',
 )
+
+const boardOrientation = ref<HexOrientation>(loadStoredOrientation())
+
+const symmetryAxisLabels = computed(() =>
+  getSymmetryAxisLabels(symmetry.value.axisKind, boardOrientation.value),
+)
+
+const showSymmetryAxisControls = computed(
+  () => symmetry.value.playerCount === 2 || symmetry.value.playerCount === 4,
+)
+
+const horizontalThroughCentersHint = computed(() => {
+  if (!showSymmetryAxisControls.value) return ''
+  if (symmetry.value.axisKind !== 'line') return ''
+  if (horizontalThroughCentersPossible(boardOrientation.value)) return ''
+  return 'Горизонтальное зеркало через центры клеток в этой ориентации карты невозможно: гексы стоят гранью вверх и не выстраиваются в горизонтальный ряд центров. Переключите поле на «углом вверх» — тогда появится кнопка «горизонталь».'
+})
+
+function setBoardOrientation(orientation: HexOrientation) {
+  boardOrientation.value = orientation
+  storeOrientation(orientation)
+}
 
 const symmetryOrbitKeys = computed(() => {
   if (!symmetry.value.enabled || !selectedKey.value) return [] as string[]
@@ -372,7 +397,7 @@ function exportJson() {
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
-  a.download = `${map.value.id}.galaxy.json`
+  a.download = galaxySaveDownloadFileName(map.value.name, map.value.id)
   a.click()
   URL.revokeObjectURL(url)
 }
@@ -430,9 +455,11 @@ useMapEditorHotkeys({
         :ghosts="ghosts"
         :selected-key="selectedKey"
         :symmetry-orbit-keys="symmetryOrbitKeys"
+        :orientation="boardOrientation"
         mode="editor"
         @select="selectCell"
         @add-ghost="addCell"
+        @update:orientation="setBoardOrientation"
       />
     </section>
 
@@ -597,7 +624,7 @@ useMapEditorHotkeys({
               </button>
             </div>
             <p class="hint">{{ symmetryHint }}</p>
-            <template v-if="symmetry.playerCount === 2">
+            <template v-if="showSymmetryAxisControls">
               <div class="radio-row">
                 <label>
                   <input v-model="symmetry.axisKind" type="radio" value="line" />
@@ -610,7 +637,7 @@ useMapEditorHotkeys({
               </div>
               <div class="axis-row">
                 <button
-                  v-for="(label, idx) in SYMMETRY_AXIS_LABELS[symmetry.axisKind]"
+                  v-for="(label, idx) in symmetryAxisLabels"
                   :key="label"
                   type="button"
                   class="symmetry-btn"
@@ -620,10 +647,20 @@ useMapEditorHotkeys({
                   {{ label }}
                 </button>
               </div>
+              <p v-if="horizontalThroughCentersHint" class="hint warn">{{ horizontalThroughCentersHint }}</p>
+              <button
+                v-if="horizontalThroughCentersHint"
+                type="button"
+                class="symmetry-expand"
+                @click="setBoardOrientation('pointy')"
+              >
+                Показать карту углом вверх
+              </button>
             </template>
             <button type="button" class="symmetry-expand" @click="expandSymmetryStructure">
-              Досоздать
+              Досоздать недостающие клетки
             </button>
+            <p class="hint">Кисть уже зеркалит новые клетки. «Досоздать» добавляет недостающие копии уже нарисованных клеток.</p>
           </template>
         </section>
         </div>
@@ -841,6 +878,9 @@ useMapEditorHotkeys({
   margin: 0 0 0.35rem;
   font-size: 0.75rem;
   color: #64748b;
+}
+.hint.warn {
+  color: #fbbf24;
 }
 .radio-row.compact {
   font-size: 0.82rem;

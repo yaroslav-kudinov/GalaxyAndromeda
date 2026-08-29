@@ -2,8 +2,9 @@ import {
   MAX_LOBBY_PLAYERS,
   MAX_SHIPS_PER_CELL,
   MAX_SHIPS_PER_CELL_PER_PLAYER,
+  SHIP_TYPES,
 } from './constants.js'
-import type { MapCellDefinition, MapDefinition, ResourceTokenDef, StartingShipDef } from './types.js'
+import type { MapCellDefinition, MapDefinition, ResourceTokenDef, ShipType, StartingShipDef } from './types.js'
 import { hexKey } from './types.js'
 
 export {
@@ -88,6 +89,7 @@ function trimStartingShips(ships: MapCellDefinition['startingShips']): MapCellDe
   const perPlayer = new Map<number, number>()
   const trimmed = []
   for (const ship of ships) {
+    if (!(SHIP_TYPES as readonly ShipType[]).includes(ship.type)) continue
     const count = perPlayer.get(ship.player) ?? 0
     if (count >= MAX_SHIPS_PER_CELL_PER_PLAYER) continue
     if (trimmed.length >= MAX_SHIPS_PER_CELL) break

@@ -14,6 +14,8 @@ import {
   selectShipsToDestroy,
   SHIELD_ABSORB_NEIGHBOR,
   SHIELD_ABSORB_SELF,
+  SHIP_COMBAT_DICE,
+  SHIP_COMBAT_DIE_FACES,
   SHIP_SUPPORT_DIE_FACES,
   validateBombardmentTarget,
   validateMarkerBombardment,
@@ -83,13 +85,15 @@ describe('По правилам (PDF / rulebook compliance)', () => {
     expect(selectShipsToDestroy(ships, 14, new Set(['battleship']))).toEqual(['dd', 'bb'])
   })
 
-  it('баланс B+F: destroyCost эсминца 4, все support-кубики d4', () => {
+  it('баланс B+F: destroyCost эсминца 4, support d4; крейсер в бою 2d4', () => {
     expect(getDestroyCost('destroyer')).toBe(4)
     expect(SHIP_SUPPORT_DIE_FACES).toMatchObject({
       cruiser: 4,
       battleship: 4,
       hyper: 4,
     })
+    expect(SHIP_COMBAT_DIE_FACES.cruiser).toBe(4)
+    expect(SHIP_COMBAT_DICE.cruiser).toBe(2)
   })
 
   it('гиперпространственное орудие fireRange 2–3: соседняя клетка запрещена', () => {
@@ -167,6 +171,8 @@ describe('По правилам (PDF / rulebook compliance)', () => {
     addShip(game, 0, 0, 'player-1', 'cruiser', 'att-cr2')
     addShip(game, 1, 0, 'player-2', 'destroyer', 'def-a')
     addShip(game, 0, 1, 'player-2', 'destroyer', 'def-b')
+    game.cells.find((c) => c.coord.q === 0 && c.coord.r === 0)!.isPowerCenter = true
+    game.cells.find((c) => c.coord.q === 0 && c.coord.r === 0)!.controlOwnerId = 'player-1'
     game.cells.find((c) => c.coord.q === 1 && c.coord.r === 0)!.controlOwnerId = 'player-2'
     game.cells.find((c) => c.coord.q === 0 && c.coord.r === 1)!.controlOwnerId = 'player-2'
     expect(addActionMarker(game, 'player-1', { q: 0, r: 0 })).toEqual([])

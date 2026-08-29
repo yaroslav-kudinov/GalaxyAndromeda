@@ -7,9 +7,10 @@
     "dev": "nuxt dev --port 3000",
     "dev:tunnel": "node ./scripts/dev-tunnel.mjs",
     "build": "nuxt build",
+    "generate": "nuxt generate",
     "preview": "nuxt preview",
     "typecheck": "nuxi typecheck",
-    "test": "echo \"no tests yet\""
+    "test": "node ../../node_modules/tsx/dist/cli.mjs --test ./utils/ship-move-index.test.ts ./utils/combat-continue-ui.test.ts ./utils/combat-map-fx.test.ts ./utils/production-order-slots.test.ts ./utils/page-visibility-audio.test.ts ./utils/track-time.test.ts ./utils/hex-layout.test.ts"
   },
   "dependencies": {
     "@galaxy/rules": "workspace:*",

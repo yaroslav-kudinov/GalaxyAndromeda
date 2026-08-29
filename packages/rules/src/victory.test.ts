@@ -39,6 +39,22 @@ describe('victory', () => {
     for (const cell of game.cells) cell.controlOwnerId = 'player-1'
     applyVictoryAndDefeatChecks(game, map.id)
     expect(game.gameOver?.winnerId).toBe('player-1')
+    expect(game.gameOver?.reason).toBe('last_standing')
+  })
+
+  it('four separate regions of 7 cells is not a victory', () => {
+    const map = createEmptyMap('four-regions', 'Four')
+    map.cells = []
+    for (let region = 0; region < 4; region++) {
+      const baseQ = region * 10
+      for (let i = 0; i < 7; i++) {
+        map.cells.push({ q: baseQ + i, r: 0, startPlayer: 1 })
+      }
+    }
+    map.cells.push({ q: 0, r: 1, isPowerCenter: true, startPlayer: 1 })
+    map.cells.push({ q: 1, r: 1, isPowerCenter: true, startPlayer: 2 })
+    const game = gameSnapshotFromMap(map)
+    expect(checkVictory(gameStateFromSnapshot(game, map.id))).toBeNull()
   })
 
   it('power_centers: majority of ALL power centers on map, not only occupied', () => {

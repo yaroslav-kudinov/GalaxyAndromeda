@@ -11,7 +11,7 @@
  *        (или `pnpm tsx harness/scripts/simulate-combat.mjs` — тогда правила берутся из src)
  */
 
-const API = process.env.GAME_SERVER_URL ?? 'http://127.0.0.1:3001'
+const API = (process.env.GAME_SERVER_URL ?? 'http://127.0.0.1:3001').replace(/\/$/, '')
 
 /**
  * Правила нужны харнессу ради `pendingCombatInvariantViolations` и хелперов фаз.
@@ -47,7 +47,8 @@ const {
 } = rules
 
 async function api(path, init) {
-  const res = await fetch(`${API}${path}`, {
+  const url = path.startsWith('/api') ? `${API}${path}` : `${API}/api${path}`
+  const res = await fetch(url, {
     headers: { 'Content-Type': 'application/json' },
     ...init,
   })

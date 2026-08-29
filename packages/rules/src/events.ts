@@ -16,10 +16,8 @@ export type EventCardId =
   | 'magnetic-storm'
   | 'empty-void'
   | 'stand-to-death'
-  | 'saboteurs-activation'
   | 'production-accident'
   | 'ammo-detonation'
-  | 'peoples-donation'
   | 'mandatory-overtime'
   | 'hyper-gap'
   | 'all-for-front'
@@ -47,13 +45,15 @@ export interface TurnModifiers {
   fixedDiceValue?: number
   hyperFireRange?: number
   cannotBuildShipTypes: ShipType[]
+  cannotBuyExtraMarkers: boolean
   cannotRetreat: boolean
   tokenValueBonus: number
   destroyCostBonus: number
   ignoreDestructionPriority: boolean
   blockEnterResourceOrPowerCenter: boolean
   maxProductionTokensPerPlayer?: number
-  unlimitedProductionInOneRegion: boolean
+  /** Событие `mandatory-overtime`: не больше одного маркера производства на регион владельца. */
+  oneProductionMarkerPerRegion: boolean
 }
 
 export const COMBAT_SHIP_TYPES: ShipType[] = ['destroyer', 'cruiser', 'battleship']
@@ -62,11 +62,15 @@ export const EVENT_CARDS: readonly GameEventCard[] = [
   { id: 'magnetic-storm', name: 'Магнитная буря', description: 'Все корабли: дальность хода −1 (минимум 1).', effectSummary: 'Дальность хода −1 (мин. 1)' },
   { id: 'empty-void', name: 'Среди звёзд лишь пустота', description: 'Без эффекта.', effectSummary: 'Без эффекта' },
   { id: 'stand-to-death', name: '«Стоять насмерть!»', description: 'Игроки не могут отступать из боя.', effectSummary: 'Отступление запрещено' },
-  { id: 'saboteurs-activation', name: 'Активация диверсантов', description: 'В каждом контролируемом регионе все фишки ресурсов переворачиваются рубашкой вверх.', effectSummary: 'Фишки в ваших регионах — рубашкой вверх' },
-  { id: 'production-accident', name: 'Авария на производстве', description: 'Нельзя строить корабли снабжения в этом ходу.', effectSummary: 'Постройка кораблей снабжения запрещена' },
+  { id: 'production-accident', name: 'Авария на производстве', description: 'Нельзя покупать дополнительные маркеры производства в этом ходу.', effectSummary: 'Покупка маркеров производства запрещена' },
   { id: 'ammo-detonation', name: 'Детонация склада боеприпасов', description: 'Нельзя строить эсминец, крейсер, линкор в этом ходу.', effectSummary: 'Постройка destroyer/cruiser/battleship запрещена' },
-  { id: 'peoples-donation', name: 'Народное пожертвование', description: 'Немедленно все фишки ресурсов переворачиваются лицом вверх.', effectSummary: 'Все фишки лицом вверх' },
-  { id: 'mandatory-overtime', name: 'Обязательные сверхурочные', description: 'Любое число фишек производства в одном регионе (не больше числа клеток региона).', effectSummary: 'Сверхурочные в одном регионе' },
+  {
+    id: 'mandatory-overtime',
+    name: 'Нормирование производства',
+    description:
+      'Не больше одного маркера производства на регион. Если в регионе уже несколько — лишние снимаются в неиспользованный пул (остаётся маркер с меньшим id).',
+    effectSummary: 'Не больше 1 маркера производства на регион',
+  },
   { id: 'hyper-gap', name: 'Просвет в гиперпространстве', description: 'Все корабли +1 ход; у гиперпространственного орудия дальность стрельбы становится 2–4 (вместо 2–3).', effectSummary: 'Ход +1; дальность орудия 2–4' },
   { id: 'all-for-front', name: '«Всё для фронта»', description: 'Каждый игрок может потратить не более 3 фишек производства за ход.', effectSummary: 'Макс. 3 фишки производства на игрока' },
   { id: 'shadow-economy', name: 'Теневая экономика', description: 'Номинал каждой фишки ресурса +2 (только этот ход).', effectSummary: 'Номинал фишек +2' },
@@ -83,7 +87,6 @@ export const ALL_EVENT_IDS: EventCardId[] = EVENT_CARDS.map((c) => c.id)
  */
 export const EVENT_DECK_COPIES: Readonly<Record<EventCardId, number>> = {
   'empty-void': 3,
-  'peoples-donation': 2,
   'mandatory-overtime': 2,
   'hyper-gap': 2,
   'shadow-economy': 2,
@@ -92,7 +95,6 @@ export const EVENT_DECK_COPIES: Readonly<Record<EventCardId, number>> = {
   'all-for-front': 2,
   'combat-chaos': 1,
   'stand-to-death': 1,
-  'saboteurs-activation': 1,
   'ammo-detonation': 1,
   'hold-formation': 1,
   'local-self-defense': 1,
@@ -106,6 +108,7 @@ export const EVENT_DECK_SIZE = ALL_EVENT_IDS.reduce(
 /** Устаревшие id из сохранений → актуальная карта (или no-op). */
 export function migrateLegacyEventId(eventId: string): EventCardId {
   if (eventId === 'fair-fight') return 'empty-void'
+  if (eventId === 'saboteurs-activation' || eventId === 'peoples-donation') return 'empty-void'
   if ((ALL_EVENT_IDS as readonly string[]).includes(eventId)) return eventId as EventCardId
   return 'empty-void'
 }
@@ -183,21 +186,22 @@ export function getTurnModifiers(game: GameSnapshot): TurnModifiers {
     moveRangeDelta: 0,
     minMoveRange: 1,
     cannotBuildShipTypes: [],
+    cannotBuyExtraMarkers: false,
     cannotRetreat: false,
     tokenValueBonus: 0,
     destroyCostBonus: 0,
     ignoreDestructionPriority: false,
     blockEnterResourceOrPowerCenter: false,
-    unlimitedProductionInOneRegion: false,
+    oneProductionMarkerPerRegion: false,
   }
   const eventId = activeModifierEventId(game)
   if (!eventId) return empty
   switch (eventId) {
     case 'magnetic-storm': return { ...empty, moveRangeDelta: -1, minMoveRange: 1 }
     case 'stand-to-death': return { ...empty, cannotRetreat: true }
-    case 'production-accident': return { ...empty, cannotBuildShipTypes: ['supply'] }
+    case 'production-accident': return { ...empty, cannotBuyExtraMarkers: true }
     case 'ammo-detonation': return { ...empty, cannotBuildShipTypes: [...COMBAT_SHIP_TYPES] }
-    case 'mandatory-overtime': return { ...empty, unlimitedProductionInOneRegion: true }
+    case 'mandatory-overtime': return { ...empty, oneProductionMarkerPerRegion: true }
     case 'hyper-gap': return { ...empty, moveRangeDelta: 1, hyperFireRange: 4 }
     case 'all-for-front': return { ...empty, maxProductionTokensPerPlayer: 3 }
     case 'shadow-economy': return { ...empty, tokenValueBonus: 2 }
@@ -217,29 +221,61 @@ export function isTurnEventResolved(game: GameSnapshot): boolean {
 export function resetTurnEventTracking(game: GameSnapshot): void {
   game.productionTokensSpentThisTurn = {}
   game.overtimeRegionByPlayer = {}
+  game.productionMarkerBoughtByPlayerThisTurn = {}
+}
+
+function productionMarkerRegionKey(
+  summary: ReturnType<typeof buildSpatialSummary>,
+  marker: GameSnapshot['productionMarkers'][number],
+): string {
+  const hex = hexKey(marker.coord.q, marker.coord.r)
+  const region = summary.regions.find(
+    (r) => r.ownerId === marker.ownerId && r.hexes.includes(hex),
+  )
+  const regionId = region?.id || marker.targetRegionId || hex
+  return `${marker.ownerId}:${regionId}`
+}
+
+/**
+ * Событие «Нормирование производства»: в каждом регионе владельца остаётся один PM.
+ * Лишние снимаются с карты в неиспользованный пул (без траты действия фазы).
+ * Остаётся маркер с меньшим id.
+ */
+export function enforceOneProductionMarkerPerRegion(game: GameSnapshot): string[] {
+  const summary = buildSpatialSummary(gameStateFromSnapshot(game, 'event'))
+  const grouped = new Map<string, GameSnapshot['productionMarkers']>()
+  const sorted = [...game.productionMarkers].sort((a, b) => a.id.localeCompare(b.id))
+  for (const marker of sorted) {
+    const key = productionMarkerRegionKey(summary, marker)
+    const list = grouped.get(key) ?? []
+    list.push(marker)
+    grouped.set(key, list)
+  }
+
+  const removeIds = new Set<string>()
+  for (const list of grouped.values()) {
+    for (const extra of list.slice(1)) removeIds.add(extra.id)
+  }
+  if (removeIds.size === 0) return []
+
+  game.productionMarkers = game.productionMarkers.filter((m) => !removeIds.has(m.id))
+  for (const cell of game.cells) {
+    if (cell.productionMarkerId && removeIds.has(cell.productionMarkerId)) {
+      cell.productionMarkerId = null
+    }
+  }
+
+  const message =
+    `«Нормирование производства»: снято лишних маркеров производства: ${removeIds.size} ` +
+    '(оставлен один на регион, с меньшим id)'
+  appendEventLog(game, message)
+  return [message]
 }
 
 export function applyEventImmediateEffects(game: GameSnapshot, eventId: EventCardId): void {
   switch (eventId) {
-    case 'saboteurs-activation': {
-      const state = gameStateFromSnapshot(game, 'event')
-      const summary = buildSpatialSummary(state)
-      const controlled = new Set<string>()
-      for (const region of summary.regions) {
-        if (!region.ownerId) continue
-        for (const hex of region.hexes) controlled.add(hex)
-      }
-      for (const cell of game.cells) {
-        const key = hexKey(cell.coord.q, cell.coord.r)
-        if (!controlled.has(key)) continue
-        for (const token of cell.resourceTokens) token.faceUp = false
-      }
-      break
-    }
-    case 'peoples-donation':
-      for (const cell of game.cells) {
-        for (const token of cell.resourceTokens) token.faceUp = true
-      }
+    case 'mandatory-overtime':
+      enforceOneProductionMarkerPerRegion(game)
       break
     default:
       break
@@ -297,6 +333,10 @@ export function isShipTypeBuildBlocked(game: GameSnapshot, type: ShipType): bool
   return getTurnModifiers(game).cannotBuildShipTypes.includes(type)
 }
 
+export function isExtraMarkerBuyBlocked(game: GameSnapshot): boolean {
+  return getTurnModifiers(game).cannotBuyExtraMarkers
+}
+
 export function isMovementIntoCellBlocked(
   game: GameSnapshot,
   dest: RuntimeCellState,
@@ -330,21 +370,14 @@ export function validateProductionTokenSpendLimit(
   return []
 }
 
+/** @deprecated Сверхурочные по фишкам убраны; лимит 1 PM на регион — событие `mandatory-overtime`. */
 export function validateOvertimeProductionSpend(
-  game: GameSnapshot,
-  playerId: string,
-  regionId: string,
-  regionSize: number,
-  productionTokenCount: number,
+  _game: GameSnapshot,
+  _playerId: string,
+  _regionId: string,
+  _regionSize: number,
+  _productionTokenCount: number,
 ): string[] {
-  if (!getTurnModifiers(game).unlimitedProductionInOneRegion) return []
-  const used = game.overtimeRegionByPlayer?.[playerId]
-  if (used && used !== regionId) {
-    return ['«Обязательные сверхурочные»: сверхурочные уже в другом регионе']
-  }
-  if (productionTokenCount > regionSize) {
-    return [`«Обязательные сверхурочные»: не более ${regionSize} фишек (размер региона)`]
-  }
   return []
 }
 
@@ -352,16 +385,12 @@ export function recordProductionTokensSpent(
   game: GameSnapshot,
   playerId: string,
   productionTokenCount: number,
-  regionId?: string,
+  _regionId?: string,
 ): void {
   if (productionTokenCount <= 0) return
   if (!game.productionTokensSpentThisTurn) game.productionTokensSpentThisTurn = {}
   game.productionTokensSpentThisTurn[playerId] =
     (game.productionTokensSpentThisTurn[playerId] ?? 0) + productionTokenCount
-  if (regionId && getTurnModifiers(game).unlimitedProductionInOneRegion) {
-    if (!game.overtimeRegionByPlayer) game.overtimeRegionByPlayer = {}
-    game.overtimeRegionByPlayer[playerId] = regionId
-  }
 }
 
 export interface ActiveEventObservation {

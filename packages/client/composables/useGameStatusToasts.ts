@@ -20,7 +20,6 @@ const SHOW_MS = 4200
 const FADE_MS = 650
 
 const GAME_OVER_REASON_LABELS: Record<string, string> = {
-  four_regions: '4 региона от 7 клеток',
   power_centers: 'Большинство центров власти',
   last_standing: 'Последний игрок на карте',
 }

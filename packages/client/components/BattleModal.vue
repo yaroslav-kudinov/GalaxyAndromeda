@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import type {
-  BattleLogEntry,
   CombatOptions,
   CombatPreview,
   CombatResolutionResult,
@@ -13,7 +12,6 @@ import {
   applyPrioritySkipToggle,
   canTogglePrioritySkipType,
   estimateRoundOneOutcome,
-  formatCombatRoundDiceTotals,
   formatShieldContributionLabel,
   SHIP_LABELS,
   SHIP_COMBAT_DICE,
@@ -30,6 +28,11 @@ import {
 } from '@galaxy/rules'
 import type { ShieldContribution } from '@galaxy/rules'
 import type { GameSnapshot } from '@galaxy/rules'
+import {
+  combatDecisionStatusLine,
+  combatRoundOutcome,
+  isCombatRoundDraw,
+} from '~/utils/combat-continue-ui'
 
 const props = defineProps<{
   preview: CombatPreview
@@ -365,21 +368,6 @@ const finalAttackerTotal = computed(() =>
 const finalDefenderTotal = computed(() =>
   roundResult.value ? sumCombatSideDiceTotal(allRolls.value, 'defender') : 0,
 )
-const resolvedRoundNumber = computed(() => props.resolution?.rounds?.length ?? 1)
-
-const roundSummaryText = computed(() =>
-  roundResult.value
-    ? formatCombatRoundDiceTotals(
-        {
-          attackerTotal: finalAttackerTotal.value,
-          defenderTotal: finalDefenderTotal.value,
-          winner: roundResult.value.winner,
-        },
-        resolvedRoundNumber.value,
-        { bombardment: isBombardment.value },
-      )
-    : '',
-)
 
 let revealTimer: ReturnType<typeof setInterval> | null = null
 
@@ -417,10 +405,7 @@ function goToPostPhase() {
   }
   phase.value = 'post'
   if (needsDestructionSelection.value && isLocalWinner.value) {
-    destructionReviewTimer = setTimeout(() => {
-      destructionReviewReady.value = true
-      destructionReviewTimer = null
-    }, 2000)
+    destructionReviewReady.value = true
   }
 }
 
@@ -466,8 +451,8 @@ function sideColorVars(playerId: string): { '--side-color': string } {
 
 function rollLabel(entry: ShipCombatRollLog): string {
   const name = SHIP_LABELS[entry.shipType]
-  if (entry.supportRolls?.length) return `Поддержка от ${name}…`
-  return `${name} бросает…`
+  if (entry.supportRolls?.length) return `Поддержка · ${name}`
+  return name
 }
 
 function shieldLabel(contribution: ShieldContribution): string {
@@ -485,31 +470,29 @@ function rollValues(entry: ShipCombatRollLog): number[] {
   return entry.combatRolls
 }
 
-function winnerText(): string {
-  if (!props.resolution) return ''
-  if (isRoundDraw.value) return 'Ничья раунда'
-  const winnerName = playerLabel(props.resolution.winnerId ?? '')
-  if (props.resolution.winnerId === props.localPlayerId) {
-    return `Вы выиграли раунд (${isBombardment.value ? 'обстрел' : 'бой'})`
-  }
-  if (
-    props.localPlayerId === props.preview.attackerId
-    || props.localPlayerId === props.preview.defenderId
-  ) {
-    return `Вы проиграли раунд — победил ${winnerName}`
-  }
-  if (props.resolution.attackerWon) {
-    return `Победа атакующего (${winnerName})`
-  }
-  return `Победа защитника (${winnerName})`
-}
-
 const isRoundDraw = computed(() =>
-  roundResult.value?.winner === 'draw'
-  || props.resolution?.rawDamage === 0
-  || (props.resolution != null
-    && !props.resolution.needsDestructionSelection
-    && props.resolution.destroyedShipIds.length === 0),
+  isCombatRoundDraw({
+    roundWinner: roundResult.value?.winner,
+    winnerId: props.resolution?.winnerId,
+  }),
+)
+
+const roundOutcome = computed(() =>
+  combatRoundOutcome({
+    localPlayerId: props.localPlayerId,
+    attackerId: props.preview.attackerId,
+    defenderId: props.preview.defenderId,
+    winnerId: props.resolution?.winnerId,
+    roundWinner: roundResult.value?.winner,
+  }),
+)
+
+const decisionStatusText = computed(() =>
+  combatDecisionStatusLine({
+    pending: props.snapshot.pendingCombat,
+    isBombardment: isBombardment.value,
+    isRoundDraw: isRoundDraw.value,
+  }),
 )
 
 const roundDamageText = computed(() => {
@@ -518,43 +501,21 @@ const roundDamageText = computed(() => {
   const absorbed = props.resolution.shieldAbsorbed ?? 0
   const remaining = Math.max(0, rawDamage - absorbed)
   if (absorbed > 0) {
-    return `Разница: ${rawDamage}; щиты проигравшего поглотили ${absorbed}; на уничтожение ${remaining}.`
+    return `Щиты поглотили ${absorbed} из ${rawDamage}. На уничтожение ${remaining}.`
   }
   if (rawDamage > 0) {
-    return `Разница: ${rawDamage}; щитов у проигравшего не было; на уничтожение ${remaining}.`
+    return `На уничтожение ${remaining}.`
   }
-  return `Разница: ${rawDamage}; на уничтожение ${remaining}.`
+  return ''
 })
 
 const destroyedShipsText = computed(() => {
-  if (!props.resolution?.destroyedShipIds.length) return 'Уничтожений нет.'
+  if (!props.resolution?.destroyedShipIds.length) return ''
   const labels = props.resolution.destroyedShipIds.map((id) => {
     const ship = loserSideShips.value.find((candidate) => candidate.shipId === id)
     return ship ? SHIP_LABELS[ship.type] : id
   })
   return `Уничтожено: ${labels.join(', ')}.`
-})
-
-const continueStatusText = computed(() => {
-  const pending = props.snapshot.pendingCombat
-  if (pending?.phase === 'awaiting-continue') {
-    const mustContinue = pending.shipsDestroyedInCombat !== true
-    if (mustContinue) {
-      return pending.continueDecisions?.attacker !== true
-        ? 'Уничтожений ещё не было — отступление недоступно. Атакующий подтверждает продолжение.'
-        : 'Уничтожений ещё не было — отступление недоступно. Защитник подтверждает продолжение.'
-    }
-    if (pending.continueDecisions?.attacker !== true) {
-      return 'Бой продолжается: атакующий выбирает продолжение или отступление.'
-    }
-    if (pending.continueDecisions?.defender !== true) {
-      return 'Бой продолжается: защитник выбирает продолжение или отступление.'
-    }
-  }
-  if (isBombardment.value) return 'Обстрел завершён: клетка не захватывается.'
-  return isRoundDraw.value
-    ? 'Раунд завершён без уничтожений.'
-    : 'Раунд завершён.'
 })
 
 const showModalContinueActions = computed(
@@ -654,10 +615,6 @@ function onKeydown(e: KeyboardEvent) {
 function onBackdropClick() {
   if (consumeDragClick()) return
   if (phase.value === 'post') emit('close')
-}
-
-function logEntries(step: BattleLogEntry['step']): BattleLogEntry[] {
-  return props.resolution?.log.filter((e) => e.step === step) ?? []
 }
 
 /** Skip на флот объявляет противоположная сторона. */
@@ -812,7 +769,10 @@ onUnmounted(() => {
     <div
       ref="panelRef"
       class="battle-modal"
-      :class="{ 'battle-modal--dragging': isDragging }"
+      :class="{
+        'battle-modal--dragging': isDragging,
+        'battle-modal--results': phase === 'rolling' || phase === 'post',
+      }"
       :style="panelStyle"
       role="dialog"
       aria-modal="true"
@@ -829,8 +789,8 @@ onUnmounted(() => {
                 : phase === 'destruction'
                   ? 'Выбор уничтожения'
                   : isBombardment
-                    ? 'Обстрел · раунд'
-                    : 'Бой · раунд'
+                    ? 'Обстрел'
+                    : 'Бой'
             }}
           </h2>
           <p class="battle-sub">
@@ -1162,7 +1122,7 @@ onUnmounted(() => {
 
         <template v-else-if="phase === 'destruction'">
           <section class="destruction-phase">
-            <h3>Выберите корабли для уничтожения</h3>
+            <p class="decision-status" role="status">{{ decisionStatusText }}</p>
             <div class="destruction-budget" aria-live="polite">
               <span class="destruction-budget__label">Бюджет урона</span>
               <span class="destruction-budget__value">
@@ -1259,6 +1219,34 @@ onUnmounted(() => {
         </template>
 
         <template v-else>
+          <section
+            v-if="animationDone && resolution"
+            class="outcome-hero"
+            :class="{
+              'outcome-hero--draw': roundOutcome.kind === 'draw',
+              'outcome-hero--win': roundOutcome.kind === 'win',
+              'outcome-hero--loss': roundOutcome.kind === 'loss',
+              'outcome-hero--side':
+                roundOutcome.kind === 'attacker-won' || roundOutcome.kind === 'defender-won',
+            }"
+            :style="
+              roundOutcome.kind === 'attacker-won'
+                ? sideColorVars(preview.attackerId)
+                : roundOutcome.kind === 'defender-won'
+                  ? sideColorVars(preview.defenderId)
+                  : undefined
+            "
+            aria-live="polite"
+          >
+            <p class="outcome-hero__label">{{ roundOutcome.label }}</p>
+            <p class="decision-status">{{ decisionStatusText }}</p>
+            <p v-if="roundDamageText" class="outcome-hero__note">{{ roundDamageText }}</p>
+            <p v-if="destroyedShipsText" class="outcome-hero__note">{{ destroyedShipsText }}</p>
+          </section>
+          <p v-else class="decision-status decision-status--rolling" role="status">
+            Кубики крутятся…
+          </p>
+
           <section class="totals-bar">
             <div class="total-side" :style="sideColorVars(preview.attackerId)">
               <span class="total-label">
@@ -1280,7 +1268,6 @@ onUnmounted(() => {
           </section>
 
           <section class="roll-log" aria-live="polite">
-            <h3>Броски кубиков</h3>
             <ul class="roll-list">
               <li
                 v-for="(entry, i) in allRolls"
@@ -1305,37 +1292,9 @@ onUnmounted(() => {
                 :style="sideColorVars(sh.ownerId)"
               >
                 <span class="roll-label">{{ shieldLabel(sh) }}</span>
-                <span class="roll-shield-badge">без кубиков</span>
+                <span class="roll-shield-badge">щит</span>
                 <span class="roll-sum">до {{ sh.absorbCapacity }}</span>
               </li>
-            </ul>
-            <p v-if="animationDone" class="round-summary">{{ roundSummaryText }}</p>
-            <p v-if="animationDone && resolution" class="round-winner">{{ winnerText() }}</p>
-            <p v-else-if="!animationDone" class="rolling-hint">Кубики крутятся…</p>
-          </section>
-
-          <section v-if="phase === 'post' && resolution" class="post-phase">
-            <h3>Итог раунда</h3>
-            <div
-              class="round-outcome"
-              :class="{
-                'round-outcome--draw': isRoundDraw,
-                'round-outcome--win': !isRoundDraw && resolution.winnerId === localPlayerId,
-                'round-outcome--loss':
-                  !isRoundDraw
-                  && (localPlayerId === preview.attackerId || localPlayerId === preview.defenderId)
-                  && resolution.winnerId !== localPlayerId,
-              }"
-            >
-              <strong>{{ winnerText() }}</strong>
-              <span>{{ roundSummaryText }}</span>
-              <span>{{ roundDamageText }}</span>
-              <span>{{ destroyedShipsText }}</span>
-              <span>{{ continueStatusText }}</span>
-            </div>
-            <ul class="post-log">
-              <li v-for="(entry, i) in logEntries('shield-absorb')" :key="'sh-' + i">{{ entry.message }}</li>
-              <li v-for="(entry, i) in logEntries('destruction')" :key="'ds-' + i">{{ entry.message }}</li>
             </ul>
           </section>
         </template>
@@ -1499,6 +1458,10 @@ onUnmounted(() => {
     rgba(15, 23, 42, 0.98);
   color: #e2e8f0;
   box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
+}
+.battle-modal--results {
+  width: min(100%, 560px);
+  max-height: min(86vh, 680px);
 }
 .battle-head {
   display: flex;
@@ -2142,6 +2105,68 @@ onUnmounted(() => {
 .total-vs {
   font-size: 0.75rem;
   color: #64748b;
+}
+.outcome-hero {
+  display: grid;
+  gap: 0.35rem;
+  margin: 0 0 0.75rem;
+  padding: 0.7rem 0.8rem 0.75rem;
+  border-radius: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.4);
+  background: rgba(51, 65, 85, 0.35);
+  text-align: center;
+}
+.outcome-hero__label {
+  margin: 0;
+  font-size: clamp(1.7rem, 4.5vw, 2.45rem);
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  line-height: 1.05;
+  text-transform: uppercase;
+}
+.outcome-hero__note {
+  margin: 0;
+  font-size: 0.78rem;
+  color: #cbd5e1;
+}
+.outcome-hero--draw {
+  border-color: rgba(251, 191, 36, 0.7);
+  background: rgba(120, 53, 15, 0.32);
+  color: #fde68a;
+}
+.outcome-hero--win {
+  border-color: rgba(74, 222, 128, 0.7);
+  background: rgba(20, 83, 45, 0.38);
+  color: #bbf7d0;
+}
+.outcome-hero--loss {
+  border-color: rgba(248, 113, 113, 0.7);
+  background: rgba(127, 29, 29, 0.38);
+  color: #fecaca;
+}
+.outcome-hero--side {
+  border-color: color-mix(in srgb, var(--side-color, #94a3b8) 65%, transparent);
+  background: color-mix(in srgb, var(--side-color, #94a3b8) 22%, rgba(15, 23, 42, 0.92));
+  color: color-mix(in srgb, var(--side-color, #e2e8f0) 55%, #fff);
+}
+.decision-status {
+  margin: 0 0 0.55rem;
+  padding: 0.4rem 0.55rem;
+  border-radius: 8px;
+  text-align: center;
+  font-size: 0.92rem;
+  font-weight: 700;
+  color: #f8fafc;
+  background: rgba(15, 23, 42, 0.55);
+  border: 1px solid rgba(148, 163, 184, 0.35);
+}
+.outcome-hero .decision-status {
+  margin: 0;
+  background: rgba(2, 6, 23, 0.35);
+}
+.decision-status--rolling {
+  color: #94a3b8;
+  font-weight: 600;
 }
 .roll-list {
   margin: 0 0 0.65rem;

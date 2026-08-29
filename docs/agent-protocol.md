@@ -30,6 +30,9 @@ HTTP base: `http://127.0.0.1:3001` (env `GAME_SERVER_URL` for MCP).
 | `update-combat-prep` | `{ ready: boolean, prioritySkips?: { shipType }[], supportSide?: 'attacker' \| 'defender' }` | Участники объявляют skip + ready; неучастник с доступной поддержкой выбирает `supportSide` без ready |
 | `cancel-combat-prep` | — | Attacker cancels prep before battle starts |
 | `abort-combat` | — | Participant aborts a stuck combat; pending movement is finalized |
+| `surrender` | — | Сдаться в любой момент: `eliminated`, контроль и маркеры сняты, корабли остаются |
+| `execute-production` | `{ markerId, ships, spentTokens? }` | Постройка в регионе; `ships` не пустой |
+| `execute-buy-production-marker` | `{ spentTokens }` | Покупка доп. маркера производства (не больше одного за игровой ход): фишки снимаются с карты; не исполняет маркер на карте |
 
 Without `combatOptions`, movement/bombardment into combat enters `pendingCombat` with `phase: 'prep'`. Movement: mutual ready → countdown 3s → auto-resolve. Bombardment: attacker-only ready → countdown; multiple targets queued via `queuedBombardmentPlans`. Sync via `GET /state` polling.
 
@@ -45,6 +48,9 @@ Combat FSM phases: `prep` → (roll) → `awaiting-destruction` (winner picks lo
     observationRevision?, // monotonic; clients ignore stale responses
     roomStatus?, // 'lobby' | 'playing'
     hostPlayerId?,
+    actionMarkerLimitByPlayer?, // 2 + центры власти, заморожено в начале хода
+    productionMarkerLimitByPlayer?, // купленный пул PM (старт 1, макс 3)
+    productionMarkerBoughtByPlayerThisTurn?, // кто уже купил доп. PM в этом игровом ходе
     // cleared fields are sent as explicit null, not omitted
   },
   geometry: {
@@ -57,6 +63,8 @@ Combat FSM phases: `prep` → (roll) → `awaiting-destruction` (winner picks lo
 ```
 
 **Sync contract:** server is source of truth. `observationRevision` increments on each state change (actions, combat auto-resolve). `pendingCombat`, `turnEvent`, `gameOver`, `lastCombatResult` use **explicit `null`** when cleared — clients must not preserve local values when server sends `null`. `lastCombatResult` is cached until the next non-prep action so both players can poll the same round result.
+
+Карта события хода вытягивается и применяется **автоматически** при выходе из производства (фаза `events` не интерактивна). Действие `resolve-event` оставлено для старых клиентов и сразу уводит в планирование; в `legalActions` его больше не нужно выбирать.
 
 ## ASCII legend
 

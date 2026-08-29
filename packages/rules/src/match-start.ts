@@ -1,5 +1,6 @@
 import type { GameSnapshot } from './save-file.js'
 import { gameStateFromSnapshot } from './save-file.js'
+import { refreshActionMarkerCapacity } from './marker-pools.js'
 import { activePlayerOrder } from './turn.js'
 
 /** Новая партия: ход 1, планирование, без маркеров и боя. */
@@ -52,10 +53,12 @@ export function beginMatchForParticipants(
 
   if (!ids.length) {
     game.activePlayerId = null
+    refreshActionMarkerCapacity(game)
     return
   }
 
   const state = gameStateFromSnapshot(game, mapId)
   game.activePlayerId =
     activePlayerOrder(state.players, ids, { state, phase: 'planning' })[0] ?? ids[0] ?? null
+  refreshActionMarkerCapacity(game)
 }

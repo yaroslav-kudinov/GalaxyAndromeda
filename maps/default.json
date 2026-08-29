@@ -8,7 +8,7 @@
       "isPowerCenter": true,
       "resourceToken": { "type": "credits", "value": 3, "faceUp": true },
       "startPlayer": 1,
-      "startingShips": [{ "type": "supply", "player": 1 }]
+      "startingShips": [{ "type": "destroyer", "player": 1 }]
     },
     {
       "q": 1,

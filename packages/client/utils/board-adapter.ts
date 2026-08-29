@@ -33,7 +33,7 @@ export function boardMarkerKeys(cells: BoardCellView[]): {
   return { action, production }
 }
 
-function playerSlotFromId(players: PlayerState[], ownerId: string | null): number | null {
+export function playerSlotFromId(players: PlayerState[], ownerId: string | null): number | null {
   if (!ownerId) return null
   const idx = players.findIndex((p) => p.id === ownerId)
   return idx >= 0 ? idx + 1 : null

@@ -151,15 +151,12 @@ export function useMarkerMapPick(
   const bannerText = computed(() => {
     if (!active.value || !source.value) return ''
 
-    if (mode.value === 'bombardment') {
-      if (orderDraft.orderReady.value) {
-        const t = orderDraft.bombardmentTarget.value
-        return `Приказ обстрела готов — цель (${t?.q}, ${t?.r}). Проверьте превью и подтвердите.`
-      }
-      return `Кликните цель обстрела с (${source.value.q}, ${source.value.r}) · кораблей: ${selectedShipIds.value.length}`
+    if (mode.value === 'bombardment' && orderDraft.orderReady.value) {
+      const t = orderDraft.bombardmentTarget.value
+      return `Приказ обстрела готов — цель (${t?.q}, ${t?.r}). Проверьте превью и подтвердите.`
     }
 
-    if (orderDraft.orderReady.value) {
+    if (mode.value !== 'bombardment' && orderDraft.orderReady.value) {
       if (orderDraft.hasPendingCombat.value) {
         const c = orderDraft.pendingCombatCoord.value
         return `Приказ готов — бой на (${c?.q}, ${c?.r}). Проверьте превью и нажмите «Начать бой».`
@@ -170,12 +167,42 @@ export function useMarkerMapPick(
       const { to } = pendingControlChoice.value
       return `Клетка (${to.q}, ${to.r}): занять её? Снабженец будет снят с карты.`
     }
-    const label = activeShipLabel.value ?? 'корабль'
-    const pending = selectedShipIds.value.filter((id) => !orderDraft.assignments.value[id]).length
-    if (pending === 1) {
-      return `Кликните клетку назначения для «${label}» (от (${source.value.q}, ${source.value.r}))`
+    // Выбор назначения / цели: текст собирается в шаблоне с подсветкой имени корабля.
+    return ''
+  })
+
+  /** Корабль для подсветки в баннере при выборе клетки назначения. */
+  const bannerShip = computed(() => {
+    if (!active.value || !source.value) return null
+    if (pendingControlChoice.value || orderDraft.orderReady.value) return null
+    if (mode.value === 'bombardment') {
+      const shipId =
+        activeShipId.value
+        ?? selectedShipIds.value.find((id) => !orderDraft.assignments.value[id])
+      if (!shipId) return null
+      const opt = bombardableShipOptions.value.find((o) => o.ship.id === shipId)
+      return opt?.ship ?? null
     }
-    return `Кликните клетку для «${label}» · осталось ${pending} корабл(я/ей)`
+    if (!activeShipId.value) return null
+    return movableShipOptions.value.find((o) => o.ship.id === activeShipId.value)?.ship ?? null
+  })
+
+  const bannerShipName = computed(() => {
+    const ship = bannerShip.value
+    return ship ? (SHIP_LABELS[ship.type] ?? String(ship.type)) : null
+  })
+
+  const bannerShipType = computed(() => bannerShip.value?.type ?? null)
+
+  const bannerDestinationMeta = computed(() => {
+    if (!active.value || !source.value || !bannerShipName.value) return null
+    const pending = selectedShipIds.value.filter((id) => !orderDraft.assignments.value[id]).length
+    return {
+      source: source.value,
+      pending,
+      single: pending === 1,
+      bombardment: mode.value === 'bombardment',
+    }
   })
 
   function reset() {
@@ -447,6 +474,9 @@ export function useMarkerMapPick(
     sourceKey,
     error,
     bannerText,
+    bannerShipName,
+    bannerShipType,
+    bannerDestinationMeta,
     confirmButtonLabel,
     reachableKeys,
     contestedKeys,
