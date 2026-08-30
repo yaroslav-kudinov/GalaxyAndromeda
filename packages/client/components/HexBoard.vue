@@ -25,9 +25,7 @@ const props = withDefaults(
     selectedKey: string | null
     symmetryOrbitKeys?: string[]
     actionMarkerKeys?: string[]
-    productionMarkerKeys?: string[]
     availableActionMarkerKeys?: string[]
-    availableProductionMarkerKeys?: string[]
     /** Доп. клетки, с которыми можно взаимодействовать (поверх reachable / маркеров). */
     interactiveKeys?: string[]
     reachableKeys?: string[]
@@ -87,9 +85,7 @@ const props = withDefaults(
     autoFitOnMapChange: undefined,
     symmetryOrbitKeys: () => [],
     actionMarkerKeys: () => [],
-    productionMarkerKeys: () => [],
     availableActionMarkerKeys: () => [],
-    availableProductionMarkerKeys: () => [],
     interactiveKeys: () => [],
     reachableKeys: () => [],
     destinationKeys: () => [],
@@ -155,8 +151,7 @@ function isInteractiveTarget(key: string): boolean {
     isReachable(key) ||
     isContested(key) ||
     isDestination(key) ||
-    isAvailableActionMarker(key) ||
-    isAvailableProductionMarker(key)
+    isAvailableActionMarker(key)
   )
 }
 
@@ -409,16 +404,8 @@ function hasActionMarker(key: string): boolean {
   return props.actionMarkerKeys.includes(key)
 }
 
-function hasProductionMarker(key: string): boolean {
-  return props.productionMarkerKeys.includes(key)
-}
-
 function isAvailableActionMarker(key: string): boolean {
   return props.availableActionMarkerKeys.includes(key)
-}
-
-function isAvailableProductionMarker(key: string): boolean {
-  return props.availableProductionMarkerKeys.includes(key)
 }
 
 function isReachable(key: string): boolean {
@@ -843,19 +830,6 @@ function onPointerUp(e: PointerEvent) {
 
       <g v-for="cell in cells" :key="'decor-' + hexKey(cell.q, cell.r)">
         <polygon
-          v-if="hasProductionMarker(hexKey(cell.q, cell.r))"
-          :points="insetHexPoints(cell.q, cell.r, 0.93)"
-          class="hex-marker-ring hex-marker-ring--underlay"
-          pointer-events="none"
-        />
-        <polygon
-          v-if="hasProductionMarker(hexKey(cell.q, cell.r))"
-          :points="insetHexPoints(cell.q, cell.r, 0.93)"
-          class="hex-marker-ring hex-marker-ring--production"
-          :class="{ 'hex-marker-ring--available': isAvailableProductionMarker(hexKey(cell.q, cell.r)) }"
-          pointer-events="none"
-        />
-        <polygon
           v-if="hasActionMarker(hexKey(cell.q, cell.r))"
           :points="insetHexPoints(cell.q, cell.r, 0.78)"
           class="hex-marker-ring hex-marker-ring--underlay"
@@ -878,9 +852,7 @@ function onPointerUp(e: PointerEvent) {
           :show-resource="!!getCellResourceToken(cell)"
           :show-power-center="!!cell.isPowerCenter"
           :show-action-marker="hasActionMarker(hexKey(cell.q, cell.r))"
-          :show-production-marker="hasProductionMarker(hexKey(cell.q, cell.r))"
           :action-marker-available="isAvailableActionMarker(hexKey(cell.q, cell.r))"
-          :production-marker-available="isAvailableProductionMarker(hexKey(cell.q, cell.r))"
         />
       </g>
 
@@ -1214,19 +1186,9 @@ function onPointerUp(e: PointerEvent) {
   stroke: #fef08a;
   stroke-width: 2.2;
 }
-.hex-marker-ring--production {
-  stroke: #f472b6;
-  stroke-width: 2.2;
-}
-.hex-marker-ring--action.hex-marker-ring--available,
-.hex-marker-ring--production.hex-marker-ring--available {
-  animation: marker-ring-available 1.55s ease-in-out infinite;
-}
 .hex-marker-ring--action.hex-marker-ring--available {
+  animation: marker-ring-available 1.55s ease-in-out infinite;
   filter: drop-shadow(0 0 5px rgba(254, 240, 138, 0.65));
-}
-.hex-marker-ring--production.hex-marker-ring--available {
-  filter: drop-shadow(0 0 5px rgba(244, 114, 182, 0.65));
 }
 @keyframes marker-ring-available {
   0%,
@@ -1239,8 +1201,7 @@ function onPointerUp(e: PointerEvent) {
     stroke-width: 2.8;
   }
 }
-.hex-board--zoomed-out .hex-marker-ring--action,
-.hex-board--zoomed-out .hex-marker-ring--production {
+.hex-board--zoomed-out .hex-marker-ring--action {
   stroke-width: 3.2;
 }
 .hex-board--zoomed-out .hex-marker-ring--underlay {

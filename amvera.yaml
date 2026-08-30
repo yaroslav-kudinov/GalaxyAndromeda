@@ -1,0 +1,4 @@
+# Деплой через корневой Dockerfile (см. docs/deploy-amvera.md)
+# Документация: https://docs.amvera.ru/applications/configuration/docker.html
+run:
+  containerPort: 80

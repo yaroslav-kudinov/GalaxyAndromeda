@@ -1,16 +1,12 @@
 import type { Phase } from '@galaxy/rules'
 import { MAX_FLEET_SIZE_PER_PLAYER, SHIP_LABELS } from '@galaxy/rules'
 
-export type MarkerKind = 'action' | 'production'
-export type PlanningSubStep = 'action-markers' | 'production-markers'
-
 /** Иконка шага справки в боковой панели */
 export type HelpStepIcon =
   | 'wait'
   | 'event'
   | 'click'
   | 'marker-action'
-  | 'marker-prod'
   | 'ship'
   | 'fight'
   | 'build'
@@ -35,14 +31,14 @@ export interface GameHelpBlock {
 export interface PhaseGuidance {
   prompt: string
   countHint?: string
-  accent: 'planning-action' | 'planning-production' | 'actions' | 'production' | 'events' | 'waiting'
+  accent: 'planning-action' | 'actions' | 'events' | 'waiting'
 }
 
 export const PHASE_LABELS: Record<Phase, string> = {
   events: 'События',
   planning: 'Планирование',
   actions: 'Действия',
-  production: 'Производство',
+  production: 'Действия',
 }
 
 /** CSS-класс акцента для бейджа фазы в UI */
@@ -53,34 +49,34 @@ export function phaseAccentClass(phase: Phase | undefined): string {
     case 'planning':
       return 'phase--planning'
     case 'actions':
-      return 'phase--actions'
     case 'production':
-      return 'phase--production'
+      return 'phase--actions'
     default:
       return 'phase--planning'
   }
 }
 
 export interface PhaseGuidanceContext {
-  planningSubStep?: PlanningSubStep
   actionMarkersPlaced?: number
   actionMarkersMax?: number
-  productionMarkersPlaced?: number
-  productionMarkersMax?: number
   actionMarkerUsedThisTurn?: boolean
   actionMarkerUnresolved?: boolean
-  productionMarkerUsedThisTurn?: boolean
   eventResolved?: boolean
-  oneProductionMarkerPerRegion?: boolean
 }
 
-/** Подсказка для hero-полоски с учётом фазы и подшага планирования */
+function normalizePhase(phase: Phase | undefined): Phase | undefined {
+  if (phase === 'production') return 'actions'
+  return phase
+}
+
+/** Подсказка для hero-полоски с учётом фазы */
 export function phaseGuidanceForTurn(
   phase: Phase | undefined,
   isMyTurn: boolean,
   ctx: PhaseGuidanceContext = {},
 ): PhaseGuidance | null {
-  if (!phase) return null
+  const normalized = normalizePhase(phase)
+  if (!normalized) return null
 
   if (!isMyTurn) {
     return {
@@ -89,7 +85,7 @@ export function phaseGuidanceForTurn(
     }
   }
 
-  switch (phase) {
+  switch (normalized) {
     case 'events':
       return {
         prompt: 'Карта события применяется автоматически — дальше планирование',
@@ -99,19 +95,6 @@ export function phaseGuidanceForTurn(
       const actionMax = ctx.actionMarkersMax ?? 0
       const actionPlaced = ctx.actionMarkersPlaced ?? 0
       const actionRemaining = Math.max(0, actionMax - actionPlaced)
-      const prodMax = ctx.productionMarkersMax ?? 0
-      const prodPlaced = ctx.productionMarkersPlaced ?? 0
-      const prodRemaining = Math.max(0, prodMax - prodPlaced)
-
-      if (ctx.planningSubStep === 'production-markers') {
-        return {
-          prompt: ctx.oneProductionMarkerPerRegion
-            ? 'Клик по своей клетке — маркер производства (сейчас не больше одного на регион)'
-            : 'Клик по своей клетке в регионе — поставить или снять маркер производства',
-          countHint: `Осталось маркеров производства: ${prodRemaining} из ${prodMax}`,
-          accent: 'planning-production',
-        }
-      }
       return {
         prompt: 'Клик по клетке с вашим кораблём — поставить или снять маркер действия',
         countHint: `Осталось маркеров действия: ${actionRemaining} из ${actionMax}`,
@@ -121,29 +104,16 @@ export function phaseGuidanceForTurn(
     case 'actions':
       if (ctx.actionMarkerUnresolved) {
         return {
-          prompt: 'Используйте маркер действия или снимите его с карты',
+          prompt: 'Используйте маркер: перемещение, постройка кораблей или снимите маркер с карты',
           accent: 'actions',
         }
       }
       return {
         prompt: ctx.actionMarkerUsedThisTurn
           ? 'Маркер действия уже исполнен в этом ходу — передайте ход'
-          : 'Кликните по маркеру действия; после перемещения на вражескую клетку может начаться бой',
+          : 'Кликните по маркеру действия: перемещение, постройка или обстрел; на вражеской клетке может начаться бой',
         accent: 'actions',
       }
-    case 'production': {
-      const prodMax = ctx.productionMarkersMax ?? 0
-      const prodPlaced = ctx.productionMarkersPlaced ?? 0
-      return {
-        prompt: ctx.productionMarkerUsedThisTurn
-          ? 'Маркер производства уже исполнен в этом ходу — передайте ход'
-          : 'Кликните по маркеру производства: постройка, перезарядка или бесплатное снятие',
-        countHint: ctx.productionMarkerUsedThisTurn
-          ? undefined
-          : `Маркеров производства на карте: ${prodPlaced} из ${prodMax}`,
-        accent: 'production',
-      }
-    }
     default:
       return null
   }
@@ -153,11 +123,8 @@ export function phaseGuidanceForTurn(
 export function phaseShortPrompt(
   phase: Phase | undefined,
   isMyTurn: boolean,
-  markerKind: MarkerKind,
 ): string {
-  const guidance = phaseGuidanceForTurn(phase, isMyTurn, {
-    planningSubStep: markerKind === 'production' ? 'production-markers' : 'action-markers',
-  })
+  const guidance = phaseGuidanceForTurn(phase, isMyTurn)
   if (!guidance) return 'Загрузка…'
   return guidance.countHint ? `${guidance.prompt} · ${guidance.countHint}` : guidance.prompt
 }
@@ -165,9 +132,9 @@ export function phaseShortPrompt(
 export function gameHelpForPhase(
   phase: Phase | undefined,
   isMyTurn: boolean,
-  markerKind: MarkerKind,
 ): GameHelpBlock {
-  if (!phase) {
+  const normalized = normalizePhase(phase)
+  if (!normalized) {
     return {
       title: 'Подсказка',
       steps: [{ icon: 'wait', label: 'Загрузка…', detail: 'Загрузка состояния игры' }],
@@ -186,13 +153,13 @@ export function gameHelpForPhase(
         {
           icon: 'tip',
           label: 'Маркеры на карте',
-          detail: 'Жёлтая обводка — действие, розовый пунктир — производство.',
+          detail: 'Жёлтая обводка — маркер действия.',
         },
       ],
     }
   }
 
-  if (phase === 'events') {
+  if (normalized === 'events') {
     return {
       title: 'События',
       steps: [
@@ -215,141 +182,77 @@ export function gameHelpForPhase(
     }
   }
 
-  if (phase === 'planning') {
-    const isProductionStep = markerKind === 'production'
+  if (normalized === 'planning') {
     return {
       title: 'Планирование',
       steps: [
         {
           icon: 'queue',
           label: 'Очередь: случайная на ход',
-          detail: 'Порядок игроков разыгрывается в начале хода и один на планирование, действия и производство.',
-        },
-        isProductionStep
-          ? {
-              icon: 'marker-prod',
-              label: 'Клик — маркер производства',
-              detail: 'Клик по своей клетке — поставить или снять маркер производства (розовый пунктир).',
-            }
-          : {
-              icon: 'marker-action',
-              label: 'Клик по флоту — маркер действия',
-              detail: 'Клик по клетке с вашим кораблём — поставить или снять маркер действия (жёлтая обводка).',
-            },
-        {
-          icon: 'limit',
-          label: 'Действие: два плюс центры власти · 1 на клетку',
-          detail:
-            'Маркеров действия: два плюс число ваших центров власти, пересчёт в начале хода; по одному на клетку с вашим кораблём. Потеря центра в середине хода маркеры сразу не снимает.',
-        },
-        {
-          icon: 'marker-prod',
-          label: 'Производство: купленный пул (старт 1, макс 3)',
-          detail:
-            'Старт 1 маркер; второй и третий покупаются в производстве (8+6, затем 12+9). Ставить — в регион от 3 клеток; несколько в одном регионе можно, пока нет события «Нормирование производства».',
-        },
-        {
-          icon: 'tip',
-          label: 'Оба маркера на одной клетке',
-          detail: 'На одной клетке могут стоять маркеры действия и производства одновременно.',
-        },
-        {
-          icon: 'pass',
-          label: isProductionStep ? '← К маркерам действия' : 'Готово → производство',
-          detail: isProductionStep
-            ? 'Кнопка «← К маркерам действия» вернёт к расстановке маркеров действия.'
-            : 'Можно досрочно перейти к маркерам производства кнопкой «Готово с маркерами действия».',
-        },
-      ],
-    }
-  }
-
-  if (phase === 'actions') {
-    return {
-      title: 'Действия',
-      steps: [
-        {
-          icon: 'queue',
-          label: 'Очередь как в планировании',
-          detail: 'В «Действиях» и «Производстве» ходят в том же порядке, что зафиксирован на этот игровой ход.',
+          detail: 'Порядок игроков разыгрывается в начале хода и один на планирование и действия.',
         },
         {
           icon: 'marker-action',
-          label: 'Пока есть маркеры — фаза идёт',
-          detail: 'Фаза не заканчивается, пока на карте есть маркеры действий.',
+          label: 'Клик по флоту — маркер действия',
+          detail: 'Клик по клетке с вашим кораблём — поставить или снять маркер действия (жёлтая обводка).',
         },
         {
-          icon: 'click',
-          label: '1 маркер за ход (или снять)',
+          icon: 'limit',
+          label: 'Действие: три плюс центры власти · 1 на клетку',
           detail:
-            'За свой ход можно исполнить один маркер или снять другой без действия — только до исполнения, с подтверждением.',
+            'Маркеров действия: три плюс число ваших центров власти (при одном центре — четыре), пересчёт в начале хода; по одному на клетку с вашим кораблём.',
         },
         {
-          icon: 'ship',
-          label: 'Клик → корабли → маршрут',
-          detail: 'Клик по вашему маркеру открывает выбор кораблей; затем кликайте клетки назначения.',
-        },
-        {
-          icon: 'fight',
-          label: 'Красные клетки — бой',
-          detail: 'Оспариваемые клетки: превью с щитами, кубиками и порядком уничтожения.',
-        },
-        {
-          icon: 'tip',
-          label: 'Чужая клетка — сразу ваша',
-          detail: 'Вход на клетку под контролем другого игрока сразу забирает контроль. Нейтральную клетку по-прежнему объявляют в начале производства; эсминцы нейтраль не берут.',
+          icon: 'build',
+          label: 'Постройка — в фазе «Действия»',
+          detail:
+            'Клик по маркеру действия: перемещение или постройка кораблей на клетке маркера за фишки региона.',
         },
       ],
     }
   }
 
-  const fleetLimit = [
-    `${SHIP_LABELS.destroyer} ${MAX_FLEET_SIZE_PER_PLAYER.destroyer}`,
-    `${SHIP_LABELS.cruiser} ${MAX_FLEET_SIZE_PER_PLAYER.cruiser}`,
-    `${SHIP_LABELS.battleship} ${MAX_FLEET_SIZE_PER_PLAYER.battleship}`,
-    `${SHIP_LABELS.shield} ${MAX_FLEET_SIZE_PER_PLAYER.shield}`,
-    `${SHIP_LABELS.hyper} ${MAX_FLEET_SIZE_PER_PLAYER.hyper}`,
-  ].join(' · ')
-
   return {
-    title: 'Производство',
+    title: 'Действия',
     steps: [
       {
         icon: 'queue',
-          label: 'Очередь как в планировании',
-          detail: 'Строите по маркерам в том же порядке, что зафиксирован на этот игровой ход.',
+        label: 'Очередь как в планировании',
+        detail: 'В «Действиях» ходят в том же порядке, что зафиксирован на этот игровой ход.',
       },
       {
-        icon: 'marker-prod',
-        label: 'Пока есть маркеры — фаза идёт',
-        detail: 'Фаза не заканчивается, пока на карте есть маркеры производства.',
+        icon: 'build',
+        label: 'Постройка по маркеру действия',
+        detail: 'Клик по маркеру — окно постройки: корабли появляются на клетке маркера, оплата фишками региона.',
       },
-        {
-          icon: 'build',
-          label: 'Клик → все покупки на одном экране',
-          detail: 'Клик по маркеру открывает постройку, перезарядку, покупку маркеров и кнопку «Снять маркер». Снятие бесплатное, без фишек. Доп. маркер производства — не больше одного за игровой ход.',
-        },
+      {
+        icon: 'marker-action',
+        label: 'Пока есть маркеры — фаза идёт',
+        detail: 'Фаза не заканчивается, пока на карте есть маркеры действий.',
+      },
+      {
+        icon: 'click',
+        label: '1 маркер за ход (или снять)',
+        detail:
+          'За свой ход можно исполнить один маркер или снять другой без действия — только до исполнения, с подтверждением.',
+      },
+      {
+        icon: 'ship',
+        label: 'Клик → корабли → маршрут',
+        detail: 'Клик по вашему маркеру открывает выбор кораблей; затем кликайте клетки назначения.',
+      },
+      {
+        icon: 'fight',
+        label: 'Красные клетки — бой',
+        detail: 'Оспариваемые клетки: превью с щитами, кубиками и порядком уничтожения.',
+      },
       {
         icon: 'tip',
-        label: 'Перезарядка или постройка',
-        detail: 'Если есть лицевые и перевёрнутые фишки производства: либо перезарядка, либо постройка — не оба.',
-      },
-      {
-        icon: 'limit',
-        label: 'Лимит флота на игрока',
-        detail: fleetLimit,
+        label: 'Объявление контроля — после действий',
+        detail: 'Нейтральные клетки с вашими кораблями (включая эсминцы) переходят под ваш контроль в конце хода после фазы «Действия».',
       },
     ],
   }
-}
-
-export function markerKindLabel(kind: MarkerKind): string {
-  return kind === 'action' ? 'Действие' : 'Производство'
-}
-
-export function markerKindForPhase(phase: Phase | undefined): MarkerKind {
-  if (phase === 'production') return 'production'
-  return 'action'
 }
 
 /** Короткий ярлык типа легального действия для чипа в боковой панели */
@@ -357,13 +260,10 @@ export function legalActionChipLabel(action: { type: string; description: string
   const map: Record<string, string> = {
     'advance-phase': 'Далее',
     'place-action-marker': 'Маркер действия',
-    'place-production-marker': 'Маркер производства',
     'remove-action-marker': 'Снять действие',
-    'remove-production-marker': 'Снять производство',
     'execute-movement': 'Перемещение',
     'execute-bombardment': 'Обстрел',
     'execute-production': 'Постройка',
-    'execute-buy-production-marker': 'Маркер производства',
     surrender: 'Сдача',
     'recharge-production': 'Перезарядка',
     'resolve-event': 'Событие',
@@ -375,7 +275,7 @@ export function legalActionChipLabel(action: { type: string; description: string
 }
 
 export function legalActionChipIcon(type: string): HelpStepIcon {
-  if (type.includes('production') || type.includes('build') || type.includes('recharge')) return 'build'
+  if (type.includes('build') || type.includes('recharge') || type === 'execute-production') return 'build'
   if (type.includes('action') || type.includes('movement') || type.includes('bombard')) return 'marker-action'
   if (type.includes('event')) return 'event'
   if (type.includes('advance') || type.includes('skip')) return 'pass'

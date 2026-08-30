@@ -21,7 +21,7 @@ pnpm start              # один процесс: API /api/* + статика �
 pnpm --filter @galaxy/mcp-server dev
 ```
 
-Деплой на Railway: [docs/deploy-railway.md](./docs/deploy-railway.md).
+Деплой: [Amvera](./docs/deploy-amvera.md), [Railway](./docs/deploy-railway.md).
 
 ## Package boundaries
 

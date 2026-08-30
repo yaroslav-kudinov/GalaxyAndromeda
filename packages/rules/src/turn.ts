@@ -4,17 +4,15 @@ import { ensureTurnEventForPhase, resolveTurnEvent } from './events.js'
 import { refreshActionMarkerCapacity } from './marker-pools.js'
 import {
   syncActionMarkerTurnTracking,
-  syncProductionMarkerTurnTracking,
   validateActionMarkerBeforeAdvance,
-  validateProductionMarkerBeforeAdvance,
 } from './markers.js'
-import { validProductionRegionsForPlayer } from './regions.js'
+import { maybeApplyAutomaticResourceRecharge } from './resource-recharge.js'
 import { applyVictoryAndDefeatChecks } from './victory.js'
 import type { GameSnapshot } from './save-file.js'
 import { gameStateFromSnapshot } from './save-file.js'
 import type { GameState, Phase, PlayerState } from './types.js'
 
-export const PHASE_ORDER: Phase[] = ['events', 'planning', 'actions', 'production']
+export const PHASE_ORDER: Phase[] = ['events', 'planning', 'actions']
 
 export const PHASE_LABELS: Record<Phase, string> = {
   events: 'События',
@@ -26,7 +24,7 @@ export const PHASE_LABELS: Record<Phase, string> = {
 const PHASE_PASS_VERB: Record<Exclude<Phase, 'events'>, string> = {
   planning: 'планирование',
   actions: 'действия',
-  production: 'производство',
+  production: 'действия',
 }
 
 export interface TurnOrderContext {
@@ -150,29 +148,17 @@ function canPlayerActInPhase(game: GameSnapshot, state: GameState, playerId: str
     const canPlaceAction = game.cells.some(
       (cell) => cell.ships.some((ship) => ship.ownerId === playerId) && !cell.actionMarkerId,
     )
-    if (canPlaceAction || game.actionMarkers.some((marker) => marker.ownerId === playerId)) {
-      return true
-    }
-
-    const occupiedRegions = new Set(
-      game.productionMarkers
-        .filter((marker) => marker.ownerId === playerId)
-        .map((marker) => marker.targetRegionId),
-    )
-    return validProductionRegionsForPlayer(state, playerId).some(
-      (region) => !occupiedRegions.has(region.id),
-    )
+    return canPlaceAction || game.actionMarkers.some((marker) => marker.ownerId === playerId)
   }
 
   if (state.phase === 'actions') {
-    return game.actionMarkers.some(
-      (marker) => marker.ownerId === playerId,
-    ) && !(game.activePlayerId === playerId && game.actionMarkerResolvedThisTurn)
+    return (
+      game.actionMarkers.some((marker) => marker.ownerId === playerId)
+      && !(game.activePlayerId === playerId && game.actionMarkerResolvedThisTurn)
+    )
   }
 
-  return game.productionMarkers.some(
-    (marker) => marker.ownerId === playerId,
-  ) && !(game.activePlayerId === playerId && game.productionMarkerResolvedThisTurn)
+  return false
 }
 
 function applyTurnState(game: GameSnapshot, state: GameState, prevPhase: Phase, prevActivePlayerId: string | null): void {
@@ -181,8 +167,10 @@ function applyTurnState(game: GameSnapshot, state: GameState, prevPhase: Phase, 
   game.activePlayerId = state.activePlayerId
   game.eventLog = state.eventLog
   syncActionMarkerTurnTracking(game, prevPhase, prevActivePlayerId)
-  syncProductionMarkerTurnTracking(game, prevPhase, prevActivePlayerId)
   maybeApplyProductionHexClaims(game, prevPhase)
+  if (prevPhase === 'actions' && game.phase === 'events') {
+    maybeApplyAutomaticResourceRecharge(game)
+  }
 }
 
 /**
@@ -196,12 +184,7 @@ function continuePhaseWhileMarkersRemain(
   prevPhase: Phase,
   prevActivePlayerId: string | null,
 ): boolean {
-  const remaining =
-    state.phase === 'actions'
-      ? game.actionMarkers.length > 0
-      : state.phase === 'production'
-        ? game.productionMarkers.length > 0
-        : false
+  const remaining = state.phase === 'actions' ? game.actionMarkers.length > 0 : false
   if (!remaining) return false
 
   const order = activePlayerOrder(
@@ -221,7 +204,6 @@ function continuePhaseWhileMarkersRemain(
   // Новый круг маркеров: снова разрешаем одно исполнение за круг (даже если
   // activePlayerId не сменился — один игрок с оставшимися маркерами).
   if (state.phase === 'actions') game.actionMarkerResolvedThisTurn = false
-  if (state.phase === 'production') game.productionMarkerResolvedThisTurn = false
   return true
 }
 
@@ -295,7 +277,7 @@ export function phaseAdvanceActionLabel(
     case 'planning':
       return 'Все спланировали → к действиям'
     case 'actions':
-      return 'К производству'
+      return 'Завершить ход'
     case 'production':
       return 'Завершить ход'
     default:
@@ -344,6 +326,21 @@ export function advanceGamePhase(
     return []
   }
 
+  if (phase === 'actions') {
+    state.turnNumber += 1
+    state.phase = 'events'
+    const eventsOrder = activePlayerOrder(state.players, participatingPlayerIds, {
+      state,
+      phase: 'events',
+    })
+    state.activePlayerId = eventsOrder[0]!
+    appendPhaseEvent(
+      state,
+      `Ход ${state.turnNumber}, фаза «${PHASE_LABELS.events}»`,
+    )
+    return []
+  }
+
   if (phase === 'production') {
     state.turnNumber += 1
     state.phase = 'events'
@@ -361,8 +358,6 @@ export function advanceGamePhase(
 
   if (phase === 'planning') {
     state.phase = 'actions'
-  } else if (phase === 'actions') {
-    state.phase = 'production'
   } else {
     return [`Неизвестная фаза: ${phase}`]
   }
@@ -395,10 +390,7 @@ export function completeEventsPhaseIfActive(game: GameSnapshot, mapId: string): 
 }
 
 export function advanceGameSnapshot(game: GameSnapshot, mapId: string): string[] {
-  const advanceErrors = [
-    ...validateActionMarkerBeforeAdvance(game),
-    ...validateProductionMarkerBeforeAdvance(game),
-  ]
+  const advanceErrors = [...validateActionMarkerBeforeAdvance(game)]
   if (advanceErrors.length) return advanceErrors
 
   const eventErrors = applyTurnEventIfInEventsPhase(game)
@@ -409,10 +401,7 @@ export function advanceGameSnapshot(game: GameSnapshot, mapId: string): string[]
   const participating = game.participatingPlayerIds
   const state = gameStateFromSnapshot(game, mapId)
 
-  if (
-    (state.phase === 'actions' || state.phase === 'production')
-    && isLastPlayerInPhase(state, participating)
-  ) {
+  if (state.phase === 'actions' && isLastPlayerInPhase(state, participating)) {
     if (continuePhaseWhileMarkersRemain(game, state, prevPhase, prevActivePlayerId)) {
       return skipPlayersWithoutPhaseActions(game, mapId)
     }
@@ -439,16 +428,6 @@ export function phaseAdvanceActionLabelForSnapshot(game: GameSnapshot, mapId: st
     state.phase === 'actions'
     && isLastPlayerInPhase(state, participating)
     && game.actionMarkers.length > 0
-  ) {
-    const order = activePlayerOrder(state.players, participating, ctx)
-    const nextId = order[0]
-    if (!nextId) return 'Далее'
-    return `Завершить круг → ${playerDisplayName(state, nextId)}`
-  }
-  if (
-    state.phase === 'production'
-    && isLastPlayerInPhase(state, participating)
-    && game.productionMarkers.length > 0
   ) {
     const order = activePlayerOrder(state.players, participating, ctx)
     const nextId = order[0]

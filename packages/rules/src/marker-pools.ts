@@ -4,8 +4,8 @@ import type { ShipProductionCost } from './ships.js'
 export const START_PRODUCTION_MARKER_LIMIT = 1
 export const MAX_PRODUCTION_MARKERS_PER_PLAYER = 3
 
-/** База формулы: доступные маркеры действия = 2 + число центров власти. */
-export const ACTION_MARKER_LIMIT_BASE = 2
+/** База формулы: доступные маркеры действия = 3 + число центров власти (при одном центре — 4). */
+export const ACTION_MARKER_LIMIT_BASE = 3
 
 export const PRODUCTION_MARKER_EXPAND_COST: Record<2 | 3, ShipProductionCost> = {
   2: { credits: 8, production: 6 },

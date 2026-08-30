@@ -73,7 +73,8 @@ export const SHIP_COMBAT_DICE: Partial<Record<ShipType, number>> = {
  * По умолчанию d6; у крейсера — d4.
  */
 export const SHIP_COMBAT_DIE_FACES: Partial<Record<ShipType, number>> = {
-  cruiser: 4,
+  destroyer: 4,
+  cruiser: 6,
 }
 
 /** supportDice по ships.yaml */
@@ -1870,13 +1871,12 @@ function maybeTransferControl(
   const cell = cellAt(game, coord)
   if (!cell) return
 
-  // Нейтральную клетку боем не захватывают — только кораблём снабжения.
-  if (cell.controlOwnerId == null) return
-  // Контроль переходит лишь при полном вытеснении владельца клетки.
-  if (cell.controlOwnerId !== defenderId) return
-
   const defenderRemaining = cell.ships.some((s) => s.ownerId === defenderId)
   if (defenderRemaining) return
+
+  if (cell.controlOwnerId == null) return
+
+  if (cell.controlOwnerId !== defenderId) return
 
   cell.controlOwnerId = attackerId
   removeStaleProductionMarkerAt(game, coord)
@@ -2195,6 +2195,8 @@ export function validateCombatOptions(
 export interface ApplyCombatResultOptions {
   /** false для обстрела — атакующий не занимает клетку */
   transferControl?: boolean
+  /** Корабли атакующего, ещё не вошедшие на клетку (движение до высадки) */
+  incomingAttackerShips?: ShipUnit[]
 }
 
 export function applyCombatResultToSnapshot(
@@ -2206,7 +2208,12 @@ export function applyCombatResultToSnapshot(
 ): void {
   removeShipsFromSnapshot(game, result.destroyedShipIds)
   if (result.attackerWon && options.transferControl !== false) {
-    maybeTransferControl(game, result.coord, attackerId, defenderId)
+    maybeTransferControl(
+      game,
+      result.coord,
+      attackerId,
+      defenderId,
+    )
   }
   // Маркер клетки боя: если у владельца не осталось кораблей — снять
   // (не только при победе атакующего и не только для «защитника» FSM).

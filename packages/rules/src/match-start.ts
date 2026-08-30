@@ -1,6 +1,7 @@
 import type { GameSnapshot } from './save-file.js'
 import { gameStateFromSnapshot } from './save-file.js'
 import { refreshActionMarkerCapacity } from './marker-pools.js'
+import { rollNewResourceRechargeSchedule } from './resource-recharge.js'
 import { activePlayerOrder } from './turn.js'
 
 /** Новая партия: ход 1, планирование, без маркеров и боя. */
@@ -26,6 +27,8 @@ export function beginMatchForParticipants(
 ): void {
   const ids = [...new Set(participatingIds.filter(Boolean))]
   game.participatingPlayerIds = ids
+
+  rollNewResourceRechargeSchedule(game)
 
   for (const cell of game.cells) {
     cell.ships = cell.ships.filter((ship) => ids.includes(ship.ownerId))

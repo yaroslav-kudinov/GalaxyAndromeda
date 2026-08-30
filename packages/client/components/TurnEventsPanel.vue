@@ -7,6 +7,7 @@ const props = defineProps<{
   currentTurn: number
   phase?: Phase
   resolvedAt?: string
+  rechargeBanner?: string | null
 }>()
 
 const pastHistory = computed(() =>
@@ -14,7 +15,11 @@ const pastHistory = computed(() =>
 )
 
 const showPanel = computed(
-  () => !!props.activeEvent || pastHistory.value.length > 0 || props.history.length > 0,
+  () =>
+    !!props.rechargeBanner
+    || !!props.activeEvent
+    || pastHistory.value.length > 0
+    || props.history.length > 0,
 )
 
 function formatTimestamp(ts?: number, iso?: string): string {
@@ -40,6 +45,13 @@ function historyAppliedLabel(entry: TurnEventHistoryEntry): string {
 <template>
   <section v-if="showPanel" class="turn-events">
     <h3 class="turn-events-heading">События хода</h3>
+
+    <ResourceRechargeBanner
+      v-if="rechargeBanner"
+      class="turn-events-recharge"
+      :text="rechargeBanner"
+      variant="panel"
+    />
 
     <EventCardPanel
       v-if="activeEvent"
@@ -83,6 +95,10 @@ function historyAppliedLabel(entry: TurnEventHistoryEntry): string {
   margin: 0 0 0.5rem;
   font-size: 0.85rem;
   color: #94a3b8;
+}
+
+.turn-events-recharge {
+  margin-bottom: 0.65rem;
 }
 
 .turn-events-history {

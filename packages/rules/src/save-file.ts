@@ -9,6 +9,7 @@ import {
   productionMarkerLimitForPlayer,
 } from './marker-pools.js'
 import { syncActionMarkerTurnTracking, syncProductionMarkerTurnTracking } from './markers.js'
+import { migrateResourceRechargeSchedule, normalizeResourceRechargeTurns } from './resource-recharge.js'
 import type {
   CellState,
   GameEvent,
@@ -317,12 +318,16 @@ export interface GameSnapshot {
   pendingCombat?: PendingCombat
   /** Регион сверхурочных на игрока (событие «Обязательные сверхурочные») */
   overtimeRegionByPlayer?: Record<string, string>
-  /** Потраченные фишки производства за ход (событие «Всё для фронта») */
+  /** @deprecated Устаревшее поле сейва (событие «Всё для фронта» снято) */
   productionTokensSpentThisTurn?: Record<string, number>
   /** Лимит маркеров действия: 2 + центры власти, заморожен в начале хода (ADR 011) */
   actionMarkerLimitByPlayer?: Record<string, number>
-  /** Купленный лимит маркеров производства (старт 1, макс 3) */
+  /** Купленный лимит маркеров производства (устарело; миграция очищает PM) */
   productionMarkerLimitByPlayer?: Record<string, number>
+  /** Полных ходов до следующей автоперезарядки (1 — в конце текущего) */
+  resourceRechargeTurnsRemaining?: 1 | 2 | 3
+  /** @deprecated миграция; см. resourceRechargeTurnsRemaining */
+  resourceRechargeInterval?: 1 | 2 | 3
 }
 
 export interface GalaxySaveFile {
@@ -477,7 +482,7 @@ export function normalizeGalaxySave(save: GalaxySaveFile): GalaxySaveFile {
   return normalized
 }
 
-function normalizeGameSnapshot(game: GameSnapshot, map?: MapDefinition): GameSnapshot {
+function normalizeGameSnapshot(game: GameSnapshot, _map?: MapDefinition): GameSnapshot {
   const cells: RuntimeCellState[] = game.cells.map((c) => ({
     coord: { q: c.coord.q, r: c.coord.r },
     isPowerCenter: !!c.isPowerCenter,
@@ -489,12 +494,18 @@ function normalizeGameSnapshot(game: GameSnapshot, map?: MapDefinition): GameSna
   }))
 
   const actionMarkers = (game.actionMarkers ?? []).map((m) => ({ ...m, coord: { ...m.coord } }))
-  const productionMarkers = (game.productionMarkers ?? []).map((m) => ({ ...m, coord: { ...m.coord } }))
+  const productionMarkers: ProductionMarker[] = []
+
+  for (const cell of cells) {
+    cell.productionMarkerId = null
+  }
 
   syncMarkerRefs(cells, actionMarkers, productionMarkers)
 
+  const phase = game.phase === 'production' ? 'actions' : game.phase
+
   const normalized: GameSnapshot = {
-    phase: game.phase,
+    phase,
     turnNumber: game.turnNumber,
     activePlayerId: game.activePlayerId ?? null,
     players: game.players ?? [],
@@ -534,20 +545,15 @@ function normalizeGameSnapshot(game: GameSnapshot, map?: MapDefinition): GameSna
     productionMarkerLimitByPlayer: game.productionMarkerLimitByPlayer
       ? { ...game.productionMarkerLimitByPlayer }
       : undefined,
+    resourceRechargeTurnsRemaining:
+      normalizeResourceRechargeTurns(game.resourceRechargeTurnsRemaining)
+      ?? normalizeResourceRechargeTurns(game.resourceRechargeInterval)
+      ?? undefined,
   }
 
   ensureMarkerLimits(normalized)
-  if (map) refreshProductionMarkerRegionIds(normalized, map)
+  migrateResourceRechargeSchedule(normalized)
   return normalized
-}
-
-function refreshProductionMarkerRegionIds(game: GameSnapshot, map: MapDefinition): void {
-  if (game.productionMarkers.length === 0) return
-  const state = gameStateFromSnapshot(game, map.id)
-  for (const marker of game.productionMarkers) {
-    const regionId = resolveRegionIdForCell(state, marker.coord, marker.ownerId)
-    if (regionId) marker.targetRegionId = regionId
-  }
 }
 
 function syncMarkerRefs(
@@ -774,6 +780,11 @@ export function gameSnapshotFromObservation(
       mech,
       'productionMarkerLimitByPlayer',
       preserve?.productionMarkerLimitByPlayer,
+    ),
+    resourceRechargeTurnsRemaining: fromObservationField(
+      mech,
+      'resourceRechargeTurnsRemaining',
+      preserve?.resourceRechargeTurnsRemaining,
     ),
   }, map)
 

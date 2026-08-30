@@ -12,6 +12,7 @@ HTTP base: `http://127.0.0.1:3001` (env `GAME_SERVER_URL` for MCP).
 | POST | `/rooms/:id/join` | Body: `{ playerName, preferredPlayerId? }` → `{ playerId, code }`. Только пока `lobby` |
 | POST | `/rooms/:id/rejoin` | Body: `{ playerId, playerName?, preferredPlayerId? }` → смена слота в лобби или возврат в свой слот |
 | POST | `/rooms/:id/start` | Body: `{ playerId }` — хост начинает партию (`playing`) |
+| POST | `/rooms/:id/close` | Body: `{ playerId }` — хост закрывает комнату подготовки (до старта) |
 | GET | `/rooms/:id/bootstrap` | Карта, слоты, `status`, `hostPlayerId`, `joinedPlayerIds` |
 | GET | `/rooms/:id/state?playerId=` | `GameObservation` |
 | GET | `/rooms/:id/legal-actions?playerId=` | `LegalAction[]` |

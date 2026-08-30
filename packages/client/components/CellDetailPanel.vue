@@ -14,12 +14,10 @@ const props = defineProps<{
   cellKey: string | null
   players?: PlayerState[]
   canRemoveActionMarker?: boolean
-  canRemoveProductionMarker?: boolean
 }>()
 
 const emit = defineEmits<{
   removeActionMarker: []
-  removeProductionMarker: []
 }>()
 
 const token = computed(() => (props.cell ? getCellResourceToken(props.cell) : undefined))
@@ -83,15 +81,6 @@ const ownerName = computed(() =>
         >
           <span class="marker-glyph marker-glyph--action" aria-hidden="true" />
         </span>
-        <span
-          v-if="cell.productionMarker"
-          class="chip chip--marker-prod"
-          role="listitem"
-          title="Маркер производства"
-          aria-label="Маркер производства"
-        >
-          <span class="marker-glyph marker-glyph--prod" aria-hidden="true" />
-        </span>
       </div>
     </header>
 
@@ -137,17 +126,6 @@ const ownerName = computed(() =>
         @click="emit('removeActionMarker')"
       >
         <span class="marker-glyph marker-glyph--action" aria-hidden="true" />
-        Снять
-      </button>
-    </div>
-    <div v-if="canRemoveProductionMarker && cell.productionMarker" class="remove-row">
-      <button
-        type="button"
-        class="remove-marker-btn remove-marker-btn--production"
-        title="Снять маркер производства без постройки"
-        @click="emit('removeProductionMarker')"
-      >
-        <span class="marker-glyph marker-glyph--prod" aria-hidden="true" />
         Снять
       </button>
     </div>
@@ -240,10 +218,6 @@ const ownerName = computed(() =>
 .chip--marker-action {
   border-color: rgba(250, 204, 21, 0.55);
   background: rgba(113, 63, 18, 0.4);
-}
-.chip--marker-prod {
-  border-color: rgba(244, 114, 182, 0.55);
-  background: rgba(131, 24, 67, 0.4);
 }
 .owner-swatch {
   display: inline-block;

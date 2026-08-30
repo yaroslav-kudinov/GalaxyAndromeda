@@ -9,7 +9,6 @@ import type {
 } from '@galaxy/rules'
 import {
   SHIP_LABELS,
-  canDeclareControlForMove,
   getBombardableShipsAtMarker,
   getMovableShipsAtMarker,
   hexKey,
@@ -26,11 +25,6 @@ import {
 } from '~/composables/useActionOrderDraft'
 
 export type { MarkerPickAssignment, MarkerActionMode } from '~/composables/useActionOrderDraft'
-
-export type PendingControlChoice = {
-  shipId: string
-  to: HexCoord
-}
 
 function isMovableShipOption(
   opt: MovableShipOption | BombardableShipOption,
@@ -59,7 +53,6 @@ export function useMarkerMapPick(
   const selectedShipIds = ref<string[]>([])
   const activeShipId = ref<string | null>(null)
   const error = ref<string | null>(null)
-  const pendingControlChoice = ref<PendingControlChoice | null>(null)
 
   const orderDraft = useActionOrderDraft(snapshot, playerId, source, selectedShipIds, mode)
 
@@ -101,7 +94,7 @@ export function useMarkerMapPick(
   })
 
   const reachableKeys = computed(() => {
-    if (!active.value || pendingControlChoice.value) return [] as string[]
+    if (!active.value) return [] as string[]
 
     if (mode.value === 'bombardment') {
       return bombardmentTargetKeys.value
@@ -163,18 +156,13 @@ export function useMarkerMapPick(
       }
       return 'Все корабли назначены — нажмите «Подтвердить» для выполнения хода.'
     }
-    if (pendingControlChoice.value) {
-      const { to } = pendingControlChoice.value
-      return `Клетка (${to.q}, ${to.r}): занять её? Снабженец будет снят с карты.`
-    }
-    // Выбор назначения / цели: текст собирается в шаблоне с подсветкой имени корабля.
     return ''
   })
 
   /** Корабль для подсветки в баннере при выборе клетки назначения. */
   const bannerShip = computed(() => {
     if (!active.value || !source.value) return null
-    if (pendingControlChoice.value || orderDraft.orderReady.value) return null
+    if (orderDraft.orderReady.value) return null
     if (mode.value === 'bombardment') {
       const shipId =
         activeShipId.value
@@ -212,7 +200,6 @@ export function useMarkerMapPick(
     selectedShipIds.value = []
     activeShipId.value = null
     error.value = null
-    pendingControlChoice.value = null
     orderDraft.clear()
   }
 
@@ -222,7 +209,6 @@ export function useMarkerMapPick(
     selectedShipIds.value = [...shipIds]
     activeShipId.value = shipIds[0] ?? null
     error.value = null
-    pendingControlChoice.value = null
     orderDraft.clear()
     active.value = true
   }
@@ -289,9 +275,9 @@ export function useMarkerMapPick(
     activeShipId.value = nextUnassigned ?? null
   }
 
-  function assignShipDestination(shipId: string, to: HexCoord, declareControl: boolean) {
-    orderDraft.pushUndoSnapshot(activeShipId.value, pendingControlChoice.value)
-    orderDraft.setAssignment(shipId, to, declareControl)
+  function assignShipDestination(shipId: string, to: HexCoord) {
+    orderDraft.pushUndoSnapshot(activeShipId.value, null)
+    orderDraft.setAssignment(shipId, to, false)
     error.value = null
     advanceToNextShip()
   }
@@ -353,7 +339,7 @@ export function useMarkerMapPick(
   }
 
   function handleMapSelect(q: number, r: number): null {
-    if (!active.value || !source.value || pendingControlChoice.value) return null
+    if (!active.value || !source.value) return null
     if (orderDraft.orderReady.value) return null
 
     if (mode.value === 'bombardment') {
@@ -392,77 +378,19 @@ export function useMarkerMapPick(
     }
 
     if (isCombat) {
-      assignShipDestination(activeShipId.value, to, false)
+      assignShipDestination(activeShipId.value, to)
       return null
     }
 
-    const dest = destCell(to)
-    if (dest && canDeclareControlForMove(snapshot.value!, shipOpt.ship, dest)) {
-      orderDraft.pushUndoSnapshot(activeShipId.value, pendingControlChoice.value)
-      pendingControlChoice.value = { shipId: activeShipId.value, to }
-      error.value = null
-      return null
-    }
-
-    assignShipDestination(activeShipId.value, to, false)
+    assignShipDestination(activeShipId.value, to)
     return null
-  }
-
-  function resolveControlChoice(occupy: boolean): null {
-    const pending = pendingControlChoice.value
-    if (!pending || !source.value) return null
-
-    const shipOpt = movableShipOptions.value.find((o) => o.ship.id === pending.shipId)
-    if (!shipOpt) return null
-
-    if (
-      occupy === false
-      && isCombatDestination(snapshot.value!, playerId.value, pending.to)
-      && orderDraft.wouldViolateSingleCombatRule(pending.to, pending.shipId)
-    ) {
-      error.value = orderDraft.ONE_BATTLE_PER_MARKER_MSG
-      pendingControlChoice.value = null
-      return null
-    }
-
-    const errors = validateDestinationForMove(
-      snapshot.value!,
-      map.value!,
-      playerId.value,
-      shipOpt.ship,
-      source.value,
-      pending.to,
-      occupy,
-      priorMovesFor(pending.shipId),
-    )
-    if (errors.length) {
-      error.value = errors[0] ?? null
-      pendingControlChoice.value = null
-      return null
-    }
-
-    pendingControlChoice.value = null
-    assignShipDestination(pending.shipId, pending.to, occupy)
-    return null
-  }
-
-  function cancelPendingControlChoice() {
-    pendingControlChoice.value = null
-    error.value = null
   }
 
   function undoLastAction(): boolean {
-    if (pendingControlChoice.value) {
-      pendingControlChoice.value = null
-      error.value = null
-      return true
-    }
-
     const restored = orderDraft.undoLast()
     if (!restored) return false
 
     activeShipId.value = restored.activeShipId
-    pendingControlChoice.value = restored.pendingControlChoice
     error.value = null
     return true
   }
@@ -492,15 +420,12 @@ export function useMarkerMapPick(
     orderReady: orderDraft.orderReady,
     hasPendingCombat: orderDraft.hasPendingCombat,
     shipOptions,
-    pendingControlChoice,
     combatPreview: orderDraft.orderCombatPreview,
     roundOneOdds: orderDraft.roundOneOdds,
     start,
     cancel,
-    cancelPendingControlChoice,
     afterBattleModalClosed,
     handleMapSelect,
-    resolveControlChoice,
     tryConfirmOrder,
     undoLastAction,
     canUndo: orderDraft.canUndo,

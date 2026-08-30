@@ -50,6 +50,8 @@ interface PersistedRoomFile {
   /** epoch ms; для чистки пустых лобби после рестарта */
   lastActivityAt?: number
   lastCombatResult?: Room['lastCombatResult']
+  /** epoch ms; момент победы для автозакрытия после рестарта сервера */
+  gameOverAt?: number | null
   /** Карта + снимок партии в формате обычного сохранения — переиспользуем миграции `@galaxy/rules`. */
   save: GalaxySaveFile
 }
@@ -109,6 +111,7 @@ function serializeRoom(room: Room): string {
     observationRevision: room.observationRevision,
     lastActivityAt: room.lastActivityAt,
     lastCombatResult: room.lastCombatResult,
+    gameOverAt: room.gameOverAt ?? null,
     save: {
       format: GALAXY_SAVE_FORMAT,
       version: GALAXY_SAVE_VERSION,
@@ -259,6 +262,9 @@ function readPersistedRoom(path: string): Room | null {
     lastCombatResult: record.lastCombatResult,
     observationRevision: typeof record.observationRevision === 'number' ? record.observationRevision : 0,
     lastActivityAt: activityFromFile,
+    gameOverAt: typeof record.gameOverAt === 'number' && Number.isFinite(record.gameOverAt)
+      ? record.gameOverAt
+      : null,
   }
 
   debugLog('rooms.restore.room', {

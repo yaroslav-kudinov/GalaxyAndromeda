@@ -52,9 +52,25 @@ function placeProductionMarkerForTest(
   game: GameSnapshot,
   ownerId: string,
   coord: { q: number; r: number },
-  map: ReturnType<typeof createEmptyMap>,
+  _map?: ReturnType<typeof createEmptyMap>,
 ) {
-  return withPlanningPhase(game, ownerId, () => addProductionMarker(game, ownerId, coord, map))
+  const cell = game.cells.find((c) => c.coord.q === coord.q && c.coord.r === coord.r)
+  if (cell) {
+    cell.controlOwnerId ??= ownerId
+    if (!cell.ships.some((s) => s.ownerId === ownerId)) {
+      cell.ships.push({
+        id: `test-ship-${coord.q}-${coord.r}`,
+        type: 'destroyer',
+        ownerId,
+      })
+    }
+  }
+  ensureActionMarkerCapacity(
+    game,
+    ownerId,
+    game.actionMarkers.filter((m) => m.ownerId === ownerId).length + 1,
+  )
+  return placeActionMarkerForTest(game, ownerId, coord)
 }
 
 /** Линия из count смежных клеток (q, r), (q+1, r), … для тестов регионов */
@@ -132,7 +148,7 @@ import {
   resolveJoinPlayerId,
   resolveRejoinPlayerId,
 } from './lobby.js'
-import { addActionMarker, addProductionMarker, removeActionMarker, removeProductionMarker, toggleMarkerAtCell, togglePhaseMarkerAtCell, ACTION_MARKER_ALREADY_RESOLVED_MSG, ACTION_MARKER_MUST_RESOLVE_BEFORE_ADVANCE_MSG, ACTION_MARKER_REMOVE_BLOCKED_MSG, PRODUCTION_MARKER_ALREADY_RESOLVED_MSG, PRODUCTION_MARKER_MUST_RESOLVE_BEFORE_ADVANCE_MSG, PRODUCTION_MARKER_REMOVE_BLOCKED_MSG, shouldConfirmPlanningPhaseAdvance } from './markers.js'
+import { addActionMarker, addProductionMarker, removeActionMarker, toggleMarkerAtCell, togglePhaseMarkerAtCell, ACTION_MARKER_ALREADY_RESOLVED_MSG, ACTION_MARKER_MUST_RESOLVE_BEFORE_ADVANCE_MSG, ACTION_MARKER_REMOVE_BLOCKED_MSG, shouldConfirmPlanningPhaseAdvance } from './markers.js'
 import { applyGameAction, buildObservation, gameStateFromMap, getLegalActions } from './game.js'
 import {
   applyGameActionOnSnapshot,
@@ -511,6 +527,12 @@ describe('galaxy save file', () => {
       coord: { q: 3, r: 0 },
       placedInPhase: 'planning',
     })
+    game.actionMarkers.push({
+      id: 'act-4',
+      ownerId: 'player-1',
+      coord: { q: 4, r: 0 },
+      placedInPhase: 'planning',
+    })
     const save = { ...galaxySaveFromMap(map), game }
     expect(validateGalaxySave(save).some((e) => e.includes('action markers'))).toBe(true)
   })
@@ -670,6 +692,48 @@ describe('galaxy save file', () => {
     expect(mech.observationRevision).toBe(3)
   })
 
+  it('buildObservation forwards resourceRechargeTurnsRemaining', () => {
+    const map = createEmptyMap()
+    const game = gameSnapshotFromMap(map)
+    game.resourceRechargeTurnsRemaining = 2
+
+    const obs = buildObservation(
+      {
+        ...gameStateFromSnapshot(game, map.id),
+        actionMarkers: game.actionMarkers,
+        productionMarkers: game.productionMarkers,
+        resourceRechargeTurnsRemaining: 2,
+      } as Parameters<typeof buildObservation>[0] & Record<string, unknown>,
+      [],
+      { geometry: false },
+    )
+
+    expect((obs.mechanics as Record<string, unknown>).resourceRechargeTurnsRemaining).toBe(2)
+  })
+
+  it('gameSnapshotFromObservation syncs resourceRechargeTurnsRemaining from server', () => {
+    const map = createEmptyMap()
+    const local = gameSnapshotFromMap(map)
+    local.resourceRechargeTurnsRemaining = 3
+
+    const synced = gameSnapshotFromObservation(
+      {
+        phase: local.phase,
+        turnNumber: local.turnNumber,
+        activePlayerId: local.activePlayerId,
+        players: local.players,
+        cells: local.cells,
+        actionMarkers: local.actionMarkers,
+        productionMarkers: local.productionMarkers,
+        resourceRechargeTurnsRemaining: 1,
+      } as Parameters<typeof gameSnapshotFromObservation>[0] & Record<string, unknown>,
+      local,
+      map,
+    )
+
+    expect(synced.resourceRechargeTurnsRemaining).toBe(1)
+  })
+
   it('ensurePlayerSlots pads players up to slot count', () => {
     const game = gameSnapshotFromMap(createEmptyMap())
     expect(game.players).toHaveLength(2)
@@ -784,7 +848,7 @@ describe('game markers', () => {
     expect(addActionMarker(game, 'player-1', { q: 0, r: 0 })).toEqual([])
     expect(game.actionMarkers).toHaveLength(1)
     expect(removeActionMarker(game, game.actionMarkers[0].id, 'player-1')).toEqual([])
-    expect(game.actionMarkers).toHaveLength(0)
+    expect(game.productionMarkers).toHaveLength(0)
   })
 
   it('allows action marker on cell with ship even without control', () => {
@@ -808,7 +872,7 @@ describe('game markers', () => {
 
     const errors = addActionMarker(game, 'player-1', { q: 0, r: 0 })
     expect(errors.some((e) => e.includes('планирован'))).toBe(true)
-    expect(game.actionMarkers).toHaveLength(0)
+    expect(game.productionMarkers).toHaveLength(0)
   })
 
   it('rejects adding production marker outside planning phase', () => {
@@ -837,11 +901,11 @@ describe('game markers', () => {
     game.phase = 'actions'
     game.activePlayerId = 'player-1'
     expect(toggleMarkerAtCell(game, 'player-1', { q: 0, r: 0 }, map, 'action')).toEqual([])
-    expect(game.actionMarkers).toHaveLength(0)
+    expect(game.productionMarkers).toHaveLength(0)
 
     const addErrors = toggleMarkerAtCell(game, 'player-1', { q: 1, r: 0 }, map, 'action')
     expect(addErrors.some((e) => e.includes('планирован'))).toBe(true)
-    expect(game.actionMarkers).toHaveLength(0)
+    expect(game.productionMarkers).toHaveLength(0)
   })
 
   it('shouldConfirmPlanningPhaseAdvance when markers remain available', () => {
@@ -856,6 +920,7 @@ describe('game markers', () => {
       { q: 2, r: 0 },
     ])
     addTestShip(game, 0, 0, 'player-1')
+    addTestShip(game, 1, 0, 'player-1')
 
     expect(shouldConfirmPlanningPhaseAdvance(game, map, 'player-1')).toBe(true)
 
@@ -871,7 +936,7 @@ describe('game markers', () => {
 
     const errors = addActionMarker(game, 'player-1', { q: 0, r: 0 })
     expect(errors.some((e) => e.includes('корабл'))).toBe(true)
-    expect(game.actionMarkers).toHaveLength(0)
+    expect(game.productionMarkers).toHaveLength(0)
   })
 
   it('blocks removing action marker after another marker was resolved this turn', () => {
@@ -967,30 +1032,6 @@ describe('game markers', () => {
     expect(addProductionMarker(game, 'player-1', { q: 0, r: 0 }, map)).toEqual([])
     expect(addProductionMarker(game, 'player-1', { q: 1, r: 0 }, map)).toEqual([])
     expect(game.productionMarkers).toHaveLength(2)
-  })
-
-  it('rejects second production marker in same region when mandatory-overtime is active', () => {
-    const map = createEmptyMap()
-    addHorizontalLine(map, 3)
-    const game = gameSnapshotFromMap(map)
-    game.phase = 'planning'
-    game.activePlayerId = 'player-1'
-    game.productionMarkerLimitByPlayer = { 'player-1': 2 }
-    game.turnEvent = {
-      eventId: 'mandatory-overtime',
-      turnNumber: game.turnNumber,
-      resolvedAt: new Date().toISOString(),
-    }
-    setPlayerControl(game, 'player-1', [
-      { q: 0, r: 0 },
-      { q: 1, r: 0 },
-      { q: 2, r: 0 },
-    ])
-
-    expect(addProductionMarker(game, 'player-1', { q: 0, r: 0 }, map)).toEqual([])
-    const errors = addProductionMarker(game, 'player-1', { q: 1, r: 0 }, map)
-    expect(errors.some((e) => e.includes('регионе'))).toBe(true)
-    expect(game.productionMarkers).toHaveLength(1)
   })
 
   it('allows the second production marker after the pool is expanded', () => {
@@ -1173,7 +1214,7 @@ describe('turn flow', () => {
     expect(game.activePlayerId).toBe(actionsOrder[0])
   })
 
-  it('passes turn within actions and production when no markers remain', () => {
+  it('passes turn within actions when no markers remain', () => {
     const state = gameStateFromMap(createEmptyMap(), ['P1', 'P2'])
     state.phase = 'actions'
     const actionsOrder = activePlayerOrder(state.players, null, { state, phase: 'actions' })
@@ -1184,10 +1225,8 @@ describe('turn flow', () => {
     expect(state.activePlayerId).toBe(actionsOrder[1])
 
     expect(advanceGamePhase(state)).toEqual([])
-    expect(state.phase).toBe('production')
-    expect(state.activePlayerId).toBe(
-      activePlayerOrder(state.players, null, { state, phase: 'production' })[0],
-    )
+    expect(state.phase).toBe('events')
+    expect(state.turnNumber).toBe(2)
   })
 
   it('actions phase wraps to first player while action markers remain', () => {
@@ -1207,7 +1246,7 @@ describe('turn flow', () => {
     expect(game.actionMarkers).toHaveLength(1)
   })
 
-  it('actions phase advances to production when all markers spent', () => {
+  it('actions phase advances to events when all markers spent', () => {
     const map = createEmptyMap()
     const base = gameStateFromMap(map, ['P1', 'P2'])
     base.phase = 'actions'
@@ -1216,44 +1255,32 @@ describe('turn flow', () => {
     const game = gameSnapshotFromGameState(base)
 
     expect(advanceGameSnapshot(game, map.id)).toEqual([])
-    expect(game.phase).toBe('production')
-    expect(game.activePlayerId).toBe(
-      activePlayerOrder(game.players, null, {
-        state: gameStateFromSnapshot(game, map.id),
-        phase: 'production',
-      })[0],
-    )
+    expect(game.phase).toBe('planning')
+    expect(game.turnNumber).toBe(2)
   })
 
-  it('starts new turn with events after all players produce', () => {
+  it('starts new turn with events after actions end', () => {
     const state = gameStateFromMap(createEmptyMap(), ['P1', 'P2', 'P3'])
-    state.phase = 'production'
+    state.phase = 'actions'
     state.turnNumber = 1
-    const prodOrder = activePlayerOrder(state.players, null, { state, phase: 'production' })
-    state.activePlayerId = prodOrder[0]!
-
-    expect(advanceGamePhase(state)).toEqual([])
-    expect(state.phase).toBe('production')
-    expect(state.activePlayerId).toBe(prodOrder[1])
-
-    expect(advanceGamePhase(state)).toEqual([])
-    expect(state.activePlayerId).toBe(prodOrder[2])
+    const actionsOrder = activePlayerOrder(state.players, null, { state, phase: 'actions' })
+    state.activePlayerId = actionsOrder[actionsOrder.length - 1]!
 
     expect(advanceGamePhase(state)).toEqual([])
     expect(state.phase).toBe('events')
+    expect(state.turnNumber).toBe(2)
     expect(state.activePlayerId).toBe(
       activePlayerOrder(state.players, null, { state, phase: 'events' })[0],
     )
-    expect(state.turnNumber).toBe(2)
   })
 
-  it('auto-applies the turn event and enters planning after production', () => {
+  it('auto-applies the turn event and enters planning after actions', () => {
     const map = createEmptyMap()
     const base = gameStateFromMap(map, ['P1', 'P2'])
-    base.phase = 'production'
+    base.phase = 'actions'
     base.turnNumber = 1
-    const prodOrder = activePlayerOrder(base.players, null, { state: base, phase: 'production' })
-    base.activePlayerId = prodOrder[prodOrder.length - 1]!
+    const actionsOrder = activePlayerOrder(base.players, null, { state: base, phase: 'actions' })
+    base.activePlayerId = actionsOrder[actionsOrder.length - 1]!
     const game = gameSnapshotFromGameState(base)
     game.eventDeck = ['empty-void', 'magnetic-storm']
 
@@ -1539,7 +1566,7 @@ describe('movement', () => {
     expect(game.cells.find((c) => c.coord.q === 1 && c.coord.r === -6)!.ships).toHaveLength(1)
     expect(game.cells.find((c) => c.coord.q === 0 && c.coord.r === -4)!.controlOwnerId).toBeNull()
     expect(game.cells.find((c) => c.coord.q === 0 && c.coord.r === -4)!.ships).toHaveLength(1)
-    expect(game.actionMarkers).toHaveLength(0)
+    expect(game.productionMarkers).toHaveLength(0)
     expect(source.actionMarkerId).toBeNull()
     expect(game.actionMarkerResolvedThisTurn).toBe(true)
   })
@@ -1829,13 +1856,8 @@ describe('movement', () => {
     ).toEqual([])
 
     expect(advanceGameSnapshot(game, map.id)).toEqual([])
-    expect(game.phase).toBe('production')
-    expect(game.activePlayerId).toBe(
-      activePlayerOrder(game.players, null, {
-        state: gameStateFromSnapshot(game, map.id),
-        phase: 'production',
-      })[0],
-    )
+    expect(game.phase).toBe('planning')
+    expect(game.turnNumber).toBe(2)
   })
 
   it('allows advance after removing all own action markers', () => {
@@ -1849,13 +1871,8 @@ describe('movement', () => {
     expect(removeActionMarker(game, markerId, 'player-1')).toEqual([])
     expect(game.actionMarkerResolvedThisTurn).toBe(true)
     expect(advanceGameSnapshot(game, map.id)).toEqual([])
-    expect(game.phase).toBe('production')
-    expect(game.activePlayerId).toBe(
-      activePlayerOrder(game.players, null, {
-        state: gameStateFromSnapshot(game, map.id),
-        phase: 'production',
-      })[0],
-    )
+    expect(game.phase).toBe('planning')
+    expect(game.turnNumber).toBe(2)
   })
 
   it('removing an action marker in actions counts as the turn (cannot execute another)', () => {
@@ -1969,10 +1986,10 @@ describe('production', () => {
   it('executeProductionBatch spends tokens and places ships', () => {
     const map = productionTestMap()
     const game = gameSnapshotFromMap(map)
-    game.phase = 'production'
+    game.phase = 'actions'
     game.activePlayerId = 'player-1'
     placeProductionMarkerForTest(game, 'player-1', { q: 0, r: 0 }, map)
-    const marker = game.productionMarkers[0]!
+    const marker = game.actionMarkers[0]!
 
     const options = getBuildableShipsForMarker(game, map.id, 'player-1', marker.id)
     expect(options.find((o) => o.type === 'destroyer')?.disabledReason).toBeUndefined()
@@ -1993,30 +2010,30 @@ describe('production', () => {
     expect(game.cells.find((c) => c.coord.q === 0 && c.coord.r === 1)!.resourceTokens[0]?.faceUp).toBe(
       false,
     )
-    expect(game.productionMarkers).toHaveLength(0)
-    expect(cell.productionMarkerId).toBeNull()
-    expect(game.productionMarkerResolvedThisTurn).toBe(true)
+    expect(game.actionMarkers).toHaveLength(0)
+    expect(cell.actionMarkerId).toBeNull()
+    expect(game.actionMarkerResolvedThisTurn).toBe(true)
   })
 
-  it('production still pays from marker region when two PMs share it', () => {
+  it('action marker build still pays from shared region when two markers overlap', () => {
     const map = productionTestMap()
     const game = gameSnapshotFromMap(map)
     game.phase = 'planning'
     game.activePlayerId = 'player-1'
-    game.productionMarkerLimitByPlayer = { 'player-1': 2 }
-    expect(addProductionMarker(game, 'player-1', { q: 0, r: 0 }, map)).toEqual([])
-    expect(addProductionMarker(game, 'player-1', { q: 1, r: 0 }, map)).toEqual([])
-    expect(game.productionMarkers).toHaveLength(2)
+    ensureActionMarkerCapacity(game, 'player-1', 2)
+    expect(placeProductionMarkerForTest(game, 'player-1', { q: 0, r: 0 }, map)).toEqual([])
+    expect(placeProductionMarkerForTest(game, 'player-1', { q: 1, r: 0 }, map)).toEqual([])
+    expect(game.actionMarkers).toHaveLength(2)
 
-    game.phase = 'production'
-    const first = game.productionMarkers[0]!
-    const secondId = game.productionMarkers[1]!.id
+    game.phase = 'actions'
+    const first = game.actionMarkers[0]!
+    const secondId = game.actionMarkers[1]!.id
     const errors = executeProductionBatch(game, map.id, 'player-1', {
       markerId: first.id,
       ships: [{ type: 'destroyer', coord: { q: 0, r: 0 } }],
     })
     expect(errors).toEqual([])
-    expect(game.productionMarkers.some((m) => m.id === secondId)).toBe(true)
+    expect(game.actionMarkers.some((m) => m.id === secondId)).toBe(true)
     expect(game.cells.find((c) => c.coord.q === 0 && c.coord.r === 0)!.resourceTokens[0]?.faceUp).toBe(
       false,
     )
@@ -2025,10 +2042,10 @@ describe('production', () => {
   it('executeProductionBuild wrapper still works for single ship', () => {
     const map = productionTestMap()
     const game = gameSnapshotFromMap(map)
-    game.phase = 'production'
+    game.phase = 'actions'
     game.activePlayerId = 'player-1'
     placeProductionMarkerForTest(game, 'player-1', { q: 0, r: 0 }, map)
-    const marker = game.productionMarkers[0]!
+    const marker = game.actionMarkers[0]!
 
     const spent = autoAllocateTokens(game, map.id, marker, 2, 2)
     expect(spent).not.toBeNull()
@@ -2039,16 +2056,16 @@ describe('production', () => {
       spentTokens: spent!,
     })
     expect(errors).toEqual([])
-    expect(game.productionMarkerResolvedThisTurn).toBe(true)
+    expect(game.actionMarkerResolvedThisTurn).toBe(true)
   })
 
   it('places multiple ships on marker cell', () => {
     const map = productionTestMap()
     const game = gameSnapshotFromMap(map)
-    game.phase = 'production'
+    game.phase = 'actions'
     game.activePlayerId = 'player-1'
     placeProductionMarkerForTest(game, 'player-1', { q: 0, r: 0 }, map)
-    const marker = game.productionMarkers[0]!
+    const marker = game.actionMarkers[0]!
 
     const errors = executeProductionBatch(game, map.id, 'player-1', {
       markerId: marker.id,
@@ -2060,16 +2077,16 @@ describe('production', () => {
     expect(errors).toEqual([])
 
     const markerCell = game.cells.find((c) => c.coord.q === 0 && c.coord.r === 0)!
-    expect(markerCell.ships.filter((s) => s.type === 'destroyer' && s.ownerId === 'player-1')).toHaveLength(2)
+    expect(markerCell.ships.filter((s) => s.type === 'destroyer' && s.ownerId === 'player-1')).toHaveLength(3)
   })
 
   it('rejects ship placement outside marker cell', () => {
     const map = productionTestMap()
     const game = gameSnapshotFromMap(map)
-    game.phase = 'production'
+    game.phase = 'actions'
     game.activePlayerId = 'player-1'
     placeProductionMarkerForTest(game, 'player-1', { q: 0, r: 0 }, map)
-    const marker = game.productionMarkers[0]!
+    const marker = game.actionMarkers[0]!
 
     const errors = validateShipPlacements(game, map.id, marker, [
       { type: 'destroyer', coord: { q: 1, r: 0 } },
@@ -2080,10 +2097,10 @@ describe('production', () => {
   it('needsProductionTokenChoice when face-up and face-down production coexist', () => {
     const map = productionTestMap()
     const game = gameSnapshotFromMap(map)
-    game.phase = 'production'
+    game.phase = 'actions'
     game.activePlayerId = 'player-1'
     placeProductionMarkerForTest(game, 'player-1', { q: 0, r: 0 }, map)
-    const marker = game.productionMarkers[0]!
+    const marker = game.actionMarkers[0]!
 
     expect(needsProductionTokenChoice(game, map.id, marker)).toBe(false)
 
@@ -2096,45 +2113,38 @@ describe('production', () => {
     expect(getRegionResourceSummary(game, map.id, marker).faceDownProductionCount).toBe(1)
   })
 
-  it('executeProductionRecharge flips every face-down resource token in the region', () => {
+  it('executeProductionRecharge is disabled (automatic turn recharge)', () => {
     const map = productionTestMap()
     const game = gameSnapshotFromMap(map)
-    game.phase = 'production'
+    game.phase = 'actions'
     game.activePlayerId = 'player-1'
     placeProductionMarkerForTest(game, 'player-1', { q: 0, r: 0 }, map)
-    const marker = game.productionMarkers[0]!
-
-    const prodCell = game.cells.find((c) => c.coord.q === 0 && c.coord.r === 1)!
-    prodCell.resourceTokens.push({ type: 'production', value: 2, faceUp: false })
-    prodCell.resourceTokens.push({ type: 'credits', value: 4, faceUp: false })
+    const marker = game.actionMarkers[0]!
 
     const errors = executeProductionRecharge(game, map.id, 'player-1', { markerId: marker.id })
-    expect(errors).toEqual([])
-    expect(prodCell.resourceTokens.every((t) => t.faceUp !== false)).toBe(true)
-    expect(game.productionMarkers).toHaveLength(0)
-    expect(game.productionMarkerResolvedThisTurn).toBe(true)
+    expect(errors).toEqual(['Перезарядка фишек выполняется автоматически через случайный интервал один, два или три полных хода'])
   })
 
-  it('validateProductionRecharge requires face-down resource tokens', () => {
+  it('validateProductionRecharge reports automatic recharge policy', () => {
     const map = productionTestMap()
     const game = gameSnapshotFromMap(map)
-    game.phase = 'production'
+    game.phase = 'actions'
     game.activePlayerId = 'player-1'
     placeProductionMarkerForTest(game, 'player-1', { q: 0, r: 0 }, map)
-    const marker = game.productionMarkers[0]!
+    const marker = game.actionMarkers[0]!
 
     expect(validateProductionRecharge(game, map.id, 'player-1', { markerId: marker.id })).toEqual([
-      'В регионе нет перевёрнутых фишек',
+      'Перезарядка фишек выполняется автоматически через случайный интервал один, два или три полных хода',
     ])
   })
 
   it('blocks second production marker build in the same turn', () => {
     const map = productionTestMap()
     const game = gameSnapshotFromMap(map)
-    game.phase = 'production'
+    game.phase = 'actions'
     game.activePlayerId = 'player-1'
     placeProductionMarkerForTest(game, 'player-1', { q: 0, r: 0 }, map)
-    const marker = game.productionMarkers[0]!
+    const marker = game.actionMarkers[0]!
 
     expect(
       executeProductionBatch(game, map.id, 'player-1', {
@@ -2149,32 +2159,32 @@ describe('production', () => {
         shipType: 'destroyer',
         spentTokens: [],
       }),
-    ).toEqual([PRODUCTION_MARKER_ALREADY_RESOLVED_MSG])
+    ).toEqual([ACTION_MARKER_ALREADY_RESOLVED_MSG])
   })
 
   it('applyGameActionOnSnapshot executes production', () => {
     const map = productionTestMap()
     const game = gameSnapshotFromMap(map)
-    game.phase = 'production'
+    game.phase = 'actions'
     game.activePlayerId = 'player-1'
     placeProductionMarkerForTest(game, 'player-1', { q: 0, r: 0 }, map)
-    const marker = game.productionMarkers[0]!
+    const marker = game.actionMarkers[0]!
 
     const { errors } = applyGameActionOnSnapshot(game, map, 'player-1', 'execute-production', {
       markerId: marker.id,
       ships: [{ type: 'destroyer', coord: { q: 0, r: 0 } }],
     })
     expect(errors).toEqual([])
-    expect(game.productionMarkerResolvedThisTurn).toBe(true)
+    expect(game.actionMarkerResolvedThisTurn).toBe(true)
   })
 
   it('gameSnapshotFromObservation keeps ships after production action response', () => {
     const map = productionTestMap()
     const before = gameSnapshotFromMap(map)
-    before.phase = 'production'
+    before.phase = 'actions'
     before.activePlayerId = 'player-1'
     placeProductionMarkerForTest(before, 'player-1', { q: 0, r: 0 }, map)
-    const marker = before.productionMarkers[0]!
+    const marker = before.actionMarkers[0]!
 
     const serverGame = structuredClone(before)
     expect(
@@ -2195,7 +2205,7 @@ describe('production', () => {
         eventLog: serverGame.eventLog,
         actionMarkers: serverGame.actionMarkers,
         productionMarkers: serverGame.productionMarkers,
-        productionMarkerResolvedThisTurn: serverGame.productionMarkerResolvedThisTurn,
+        actionMarkerResolvedThisTurn: serverGame.actionMarkerResolvedThisTurn,
       },
       [],
       { geometry: false },
@@ -2204,14 +2214,14 @@ describe('production', () => {
     const synced = gameSnapshotFromObservation(obs.mechanics, before, map)
     const cell = synced.cells.find((c) => c.coord.q === 0 && c.coord.r === 0)!
     expect(cell.ships.some((s) => s.type === 'destroyer' && s.ownerId === 'player-1')).toBe(true)
-    expect(synced.productionMarkers).toHaveLength(0)
+    expect(synced.actionMarkers).toHaveLength(0)
   })
 
-  it('does not allow a production marker to be passed', () => {
+  it('does not allow passing while own action marker is unresolved', () => {
     const map = productionTestMap()
     addHorizontalLine(map, 3, 2, 0, 2)
     const game = gameSnapshotFromMap(map)
-    game.phase = 'production'
+    game.phase = 'actions'
     game.activePlayerId = 'player-2'
     setPlayerControl(game, 'player-2', [
       { q: 2, r: 0 },
@@ -2221,47 +2231,47 @@ describe('production', () => {
     placeProductionMarkerForTest(game, 'player-2', { q: 2, r: 0 }, map)
 
     expect(advanceGameSnapshot(game, map.id)).toEqual([
-      PRODUCTION_MARKER_MUST_RESOLVE_BEFORE_ADVANCE_MSG,
+      ACTION_MARKER_MUST_RESOLVE_BEFORE_ADVANCE_MSG,
     ])
-    expect(game.phase).toBe('production')
+    expect(game.phase).toBe('actions')
     expect(game.activePlayerId).toBe('player-2')
-    expect(game.productionMarkerResolvedThisTurn).toBe(false)
+    expect(game.actionMarkerResolvedThisTurn).toBe(false)
   })
 
-  it('getLegalActionsForSnapshot notes when production marker already used', () => {
+  it('getLegalActionsForSnapshot notes when action marker already used', () => {
     const map = productionTestMap()
     const game = gameSnapshotFromMap(map)
-    game.phase = 'production'
+    game.phase = 'actions'
     game.activePlayerId = 'player-1'
-    game.productionMarkerResolvedThisTurn = true
+    game.actionMarkerResolvedThisTurn = true
     placeProductionMarkerForTest(game, 'player-1', { q: 0, r: 0 }, map)
 
     const actions = getLegalActionsForSnapshot(game, map.id, 'player-1')
-    expect(actions.some((a) => a.id === 'production-marker-used')).toBe(true)
+    expect(actions.some((a) => a.id === 'action-marker-used')).toBe(true)
   })
 
-  it('blocks advance-phase when own production marker is unresolved', () => {
+  it('blocks advance-phase when own action marker is unresolved', () => {
     const map = productionTestMap()
     const game = gameSnapshotFromMap(map)
-    game.phase = 'production'
+    game.phase = 'actions'
     game.activePlayerId = 'player-1'
     placeProductionMarkerForTest(game, 'player-1', { q: 0, r: 0 }, map)
 
     expect(advanceGameSnapshot(game, map.id)).toEqual([
-      PRODUCTION_MARKER_MUST_RESOLVE_BEFORE_ADVANCE_MSG,
+      ACTION_MARKER_MUST_RESOLVE_BEFORE_ADVANCE_MSG,
     ])
     expect(game.activePlayerId).toBe('player-1')
 
     const actions = getLegalActionsForSnapshot(game, map.id, 'player-1')
     expect(actions.some((action) => action.id === 'advance-phase')).toBe(false)
-    expect(actions.some((action) => action.id === 'production-marker-unresolved')).toBe(true)
+    expect(actions.some((action) => action.id === 'action-marker-unresolved')).toBe(true)
   })
 
-  it('skips players without production markers', () => {
+  it('skips players without action markers in actions phase', () => {
     const map = productionTestMap()
     addHorizontalLine(map, 3, 2, 0, 2)
     const game = gameSnapshotFromMap(map)
-    game.phase = 'production'
+    game.phase = 'actions'
     game.activePlayerId = 'player-1'
     setPlayerControl(game, 'player-2', [
       { q: 2, r: 0 },
@@ -2271,7 +2281,7 @@ describe('production', () => {
     placeProductionMarkerForTest(game, 'player-2', { q: 2, r: 0 }, map)
 
     expect(advanceGameSnapshot(game, map.id)).toEqual([])
-    expect(game.phase).toBe('production')
+    expect(game.phase).toBe('actions')
     expect(game.activePlayerId).toBe('player-2')
   })
 
@@ -2313,16 +2323,16 @@ describe('production', () => {
   it('getBuildableShipsForMarker disables ship type at fleet cap', () => {
     const map = productionTestMapWide()
     const game = gameSnapshotFromMap(map)
-    game.phase = 'production'
+    game.phase = 'actions'
     game.activePlayerId = 'player-1'
     placeProductionMarkerForTest(game, 'player-1', { q: 0, r: 0 }, map)
-    const marker = game.productionMarkers[0]!
+    const marker = game.actionMarkers[0]!
 
     spreadShipsForPlayer(
       game,
       'player-1',
       'destroyer',
-      MAX_FLEET_SIZE_PER_PLAYER.destroyer,
+      MAX_FLEET_SIZE_PER_PLAYER.destroyer - 1,
       fleetSpreadCoords,
     )
     expect(countShipsForPlayer(game, 'player-1', 'destroyer')).toBe(
@@ -2343,10 +2353,10 @@ describe('production', () => {
   it('executeProductionBatch rejects build that would exceed fleet cap', () => {
     const map = productionTestMapWide()
     const game = gameSnapshotFromMap(map)
-    game.phase = 'production'
+    game.phase = 'actions'
     game.activePlayerId = 'player-1'
     placeProductionMarkerForTest(game, 'player-1', { q: 0, r: 0 }, map)
-    const marker = game.productionMarkers[0]!
+    const marker = game.actionMarkers[0]!
 
     spreadShipsForPlayer(
       game,
@@ -2400,55 +2410,40 @@ describe('production', () => {
     expect(getFleetLimitWarnings(game).some((w) => w.includes('Гиперпространственное орудие'))).toBe(true)
   })
 
-  it('removes a production marker for free even with zero tokens', () => {
+  it('removes an action marker for free even with zero tokens', () => {
     const map = productionTestMap()
     const game = gameSnapshotFromMap(map)
-    game.phase = 'production'
+    game.phase = 'actions'
     game.activePlayerId = 'player-1'
     placeProductionMarkerForTest(game, 'player-1', { q: 0, r: 0 }, map)
-    const markerId = game.productionMarkers[0]!.id
+    const markerId = game.actionMarkers[0]!.id
     for (const cell of game.cells) cell.resourceTokens = []
 
-    expect(removeProductionMarker(game, markerId, 'player-1')).toEqual([])
-    expect(game.productionMarkers).toHaveLength(0)
-    expect(game.productionMarkerResolvedThisTurn).toBe(true)
+    expect(removeActionMarker(game, markerId, 'player-1')).toEqual([])
+    expect(game.actionMarkers).toHaveLength(0)
+    expect(game.actionMarkerResolvedThisTurn).toBe(true)
   })
 
-  it('buying a production marker does not block removing the marker on the map', () => {
+  it('executeBuyProductionMarker is disabled', () => {
     const map = productionTestMap()
     const game = gameSnapshotFromMap(map)
-    game.phase = 'production'
+    game.phase = 'actions'
     game.activePlayerId = 'player-1'
-    placeProductionMarkerForTest(game, 'player-1', { q: 0, r: 0 }, map)
-    const markerId = game.productionMarkers[0]!.id
-    game.cells.find((c) => c.coord.q === 0 && c.coord.r === 0)!.resourceTokens = [
-      { type: 'credits', value: 8, faceUp: true },
-    ]
-    game.cells.find((c) => c.coord.q === 0 && c.coord.r === 1)!.resourceTokens = [
-      { type: 'production', value: 6, faceUp: true },
-    ]
-
     expect(
       executeBuyProductionMarker(game, map.id, 'player-1', [
         { coord: { q: 0, r: 0 }, tokenIndex: 0 },
         { coord: { q: 0, r: 1 }, tokenIndex: 0 },
       ]),
-    ).toEqual([])
-    expect(game.productionMarkerResolvedThisTurn).toBeFalsy()
-    expect(game.productionMarkers).toHaveLength(1)
-
-    expect(removeProductionMarker(game, markerId, 'player-1')).toEqual([])
-    expect(game.productionMarkers).toHaveLength(0)
-    expect(game.productionMarkerResolvedThisTurn).toBe(true)
+    ).toEqual(['Маркеры производства отключены'])
   })
 
-  it('still blocks removing a second production marker after one was resolved', () => {
+  it('still blocks removing a second action marker after one was resolved', () => {
     const map = productionTestMap()
     addHorizontalLine(map, 3, 10, 0)
     const game = gameSnapshotFromMap(map)
     game.phase = 'planning'
     game.activePlayerId = 'player-1'
-    game.productionMarkerLimitByPlayer = { 'player-1': 2 }
+    ensureActionMarkerCapacity(game, 'player-1', 2)
     setPlayerControl(game, 'player-1', [
       { q: 0, r: 0 },
       { q: 1, r: 0 },
@@ -2457,15 +2452,15 @@ describe('production', () => {
       { q: 11, r: 0 },
       { q: 12, r: 0 },
     ])
-    expect(addProductionMarker(game, 'player-1', { q: 0, r: 0 }, map)).toEqual([])
-    expect(addProductionMarker(game, 'player-1', { q: 10, r: 0 }, map)).toEqual([])
-    game.phase = 'production'
-    const firstId = game.productionMarkers[0]!.id
-    const secondId = game.productionMarkers[1]!.id
+    expect(placeProductionMarkerForTest(game, 'player-1', { q: 0, r: 0 }, map)).toEqual([])
+    expect(placeProductionMarkerForTest(game, 'player-1', { q: 10, r: 0 }, map)).toEqual([])
+    game.phase = 'actions'
+    const firstId = game.actionMarkers[0]!.id
+    const secondId = game.actionMarkers[1]!.id
 
-    expect(removeProductionMarker(game, firstId, 'player-1')).toEqual([])
-    expect(removeProductionMarker(game, secondId, 'player-1')).toEqual([
-      PRODUCTION_MARKER_REMOVE_BLOCKED_MSG,
+    expect(removeActionMarker(game, firstId, 'player-1')).toEqual([])
+    expect(removeActionMarker(game, secondId, 'player-1')).toEqual([
+      ACTION_MARKER_REMOVE_BLOCKED_MSG,
     ])
   })
 })

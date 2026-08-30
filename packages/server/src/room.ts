@@ -95,6 +95,9 @@ export interface Room {
   /** Последняя активность (создание, join, presence, действие) — для чистки пустых лобби */
   lastActivityAt: number
 
+  /** Когда зафиксирована победа — для автозакрытия комнаты через 30 с */
+  gameOverAt?: number | null
+
 }
 
 interface PlayerPresence {
@@ -118,6 +121,7 @@ export function restoreRoomsFromDisk(): number {
   for (const room of loadPersistedRooms()) {
     if (rooms.has(room.id)) continue
     rooms.set(room.id, room)
+    maybeScheduleVictoryRoomClose(room)
     restored += 1
   }
   return restored
@@ -133,6 +137,43 @@ export const EMPTY_LOBBY_TTL_MS = 30 * 60 * 1000
 
 /** Как часто проверяем пустые лобби */
 const EMPTY_LOBBY_SWEEP_MS = 60_000
+
+/** После победы комната удаляется через это время */
+export const VICTORY_ROOM_CLOSE_MS = 30_000
+
+const victoryCloseTimers = new Map<string, NodeJS.Timeout>()
+
+function clearVictoryCloseTimer(roomId: string): void {
+  const timer = victoryCloseTimers.get(roomId)
+  if (timer) {
+    clearTimeout(timer)
+    victoryCloseTimers.delete(roomId)
+  }
+}
+
+function maybeScheduleVictoryRoomClose(room: Room): void {
+  if (!room.state.gameOver) return
+  if (victoryCloseTimers.has(room.id)) return
+
+  if (!room.gameOverAt) {
+    room.gameOverAt = Date.now()
+    scheduleRoomPersist(room)
+  }
+
+  const elapsed = Date.now() - room.gameOverAt
+  const delay = Math.max(0, VICTORY_ROOM_CLOSE_MS - elapsed)
+  const timer = setTimeout(() => {
+    victoryCloseTimers.delete(room.id)
+    destroyRoom(room.id, 'victory-timeout')
+  }, delay)
+  timer.unref?.()
+  victoryCloseTimers.set(room.id, timer)
+  debugLog('room.victory-close.scheduled', {
+    roomId: room.id,
+    delayMs: delay,
+    gameOverAt: room.gameOverAt,
+  })
+}
 
 function touchRoomActivity(room: Room, at = Date.now()): void {
   room.lastActivityAt = at
@@ -167,6 +208,7 @@ function countActivePlayers(roomId: string, now = Date.now()): number {
 function destroyRoom(roomId: string, reason: string): boolean {
   const room = rooms.get(roomId)
   if (!room) return false
+  clearVictoryCloseTimer(roomId)
   rooms.delete(roomId)
   presenceByRoom.delete(roomId)
   deletePersistedRoom(roomId)
@@ -358,6 +400,8 @@ function roomObservation(
     overtimeRegionByPlayer: s.overtimeRegionByPlayer ?? null,
     actionMarkerLimitByPlayer: s.actionMarkerLimitByPlayer ?? null,
     productionMarkerLimitByPlayer: s.productionMarkerLimitByPlayer ?? null,
+    resourceRechargeTurnsRemaining:
+      room.status === 'playing' ? (s.resourceRechargeTurnsRemaining ?? null) : undefined,
     lastCombatResult: room.lastCombatResult ?? null,
     observationRevision: room.observationRevision,
     roomStatus: room.status,
@@ -670,6 +714,7 @@ export function getObservation(
 
   const advanced = maybeAdvanceCombatPrep(room)
   if (advanced.changed) bumpObservationRevision(room, 'combat-countdown')
+  maybeScheduleVictoryRoomClose(room)
   return roomObservation(room, playerId, includeGeometry)
 
 }
@@ -745,8 +790,30 @@ export function submitAction(
     })
   }
 
+  maybeScheduleVictoryRoomClose(room)
   return roomObservation(room, playerId, includeGeometry)
 
+}
+
+export type RoomCloseFailure = { ok: false; error: string }
+export type RoomCloseResult = { ok: true } | RoomCloseFailure
+
+/** Создатель закрывает комнату подготовки до старта партии. */
+export function closeRoom(roomId: string, playerId: string): RoomCloseResult {
+  const room = rooms.get(roomId)
+  if (!room) return { ok: false, error: 'Комната не найдена' }
+  if (room.status !== 'lobby') {
+    return { ok: false, error: 'Закрыть можно только комнату подготовки до начала игры' }
+  }
+  if (!room.playerIds.includes(playerId)) {
+    return { ok: false, error: 'Игрок не зарегистрирован в комнате' }
+  }
+  if (room.hostPlayerId && room.hostPlayerId !== playerId) {
+    return { ok: false, error: 'Закрыть комнату может только создатель' }
+  }
+  destroyRoom(roomId, 'host-close')
+  debugLog('room.close', { roomId, playerId })
+  return { ok: true }
 }
 
 
@@ -868,6 +935,18 @@ export function registerHttpRoutes(app: FastifyInstance): void {
       const result = startRoom(req.params.id, req.body.playerId)
       if (!result.ok) return reply.status(400).send({ error: result.error })
       return { ok: true, code: result.room.code, status: result.room.status }
+    },
+  )
+
+  app.post<{
+    Params: { id: string }
+    Body: { playerId: string }
+  }>(
+    '/rooms/:id/close',
+    async (req, reply) => {
+      const result = closeRoom(req.params.id, req.body.playerId)
+      if (!result.ok) return reply.status(400).send({ error: result.error })
+      return { ok: true }
     },
   )
 

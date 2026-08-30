@@ -13,9 +13,7 @@ const props = defineProps<{
   showResource: boolean
   showPowerCenter: boolean
   showActionMarker: boolean
-  showProductionMarker: boolean
   actionMarkerAvailable?: boolean
-  productionMarkerAvailable?: boolean
 }>()
 
 const lines = computed(() => cellOverviewLines(props.cell))
@@ -69,14 +67,6 @@ const contentTopY = computed(() => {
       />
       <text class="marker-badge-label" :font-size="labelSize * 0.75">A</text>
     </g>
-    <g v-if="showProductionMarker" :transform="`translate(${s * 0.38}, ${contentTopY - s * 0.04})`">
-      <circle
-        class="marker-badge marker-badge--production"
-        :class="{ 'marker-badge--available': productionMarkerAvailable }"
-        :r="badgeR"
-      />
-      <text class="marker-badge-label" :font-size="labelSize * 0.75">P</text>
-    </g>
   </g>
 </template>
 
@@ -97,9 +87,6 @@ const contentTopY = computed(() => {
 }
 .marker-badge--action {
   fill: #fef08a;
-}
-.marker-badge--production {
-  fill: #f472b6;
 }
 .marker-badge--available {
   animation: marker-badge-available 1.55s ease-in-out infinite;

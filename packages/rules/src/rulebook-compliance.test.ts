@@ -85,14 +85,15 @@ describe('По правилам (PDF / rulebook compliance)', () => {
     expect(selectShipsToDestroy(ships, 14, new Set(['battleship']))).toEqual(['dd', 'bb'])
   })
 
-  it('баланс B+F: destroyCost эсминца 4, support d4; крейсер в бою 2d4', () => {
+  it('баланс B+F: destroyCost эсминца 4, support d4; крейсер в бою 2d6', () => {
     expect(getDestroyCost('destroyer')).toBe(4)
     expect(SHIP_SUPPORT_DIE_FACES).toMatchObject({
       cruiser: 4,
       battleship: 4,
       hyper: 4,
     })
-    expect(SHIP_COMBAT_DIE_FACES.cruiser).toBe(4)
+    expect(SHIP_COMBAT_DIE_FACES.cruiser).toBe(6)
+    expect(SHIP_COMBAT_DIE_FACES.destroyer).toBe(4)
     expect(SHIP_COMBAT_DICE.cruiser).toBe(2)
   })
 

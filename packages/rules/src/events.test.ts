@@ -5,17 +5,14 @@ import {
   drawNextEventFromDeck,
   drawRandomEvent,
   ensureTurnEventForPhase,
-  enforceOneProductionMarkerPerRegion,
   EVENT_DECK_COPIES,
   EVENT_DECK_SIZE,
   getEffectiveMoveRange,
   getEffectiveTokenValue,
-  getEventCard,
   getTurnModifiers,
   getTurnEventHistory,
   isMovementIntoCellBlocked,
   migrateLegacyEventId,
-  resolveTurnEvent,
   type EventCardId,
 } from './events.js'
 import {
@@ -40,13 +37,6 @@ function gameWithEvent(eventId: EventCardId, resolved = true): GameSnapshot {
     resolvedAt: resolved ? new Date().toISOString() : undefined,
   }
   return game
-}
-
-function setPlayerControl(game: GameSnapshot, playerId: string, coords: { q: number; r: number }[]): void {
-  for (const coord of coords) {
-    const cell = game.cells.find((c) => c.coord.q === coord.q && c.coord.r === coord.r)
-    if (cell) cell.controlOwnerId = playerId
-  }
 }
 
 describe('events', () => {
@@ -98,7 +88,7 @@ describe('events', () => {
   it('event deck template uses weighted copies (harsh cards rarer)', () => {
     const template = buildEventDeckTemplate()
     expect(template).toHaveLength(EVENT_DECK_SIZE)
-    expect(EVENT_DECK_SIZE).toBeGreaterThan(14)
+    expect(EVENT_DECK_SIZE).toBeGreaterThanOrEqual(14)
     expect(EVENT_DECK_COPIES['empty-void']).toBe(3)
     expect(EVENT_DECK_COPIES['ammo-detonation']).toBe(1)
     expect(EVENT_DECK_COPIES['stand-to-death']).toBe(1)
@@ -139,6 +129,9 @@ describe('events', () => {
   it('migrateLegacyEventId maps removed flip events to empty-void', () => {
     expect(migrateLegacyEventId('saboteurs-activation')).toBe('empty-void')
     expect(migrateLegacyEventId('peoples-donation')).toBe('empty-void')
+    expect(migrateLegacyEventId('production-accident')).toBe('empty-void')
+    expect(migrateLegacyEventId('mandatory-overtime')).toBe('empty-void')
+    expect(migrateLegacyEventId('all-for-front')).toBe('empty-void')
   })
 
   it('magnetic storm: destroyer move 3→2, min 1', () => {
@@ -210,12 +203,6 @@ describe('events', () => {
     expect(getEffectiveDestroyCost(game, 'destroyer')).toBe(6)
   })
 
-  it('production accident blocks extra marker purchases', () => {
-    const game = gameWithEvent('production-accident')
-    expect(getTurnModifiers(game).cannotBuyExtraMarkers).toBe(true)
-    expect(getTurnModifiers(game).cannotBuildShipTypes).toEqual([])
-  })
-
   it('ammo detonation blocks combat ships only', () => {
     const game = gameWithEvent('ammo-detonation')
     const blocked = getTurnModifiers(game).cannotBuildShipTypes
@@ -223,109 +210,13 @@ describe('events', () => {
     expect(blocked).not.toContain('shield')
   })
 
-  it('all for front limits production tokens to 3', () => {
-    const game = gameWithEvent('all-for-front')
-    expect(getTurnModifiers(game).maxProductionTokensPerPlayer).toBe(3)
-  })
-
-  it('mandatory-overtime limits to one production marker per owner region', () => {
-    const game = gameWithEvent('mandatory-overtime')
-    expect(getTurnModifiers(game).oneProductionMarkerPerRegion).toBe(true)
-    const card = getEventCard('mandatory-overtime')
-    expect(card.name).toBe('Нормирование производства')
-    expect(card.description).toContain('Не больше одного маркера производства на регион')
-  })
-
-  it('mandatory-overtime strips extra production markers, keeping lowest id', () => {
-    const map = createEmptyMap()
-    map.cells.push({ q: 1, r: 0, startPlayer: 1 }, { q: 2, r: 0, startPlayer: 1 })
-    const game = gameSnapshotFromMap(map)
-    setPlayerControl(game, 'player-1', [
-      { q: 0, r: 0 },
-      { q: 1, r: 0 },
-      { q: 2, r: 0 },
-    ])
-    game.productionMarkers = [
-      {
-        id: 'prod-b',
-        ownerId: 'player-1',
-        coord: { q: 1, r: 0 },
-        targetRegionId: 'region-player-1-0,0',
-      },
-      {
-        id: 'prod-a',
-        ownerId: 'player-1',
-        coord: { q: 0, r: 0 },
-        targetRegionId: 'region-player-1-0,0',
-      },
-      {
-        id: 'prod-c',
-        ownerId: 'player-1',
-        coord: { q: 2, r: 0 },
-        targetRegionId: 'region-player-1-0,0',
-      },
-    ]
-    const cellA = game.cells.find((c) => c.coord.q === 0 && c.coord.r === 0)!
-    const cellB = game.cells.find((c) => c.coord.q === 1 && c.coord.r === 0)!
-    const cellC = game.cells.find((c) => c.coord.q === 2 && c.coord.r === 0)!
-    cellA.productionMarkerId = 'prod-a'
-    cellB.productionMarkerId = 'prod-b'
-    cellC.productionMarkerId = 'prod-c'
-    game.productionMarkerResolvedThisTurn = false
-
-    const messages = enforceOneProductionMarkerPerRegion(game)
-    expect(messages.length).toBeGreaterThan(0)
-    expect(game.productionMarkers.map((m) => m.id)).toEqual(['prod-a'])
-    expect(cellA.productionMarkerId).toBe('prod-a')
-    expect(cellB.productionMarkerId).toBeNull()
-    expect(cellC.productionMarkerId).toBeNull()
-    expect(game.productionMarkerResolvedThisTurn).toBeFalsy()
-  })
-
-  it('resolveTurnEvent applies mandatory-overtime by stripping extras', () => {
-    const map = createEmptyMap()
-    map.cells.push({ q: 1, r: 0, startPlayer: 1 }, { q: 2, r: 0, startPlayer: 1 })
-    const game = gameSnapshotFromMap(map)
-    setPlayerControl(game, 'player-1', [
-      { q: 0, r: 0 },
-      { q: 1, r: 0 },
-      { q: 2, r: 0 },
-    ])
-    game.phase = 'events'
-    game.turnNumber = 1
-    game.turnEvent = { eventId: 'mandatory-overtime', turnNumber: 1 }
-    game.productionMarkers = [
-      {
-        id: 'prod-z',
-        ownerId: 'player-1',
-        coord: { q: 0, r: 0 },
-        targetRegionId: 'stale',
-      },
-      {
-        id: 'prod-m',
-        ownerId: 'player-1',
-        coord: { q: 1, r: 0 },
-        targetRegionId: 'stale',
-      },
-    ]
-    game.cells[0]!.productionMarkerId = 'prod-z'
-    game.cells[1]!.productionMarkerId = 'prod-m'
-
-    expect(resolveTurnEvent(game)).toEqual([])
-    expect(game.productionMarkers.map((m) => m.id)).toEqual(['prod-m'])
-    expect(game.turnEvent?.resolvedAt).toBeTruthy()
-  })
-
   it('smoke: each event id produces modifiers or is no-op', () => {
     const ids: EventCardId[] = [
       'magnetic-storm',
       'empty-void',
       'stand-to-death',
-      'production-accident',
       'ammo-detonation',
-      'mandatory-overtime',
       'hyper-gap',
-      'all-for-front',
       'shadow-economy',
       'hold-formation',
       'combat-chaos',

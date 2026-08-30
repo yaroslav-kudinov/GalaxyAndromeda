@@ -33,7 +33,6 @@ const props = withDefaults(
     previewPlacementsPulse?: boolean
     territoryLabelPlayers?: TerritoryLabelPlayer[]
     availableActionMarkerKeys?: string[]
-    availableProductionMarkerKeys?: string[]
     interactiveKeys?: string[]
     mode?: 'editor' | 'game'
     zoomable?: boolean
@@ -73,7 +72,6 @@ const props = withDefaults(
     previewPlacementsPulse: false,
     territoryLabelPlayers: () => [],
     availableActionMarkerKeys: () => [],
-    availableProductionMarkerKeys: () => [],
     interactiveKeys: () => [],
     mode: 'editor',
     zoomable: true,
@@ -106,8 +104,7 @@ const markerKeys = computed(() => boardMarkerKeys(props.cells))
     :ghosts="ghosts"
     :selected-key="selectedKey"
     :symmetry-orbit-keys="symmetryOrbitKeys"
-    :action-marker-keys="markerKeys.action"
-    :production-marker-keys="markerKeys.production"
+    :action-marker-keys="markerKeys"
     :reachable-keys="reachableKeys"
     :destination-keys="destinationKeys"
     :contested-keys="contestedKeys"
@@ -120,7 +117,6 @@ const markerKeys = computed(() => boardMarkerKeys(props.cells))
     :preview-placements-pulse="previewPlacementsPulse"
     :territory-label-players="territoryLabelPlayers"
     :available-action-marker-keys="availableActionMarkerKeys"
-    :available-production-marker-keys="availableProductionMarkerKeys"
     :interactive-keys="interactiveKeys"
     :mode="mode"
     toolbar-placement="overlay"

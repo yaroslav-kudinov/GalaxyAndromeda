@@ -1,14 +1,19 @@
 <script setup lang="ts">
 import type { ActiveEventObservation } from '@galaxy/rules'
 
-defineProps<{
-  event: ActiveEventObservation
+const props = defineProps<{
+  event?: ActiveEventObservation | null
   turnNumber: number
+  rechargeBanner?: string | null
 }>()
 
 const emit = defineEmits<{
   close: []
 }>()
+
+const kicker = computed(() =>
+  props.event ? `Новый ход ${props.turnNumber}` : 'Начало партии',
+)
 </script>
 
 <template>
@@ -21,16 +26,27 @@ const emit = defineEmits<{
       class="event-announce"
       role="dialog"
       aria-modal="true"
-      aria-labelledby="event-announce-title"
+      :aria-labelledby="event ? 'event-announce-title' : 'event-announce-recharge'"
     >
-      <p class="event-announce-kicker">Новый ход {{ turnNumber }}</p>
-      <h2 id="event-announce-title" class="event-announce-title">
-        {{ event.name }}
-      </h2>
-      <p class="event-announce-desc">{{ event.description }}</p>
-      <p class="event-announce-effect">{{ event.effectSummary }}</p>
-      <p class="event-announce-hint">
-        Карта уже применена автоматически. Это объявление, не подтверждение.
+      <p class="event-announce-kicker">{{ kicker }}</p>
+      <ResourceRechargeBanner
+        v-if="rechargeBanner"
+        id="event-announce-recharge"
+        :text="rechargeBanner"
+        variant="modal"
+      />
+      <template v-if="event">
+        <h2 id="event-announce-title" class="event-announce-title">
+          {{ event.name }}
+        </h2>
+        <p class="event-announce-desc">{{ event.description }}</p>
+        <p class="event-announce-effect">{{ event.effectSummary }}</p>
+        <p class="event-announce-hint">
+          Карта уже применена автоматически. Это объявление, не подтверждение.
+        </p>
+      </template>
+      <p v-else class="event-announce-hint">
+        Перевёрнутые фишки ресурсов снова станут доступны автоматически, когда истечёт этот счётчик.
       </p>
       <button type="button" class="event-announce-ok" @click="emit('close')">
         Понятно

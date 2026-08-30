@@ -4,23 +4,17 @@
  */
 
 import { trimGameEventLog } from './event-log.js'
-import { buildSpatialSummary } from './observation/ascii-map.js'
 import type { GameSnapshot, RuntimeCellState } from './save-file.js'
-import { gameStateFromSnapshot } from './save-file.js'
 import { getShipMoveRange } from './ships.js'
 import type { ShipType } from './types.js'
-import { hexKey } from './types.js'
 
 /** One global event per turn for all players. */
 export type EventCardId =
   | 'magnetic-storm'
   | 'empty-void'
   | 'stand-to-death'
-  | 'production-accident'
   | 'ammo-detonation'
-  | 'mandatory-overtime'
   | 'hyper-gap'
-  | 'all-for-front'
   | 'shadow-economy'
   | 'hold-formation'
   | 'combat-chaos'
@@ -45,15 +39,11 @@ export interface TurnModifiers {
   fixedDiceValue?: number
   hyperFireRange?: number
   cannotBuildShipTypes: ShipType[]
-  cannotBuyExtraMarkers: boolean
   cannotRetreat: boolean
   tokenValueBonus: number
   destroyCostBonus: number
   ignoreDestructionPriority: boolean
   blockEnterResourceOrPowerCenter: boolean
-  maxProductionTokensPerPlayer?: number
-  /** Событие `mandatory-overtime`: не больше одного маркера производства на регион владельца. */
-  oneProductionMarkerPerRegion: boolean
 }
 
 export const COMBAT_SHIP_TYPES: ShipType[] = ['destroyer', 'cruiser', 'battleship']
@@ -62,17 +52,8 @@ export const EVENT_CARDS: readonly GameEventCard[] = [
   { id: 'magnetic-storm', name: 'Магнитная буря', description: 'Все корабли: дальность хода −1 (минимум 1).', effectSummary: 'Дальность хода −1 (мин. 1)' },
   { id: 'empty-void', name: 'Среди звёзд лишь пустота', description: 'Без эффекта.', effectSummary: 'Без эффекта' },
   { id: 'stand-to-death', name: '«Стоять насмерть!»', description: 'Игроки не могут отступать из боя.', effectSummary: 'Отступление запрещено' },
-  { id: 'production-accident', name: 'Авария на производстве', description: 'Нельзя покупать дополнительные маркеры производства в этом ходу.', effectSummary: 'Покупка маркеров производства запрещена' },
   { id: 'ammo-detonation', name: 'Детонация склада боеприпасов', description: 'Нельзя строить эсминец, крейсер, линкор в этом ходу.', effectSummary: 'Постройка destroyer/cruiser/battleship запрещена' },
-  {
-    id: 'mandatory-overtime',
-    name: 'Нормирование производства',
-    description:
-      'Не больше одного маркера производства на регион. Если в регионе уже несколько — лишние снимаются в неиспользованный пул (остаётся маркер с меньшим id).',
-    effectSummary: 'Не больше 1 маркера производства на регион',
-  },
   { id: 'hyper-gap', name: 'Просвет в гиперпространстве', description: 'Все корабли +1 ход; у гиперпространственного орудия дальность стрельбы становится 2–4 (вместо 2–3).', effectSummary: 'Ход +1; дальность орудия 2–4' },
-  { id: 'all-for-front', name: '«Всё для фронта»', description: 'Каждый игрок может потратить не более 3 фишек производства за ход.', effectSummary: 'Макс. 3 фишки производства на игрока' },
   { id: 'shadow-economy', name: 'Теневая экономика', description: 'Номинал каждой фишки ресурса +2 (только этот ход).', effectSummary: 'Номинал фишек +2' },
   { id: 'hold-formation', name: '«Держать строй»', description: 'destroyCost +2 для каждого уничтожаемого в бою корабля.', effectSummary: 'destroyCost +2' },
   { id: 'combat-chaos', name: 'Хаос битвы', description: 'Приоритет уничтожения игнорируется.', effectSummary: 'Приоритет уничтожения отключён' },
@@ -87,12 +68,9 @@ export const ALL_EVENT_IDS: EventCardId[] = EVENT_CARDS.map((c) => c.id)
  */
 export const EVENT_DECK_COPIES: Readonly<Record<EventCardId, number>> = {
   'empty-void': 3,
-  'mandatory-overtime': 2,
   'hyper-gap': 2,
   'shadow-economy': 2,
   'magnetic-storm': 2,
-  'production-accident': 2,
-  'all-for-front': 2,
   'combat-chaos': 1,
   'stand-to-death': 1,
   'ammo-detonation': 1,
@@ -109,6 +87,8 @@ export const EVENT_DECK_SIZE = ALL_EVENT_IDS.reduce(
 export function migrateLegacyEventId(eventId: string): EventCardId {
   if (eventId === 'fair-fight') return 'empty-void'
   if (eventId === 'saboteurs-activation' || eventId === 'peoples-donation') return 'empty-void'
+  if (eventId === 'production-accident' || eventId === 'mandatory-overtime') return 'empty-void'
+  if (eventId === 'all-for-front') return 'empty-void'
   if ((ALL_EVENT_IDS as readonly string[]).includes(eventId)) return eventId as EventCardId
   return 'empty-void'
 }
@@ -186,24 +166,19 @@ export function getTurnModifiers(game: GameSnapshot): TurnModifiers {
     moveRangeDelta: 0,
     minMoveRange: 1,
     cannotBuildShipTypes: [],
-    cannotBuyExtraMarkers: false,
     cannotRetreat: false,
     tokenValueBonus: 0,
     destroyCostBonus: 0,
     ignoreDestructionPriority: false,
     blockEnterResourceOrPowerCenter: false,
-    oneProductionMarkerPerRegion: false,
   }
   const eventId = activeModifierEventId(game)
   if (!eventId) return empty
   switch (eventId) {
     case 'magnetic-storm': return { ...empty, moveRangeDelta: -1, minMoveRange: 1 }
     case 'stand-to-death': return { ...empty, cannotRetreat: true }
-    case 'production-accident': return { ...empty, cannotBuyExtraMarkers: true }
     case 'ammo-detonation': return { ...empty, cannotBuildShipTypes: [...COMBAT_SHIP_TYPES] }
-    case 'mandatory-overtime': return { ...empty, oneProductionMarkerPerRegion: true }
     case 'hyper-gap': return { ...empty, moveRangeDelta: 1, hyperFireRange: 4 }
-    case 'all-for-front': return { ...empty, maxProductionTokensPerPlayer: 3 }
     case 'shadow-economy': return { ...empty, tokenValueBonus: 2 }
     case 'hold-formation': return { ...empty, destroyCostBonus: 2 }
     case 'combat-chaos': return { ...empty, ignoreDestructionPriority: true }
@@ -219,67 +194,12 @@ export function isTurnEventResolved(game: GameSnapshot): boolean {
 }
 
 export function resetTurnEventTracking(game: GameSnapshot): void {
-  game.productionTokensSpentThisTurn = {}
   game.overtimeRegionByPlayer = {}
   game.productionMarkerBoughtByPlayerThisTurn = {}
 }
 
-function productionMarkerRegionKey(
-  summary: ReturnType<typeof buildSpatialSummary>,
-  marker: GameSnapshot['productionMarkers'][number],
-): string {
-  const hex = hexKey(marker.coord.q, marker.coord.r)
-  const region = summary.regions.find(
-    (r) => r.ownerId === marker.ownerId && r.hexes.includes(hex),
-  )
-  const regionId = region?.id || marker.targetRegionId || hex
-  return `${marker.ownerId}:${regionId}`
-}
-
-/**
- * Событие «Нормирование производства»: в каждом регионе владельца остаётся один PM.
- * Лишние снимаются с карты в неиспользованный пул (без траты действия фазы).
- * Остаётся маркер с меньшим id.
- */
-export function enforceOneProductionMarkerPerRegion(game: GameSnapshot): string[] {
-  const summary = buildSpatialSummary(gameStateFromSnapshot(game, 'event'))
-  const grouped = new Map<string, GameSnapshot['productionMarkers']>()
-  const sorted = [...game.productionMarkers].sort((a, b) => a.id.localeCompare(b.id))
-  for (const marker of sorted) {
-    const key = productionMarkerRegionKey(summary, marker)
-    const list = grouped.get(key) ?? []
-    list.push(marker)
-    grouped.set(key, list)
-  }
-
-  const removeIds = new Set<string>()
-  for (const list of grouped.values()) {
-    for (const extra of list.slice(1)) removeIds.add(extra.id)
-  }
-  if (removeIds.size === 0) return []
-
-  game.productionMarkers = game.productionMarkers.filter((m) => !removeIds.has(m.id))
-  for (const cell of game.cells) {
-    if (cell.productionMarkerId && removeIds.has(cell.productionMarkerId)) {
-      cell.productionMarkerId = null
-    }
-  }
-
-  const message =
-    `«Нормирование производства»: снято лишних маркеров производства: ${removeIds.size} ` +
-    '(оставлен один на регион, с меньшим id)'
-  appendEventLog(game, message)
-  return [message]
-}
-
-export function applyEventImmediateEffects(game: GameSnapshot, eventId: EventCardId): void {
-  switch (eventId) {
-    case 'mandatory-overtime':
-      enforceOneProductionMarkerPerRegion(game)
-      break
-    default:
-      break
-  }
+export function applyEventImmediateEffects(_game: GameSnapshot, _eventId: EventCardId): void {
+  // Немедленные эффекты событий (если появятся) — здесь.
 }
 
 function appendEventLog(game: GameSnapshot, message: string): void {
@@ -333,8 +253,9 @@ export function isShipTypeBuildBlocked(game: GameSnapshot, type: ShipType): bool
   return getTurnModifiers(game).cannotBuildShipTypes.includes(type)
 }
 
-export function isExtraMarkerBuyBlocked(game: GameSnapshot): boolean {
-  return getTurnModifiers(game).cannotBuyExtraMarkers
+/** @deprecated Маркеры производства отключены; покупка всегда запрещена. */
+export function isExtraMarkerBuyBlocked(_game: GameSnapshot): boolean {
+  return true
 }
 
 export function isMovementIntoCellBlocked(
@@ -352,25 +273,7 @@ export function canRetreatFromBattle(game: GameSnapshot): boolean {
   return !getTurnModifiers(game).cannotRetreat
 }
 
-export function productionTokensSpentByPlayer(game: GameSnapshot, playerId: string): number {
-  return game.productionTokensSpentThisTurn?.[playerId] ?? 0
-}
-
-export function validateProductionTokenSpendLimit(
-  game: GameSnapshot,
-  playerId: string,
-  additionalProductionTokens: number,
-): string[] {
-  const max = getTurnModifiers(game).maxProductionTokensPerPlayer
-  if (max == null) return []
-  const spent = productionTokensSpentByPlayer(game, playerId)
-  if (spent + additionalProductionTokens > max) {
-    return [`«Всё для фронта»: не более ${max} фишек производства за ход`]
-  }
-  return []
-}
-
-/** @deprecated Сверхурочные по фишкам убраны; лимит 1 PM на регион — событие `mandatory-overtime`. */
+/** @deprecated Сверхурочные по фишкам и лимит маркеров производства сняты. */
 export function validateOvertimeProductionSpend(
   _game: GameSnapshot,
   _playerId: string,
@@ -379,18 +282,6 @@ export function validateOvertimeProductionSpend(
   _productionTokenCount: number,
 ): string[] {
   return []
-}
-
-export function recordProductionTokensSpent(
-  game: GameSnapshot,
-  playerId: string,
-  productionTokenCount: number,
-  _regionId?: string,
-): void {
-  if (productionTokenCount <= 0) return
-  if (!game.productionTokensSpentThisTurn) game.productionTokensSpentThisTurn = {}
-  game.productionTokensSpentThisTurn[playerId] =
-    (game.productionTokensSpentThisTurn[playerId] ?? 0) + productionTokenCount
 }
 
 export interface ActiveEventObservation {

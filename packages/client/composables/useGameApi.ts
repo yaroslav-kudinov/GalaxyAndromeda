@@ -196,6 +196,13 @@ export async function startRoom(roomId: string, playerId: string): Promise<{ ok:
   })
 }
 
+export async function closeRoom(roomId: string, playerId: string): Promise<{ ok: true }> {
+  return apiFetch(`/rooms/${roomId}/close`, {
+    method: 'POST',
+    body: JSON.stringify({ playerId }),
+  })
+}
+
 /** Human UI: skip heavy ASCII/spatial geometry (agents use full observation via MCP). */
 export async function fetchObservation(roomId: string, playerId: string): Promise<GameObservation> {
   const qs = new URLSearchParams({ playerId, geometry: '0' })

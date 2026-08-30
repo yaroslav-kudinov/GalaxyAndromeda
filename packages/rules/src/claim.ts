@@ -9,8 +9,12 @@ const COLONIZER_TYPES: ReadonlySet<ShipType> = new Set([
   'hyper',
 ])
 
-function hasEnemyShips(cell: RuntimeCellState, playerId: string): boolean {
+function hasEnemyShipsOnCell(cell: RuntimeCellState, playerId: string): boolean {
   return cell.ships.some((ship) => ship.ownerId !== playerId)
+}
+
+function hasEnemyShips(cell: RuntimeCellState, playerId: string): boolean {
+  return hasEnemyShipsOnCell(cell, playerId)
 }
 
 function hasOwnShips(cell: RuntimeCellState, playerId: string): boolean {
@@ -20,6 +24,26 @@ function hasOwnShips(cell: RuntimeCellState, playerId: string): boolean {
 function hasColonizer(cell: RuntimeCellState, playerId: string): boolean {
   return cell.ships.some((ship) => ship.ownerId === playerId && COLONIZER_TYPES.has(ship.type))
 }
+
+/** Эсминец захватывает нейтральную клетку жертвой (маркер действия, корабль гибнет). */
+export function canDestroyerColonizeCell(cell: RuntimeCellState, playerId: string): boolean {
+  if (cell.controlOwnerId != null) return false
+  if (hasEnemyShipsOnCell(cell, playerId)) return false
+  return true
+}
+
+export function applyDestroyerColonization(
+  game: GameSnapshot,
+  cell: RuntimeCellState,
+  playerId: string,
+): boolean {
+  if (!canDestroyerColonizeCell(cell, playerId)) return false
+  cell.controlOwnerId = playerId
+  removeStaleProductionMarkerAt(game, cell.coord)
+  return true
+}
+
+/** Нейтральную клетку не красим сразу — только объявление контроля в конце хода (кроме жертвы эсминца). */
 
 function canClaimCell(cell: RuntimeCellState, playerId: string): boolean {
   if (!hasOwnShips(cell, playerId) || hasEnemyShips(cell, playerId)) return false
@@ -45,7 +69,7 @@ export function transferControlIfEnemyOwned(
   return true
 }
 
-/** Клейм в начале фазы производства: один раз на всех. */
+/** Клейм в конце игрового хода (после фазы «Действия»). */
 export function applyProductionHexClaims(game: GameSnapshot): { claimed: number } {
   let claimed = 0
   const owners = new Set(
@@ -65,9 +89,9 @@ export function applyProductionHexClaims(game: GameSnapshot): { claimed: number 
     game.eventLog.push({
       id: `evt-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       turn: game.turnNumber,
-      phase: 'production',
+      phase: game.phase,
       type: 'claim',
-      message: `Клейм производства: занято клеток ${claimed}`,
+      message: `Объявление контроля: занято клеток ${claimed}`,
       timestamp: Date.now(),
     })
   }
@@ -78,7 +102,7 @@ export function maybeApplyProductionHexClaims(
   game: GameSnapshot,
   previousPhase: string,
 ): void {
-  if (previousPhase === 'actions' && game.phase === 'production') {
+  if (previousPhase === 'actions' && game.phase === 'events') {
     applyProductionHexClaims(game)
   }
 }

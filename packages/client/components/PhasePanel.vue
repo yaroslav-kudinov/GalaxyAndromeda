@@ -15,6 +15,8 @@ const props = defineProps<{
   countHint?: string
   /** Доп. CSS-класс для акцента подсказки */
   guidanceAccent?: string
+  /** Доп. строка под фазой (например, счётчик перезарядки фишек) */
+  secondaryHint?: string | null
   variant?: 'inline' | 'hero'
 }>()
 
@@ -43,8 +45,9 @@ const activePlayerStyle = computed(() => {
       </span>
     </div>
 
-    <div v-if="variant === 'hero' && (countHint || prompt)" class="phase-guidance" :class="guidanceAccent">
+    <div v-if="variant === 'hero' && (countHint || prompt || secondaryHint)" class="phase-guidance" :class="guidanceAccent">
       <p v-if="countHint" class="phase-count">{{ countHint }}</p>
+      <p v-if="secondaryHint" class="phase-secondary">{{ secondaryHint }}</p>
       <p v-if="prompt" class="phase-prompt">{{ prompt }}</p>
     </div>
 
@@ -113,10 +116,6 @@ const activePlayerStyle = computed(() => {
   background: rgba(120, 53, 15, 0.9);
   border-color: rgba(251, 191, 36, 0.55);
 }
-.phase--production .phase-badge {
-  background: rgba(131, 24, 67, 0.9);
-  border-color: rgba(244, 114, 182, 0.55);
-}
 
 .meta {
   color: #cbd5e1;
@@ -141,17 +140,9 @@ const activePlayerStyle = computed(() => {
   border-color: rgba(56, 189, 248, 0.5);
   background: rgba(12, 74, 110, 0.45);
 }
-.phase-guidance.planning-production {
-  border-color: rgba(244, 114, 182, 0.5);
-  background: rgba(131, 24, 67, 0.4);
-}
 .phase-guidance.actions {
   border-color: rgba(251, 191, 36, 0.5);
   background: rgba(120, 53, 15, 0.45);
-}
-.phase-guidance.production {
-  border-color: rgba(244, 114, 182, 0.5);
-  background: rgba(131, 24, 67, 0.4);
 }
 .phase-guidance.events {
   border-color: rgba(192, 132, 252, 0.45);
@@ -164,6 +155,13 @@ const activePlayerStyle = computed(() => {
   font-weight: 700;
   line-height: 1.3;
   color: #f8fafc;
+}
+
+.phase-secondary {
+  margin: 0.15rem 0 0;
+  font-size: 0.82rem;
+  line-height: 1.35;
+  color: #94a3b8;
 }
 
 .phase-prompt {

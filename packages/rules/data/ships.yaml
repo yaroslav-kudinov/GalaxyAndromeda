@@ -1,6 +1,7 @@
 destroyer:
   move: 3
   combatDice: 1
+  combatDieFaces: 4
   destroyCost: 4
   productionRegionSize: [3, 4]
   cost: { credits: 2, production: 2 }
@@ -8,7 +9,7 @@ destroyer:
 cruiser:
   move: 2
   combatDice: 2
-  combatDieFaces: 4
+  combatDieFaces: 6
   supportDice: 1
   supportDieFaces: 4
   fireRange: 1

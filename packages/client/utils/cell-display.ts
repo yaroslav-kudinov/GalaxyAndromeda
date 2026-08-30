@@ -90,13 +90,11 @@ export function cellOverviewLines(cell: MapCellDefinition): CellOverviewLines {
 }
 
 export function cellHasMarkers(cell: BoardCellView): boolean {
-  return !!(cell.actionMarker || cell.productionMarker)
+  return !!cell.actionMarker
 }
 
 export function markerSummary(cell: BoardCellView): string | null {
-  if (cell.actionMarker && cell.productionMarker) return 'Действие + производство'
   if (cell.actionMarker) return 'Маркер действия'
-  if (cell.productionMarker) return 'Маркер производства'
   return null
 }
 

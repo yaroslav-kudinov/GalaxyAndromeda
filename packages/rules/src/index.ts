@@ -19,7 +19,9 @@ export * from './ships.js'
 export * from './movement.js'
 export * from './regions.js'
 export * from './supply-chains.js'
+export * from './destroyer-sacrifice.js'
 export * from './claim.js'
+export * from './resource-recharge.js'
 export * from './surrender.js'
 export {
   START_PRODUCTION_MARKER_LIMIT,

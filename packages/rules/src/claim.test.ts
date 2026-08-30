@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  applyDestroyerColonization,
   applyProductionHexClaims,
   maybeApplyProductionHexClaims,
   transferControlIfEnemyOwned,
@@ -77,12 +78,20 @@ describe('transferControlIfEnemyOwned', () => {
 })
 
 describe('production hex claims', () => {
-  it('destroyers do not claim neutral hexes', () => {
+  it('destroyers do not claim neutral hexes at end of turn', () => {
     const map = claimMap()
     const game = gameSnapshotFromMap(map)
     addShip(game, 1, 0, 'player-1', 'destroyer', 'dd-n')
     applyProductionHexClaims(game)
     expect(game.cells.find((c) => c.coord.q === 1 && c.coord.r === 0)!.controlOwnerId).toBeNull()
+  })
+
+  it('destroyer sacrifice claims a neutral hex immediately', () => {
+    const map = claimMap()
+    const game = gameSnapshotFromMap(map)
+    const dest = game.cells.find((c) => c.coord.q === 1 && c.coord.r === 0)!
+    expect(applyDestroyerColonization(game, dest, 'player-1')).toBe(true)
+    expect(dest.controlOwnerId).toBe('player-1')
   })
 
   it('cruiser claims a neutral hex', () => {
@@ -124,7 +133,7 @@ describe('production hex claims', () => {
     expect(dest.controlOwnerId).toBeNull()
   })
 
-  it('runs once when entering production from actions', () => {
+  it('runs once when ending the turn after actions', () => {
     const map = claimMap()
     const game = gameSnapshotFromMap(map)
     addShip(game, 1, 0, 'player-1', 'cruiser', 'cr-n')
@@ -133,17 +142,29 @@ describe('production hex claims', () => {
     game.participatingPlayerIds = ['player-1']
     game.actionMarkers = []
     expect(advanceGameSnapshot(game, map.id)).toEqual([])
-    expect(game.phase).toBe('production')
+    expect(game.turnNumber).toBeGreaterThanOrEqual(1)
     expect(game.cells.find((c) => c.coord.q === 1 && c.coord.r === 0)!.controlOwnerId).toBe(
       'player-1',
     )
   })
 
-  it('does not claim again while wrapping production', () => {
+  it('destroyer on neutral is not claimed when the turn ends after actions', () => {
     const map = claimMap()
     const game = gameSnapshotFromMap(map)
-    game.phase = 'production'
-    maybeApplyProductionHexClaims(game, 'production')
+    addShip(game, 1, 0, 'player-1', 'destroyer', 'dd-n')
+    game.phase = 'actions'
+    game.activePlayerId = 'player-1'
+    game.participatingPlayerIds = ['player-1']
+    game.actionMarkers = []
+    expect(advanceGameSnapshot(game, map.id)).toEqual([])
+    expect(game.cells.find((c) => c.coord.q === 1 && c.coord.r === 0)!.controlOwnerId).toBeNull()
+  })
+
+  it('does not claim again while wrapping actions', () => {
+    const map = claimMap()
+    const game = gameSnapshotFromMap(map)
+    game.phase = 'events'
+    maybeApplyProductionHexClaims(game, 'actions')
     expect(game.eventLog.some((e) => e.type === 'claim')).toBe(false)
   })
 })

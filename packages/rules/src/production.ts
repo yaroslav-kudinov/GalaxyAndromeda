@@ -6,28 +6,16 @@ import {
 } from './constants.js'
 import { trimGameEventLog } from './event-log.js'
 import {
-  isExtraMarkerBuyBlocked,
   getEffectiveTokenValue,
   isShipTypeBuildBlocked,
-  recordProductionTokensSpent,
-  validateProductionTokenSpendLimit,
 } from './events.js'
 import {
-  hasBoughtProductionMarkerThisTurn,
-  markProductionMarkerBoughtThisTurn,
-  markProductionMarkerResolvedThisTurn,
-  PRODUCTION_MARKER_ALREADY_BOUGHT_MSG,
-  PRODUCTION_MARKER_ALREADY_RESOLVED_MSG,
-  removeProductionMarker,
+  markActionMarkerResolvedThisTurn,
+  removeActionMarker,
+  ACTION_MARKER_ALREADY_RESOLVED_MSG,
 } from './markers.js'
 import { buildSpatialSummary } from './observation/ascii-map.js'
-import {
-  MAX_PRODUCTION_MARKERS_PER_PLAYER,
-  ensureMarkerLimits,
-  nextProductionMarkerExpandCost,
-  productionMarkerLimitForPlayer,
-} from './marker-pools.js'
-import type { GameSnapshot, ProductionMarker, RuntimeCellState } from './save-file.js'
+import type { GameSnapshot, RuntimeCellState } from './save-file.js'
 import { gameStateFromSnapshot } from './save-file.js'
 import {
   canBuildShipInRegionSize,
@@ -96,31 +84,32 @@ function cellAt(game: GameSnapshot, coord: HexCoord): RuntimeCellState | undefin
   return game.cells.find((c) => hexKey(c.coord.q, c.coord.r) === key)
 }
 
-function findProductionMarker(
+export interface ProductionAnchor {
+  id: string
+  ownerId: string
+  coord: HexCoord
+}
+
+function findActionMarkerForProduction(
   game: GameSnapshot,
   markerId: string,
   playerId: string,
-): ProductionMarker | null {
-  const marker = game.productionMarkers.find((m) => m.id === markerId)
-  if (!marker || marker.ownerId !== playerId) return null
-  return marker
+): ProductionAnchor | null {
+  const marker = game.actionMarkers.find((m) => m.id === markerId && m.ownerId === playerId)
+  return marker ?? null
 }
 
 export function getRegionForMarker(
   game: GameSnapshot,
   mapId: string,
-  marker: ProductionMarker,
+  marker: ProductionAnchor,
 ): { id: string; size: number; hexes: string[] } | null {
   const state = gameStateFromSnapshot(game, mapId)
   const summary = buildSpatialSummary(state)
   const markerKey = hexKey(marker.coord.q, marker.coord.r)
-  const region =
-    summary.regions.find(
-      (r) => r.id === marker.targetRegionId && r.ownerId === marker.ownerId,
-    )
-    ?? summary.regions.find(
-      (r) => r.ownerId === marker.ownerId && r.hexes.includes(markerKey),
-    )
+  const region = summary.regions.find(
+    (r) => r.ownerId === marker.ownerId && r.hexes.includes(markerKey),
+  )
   if (!region) return null
   return { id: region.id, size: region.size, hexes: region.hexes }
 }
@@ -141,7 +130,7 @@ export function parseTokenSpendKey(key: string): { coord: HexCoord; tokenIndex: 
 function iterRegionCells(
   game: GameSnapshot,
   mapId: string,
-  marker: ProductionMarker,
+  marker: ProductionAnchor,
 ): RuntimeCellState[] {
   const region = getRegionForMarker(game, mapId, marker)
   if (!region) return []
@@ -157,7 +146,7 @@ function iterRegionCells(
 export function getRegionResourceSummary(
   game: GameSnapshot,
   mapId: string,
-  marker: ProductionMarker,
+  marker: ProductionAnchor,
 ): RegionResourceSummary {
   const region = getRegionForMarker(game, mapId, marker)
   if (!region) {
@@ -198,7 +187,7 @@ export function getRegionResourceSummary(
 export function needsProductionTokenChoice(
   game: GameSnapshot,
   mapId: string,
-  marker: ProductionMarker,
+  marker: ProductionAnchor,
 ): boolean {
   const summary = getRegionResourceSummary(game, mapId, marker)
   return (
@@ -210,7 +199,7 @@ export function needsProductionTokenChoice(
 export function getRegionTokensForMarker(
   game: GameSnapshot,
   mapId: string,
-  marker: ProductionMarker,
+  marker: ProductionAnchor,
 ): RegionTokenOption[] {
   const region = getRegionForMarker(game, mapId, marker)
   if (!region) return []
@@ -289,7 +278,7 @@ function countIncomingPlacements(
 export function regionPlacementCapacity(
   game: GameSnapshot,
   _mapId: string,
-  marker: ProductionMarker,
+  marker: ProductionAnchor,
   pendingPlacements: ShipPlacement[] = [],
 ): number {
   const cell = cellAt(game, marker.coord)
@@ -310,7 +299,7 @@ export function getBuildableShipsForMarker(
   playerId: string,
   markerId: string,
 ): BuildableShipOption[] {
-  const marker = findProductionMarker(game, markerId, playerId)
+  const marker = findActionMarkerForProduction(game, markerId, playerId)
   if (!marker) return []
 
   const region = getRegionForMarker(game, mapId, marker)
@@ -367,17 +356,17 @@ function validateMarkerResolutionPreconditions(
   game: GameSnapshot,
   playerId: string,
   markerId: string,
-): { marker: ProductionMarker } | string[] {
-  if (game.phase !== 'production') return ['Постройка только в фазе «Производство»']
+): { marker: ProductionAnchor } | string[] {
+  if (game.phase !== 'actions') return ['Постройка только в фазе «Действия»']
   if (game.activePlayerId !== playerId) return ['Сейчас ход другого игрока']
-  if (game.productionMarkerResolvedThisTurn) return [PRODUCTION_MARKER_ALREADY_RESOLVED_MSG]
+  if (game.actionMarkerResolvedThisTurn) return [ACTION_MARKER_ALREADY_RESOLVED_MSG]
 
-  const marker = findProductionMarker(game, markerId, playerId)
-  if (!marker) return ['Маркер производства не найден']
+  const marker = findActionMarkerForProduction(game, markerId, playerId)
+  if (!marker) return ['Маркер действия не найден']
 
   const cell = cellAt(game, marker.coord)
-  if (!cell?.productionMarkerId || cell.productionMarkerId !== marker.id) {
-    return ['На клетке нет этого маркера производства']
+  if (!cell?.actionMarkerId || cell.actionMarkerId !== marker.id) {
+    return ['На клетке нет этого маркера действия']
   }
 
   return { marker }
@@ -387,7 +376,7 @@ export function validateTokenPayment(
   game: GameSnapshot,
   mapId: string,
   playerId: string,
-  marker: ProductionMarker,
+  marker: ProductionAnchor,
   creditsNeeded: number,
   productionNeeded: number,
   spentTokens: TokenSpendRef[],
@@ -400,7 +389,6 @@ export function validateTokenPayment(
   const seen = new Set<string>()
   let credits = 0
   let production = 0
-  let productionTokenCount = 0
 
   for (const ref of spentTokens) {
     const key = tokenSpendKey(ref.coord, ref.tokenIndex)
@@ -429,15 +417,8 @@ export function validateTokenPayment(
     }
 
     if (token.type === 'credits') credits += getEffectiveTokenValue(game, token.value)
-    else {
-      production += getEffectiveTokenValue(game, token.value)
-      productionTokenCount += 1
-    }
+    else production += getEffectiveTokenValue(game, token.value)
   }
-
-  errors.push(
-    ...validateProductionTokenSpendLimit(game, playerId, productionTokenCount),
-  )
 
   if (credits < creditsNeeded) {
     errors.push(`Не хватает кредитов: ${credits}/${creditsNeeded}`)
@@ -465,7 +446,7 @@ function batchResourceTotals(
 export function autoAllocateTokens(
   game: GameSnapshot,
   mapId: string,
-  marker: ProductionMarker,
+  marker: ProductionAnchor,
   creditsNeeded: number,
   productionNeeded: number,
 ): TokenSpendRef[] | null {
@@ -499,7 +480,7 @@ export function autoAllocateTokens(
 export function validateShipPlacements(
   game: GameSnapshot,
   mapId: string,
-  marker: ProductionMarker,
+  marker: ProductionAnchor,
   ships: ShipPlacement[],
 ): string[] {
   const errors: string[] = []
@@ -587,7 +568,7 @@ export function validateShipPlacements(
 }
 
 const ACTION_MARKER_BUY_DISABLED_MSG =
-  'Покупка маркеров действия отключена — лимит равен двум плюс число центров власти'
+  'Покупка маркеров действия отключена — лимит равен три плюс число центров власти'
 
 export function validateProductionBatch(
   game: GameSnapshot,
@@ -654,13 +635,6 @@ export function executeProductionBatch(
     if (token) token.faceUp = false
   }
 
-  const productionSpent = tokens.filter((ref) => {
-    const token = tokenAt(game, ref)
-    return token?.type === 'production'
-  }).length
-  const region = getRegionForMarker(game, mapId, marker)
-  recordProductionTokensSpent(game, playerId, productionSpent, region?.id)
-
   const labels: string[] = []
   for (const ship of plan.ships) {
     const destCell = cellAt(game, ship.coord)!
@@ -672,15 +646,15 @@ export function executeProductionBatch(
     labels.push(`${SHIP_LABELS[ship.type]}@(${ship.coord.q},${ship.coord.r})`)
   }
 
-  removeProductionMarker(game, marker.id, playerId)
-  markProductionMarkerResolvedThisTurn(game)
+  removeActionMarker(game, marker.id, playerId)
+  markActionMarkerResolvedThisTurn(game)
 
   game.eventLog.push({
     id: `evt-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
     turn: game.turnNumber,
     phase: game.phase,
     type: 'production',
-    message: labels.length ? `Построено: ${labels.join(', ')}` : 'Маркер производства исполнен',
+    message: labels.length ? `Построено: ${labels.join(', ')}` : 'Постройка по маркеру действия',
     timestamp: Date.now(),
   })
   trimGameEventLog(game)
@@ -690,66 +664,21 @@ export function executeProductionBatch(
 }
 
 export function validateProductionRecharge(
-  game: GameSnapshot,
-  mapId: string,
-  playerId: string,
-  plan: ProductionRechargePlan,
+  _game: GameSnapshot,
+  _mapId: string,
+  _playerId: string,
+  _plan: ProductionRechargePlan,
 ): string[] {
-  const pre = validateMarkerResolutionPreconditions(game, playerId, plan.markerId)
-  if (Array.isArray(pre)) return pre
-  const { marker } = pre
-
-  const region = getRegionForMarker(game, mapId, marker)
-  if (!region) return ['Регион маркера не найден']
-
-  const summary = getRegionResourceSummary(game, mapId, marker)
-  if (summary.faceDownCreditsCount + summary.faceDownProductionCount < 1) {
-    return ['В регионе нет перевёрнутых фишек']
-  }
-
-  return []
+  return ['Перезарядка фишек выполняется автоматически через случайный интервал один, два или три полных хода']
 }
 
 export function executeProductionRecharge(
-  game: GameSnapshot,
-  mapId: string,
-  playerId: string,
-  plan: ProductionRechargePlan,
+  _game: GameSnapshot,
+  _mapId: string,
+  _playerId: string,
+  _plan: ProductionRechargePlan,
 ): string[] {
-  const errors = validateProductionRecharge(game, mapId, playerId, plan)
-  if (errors.length) return errors
-
-  const pre = validateMarkerResolutionPreconditions(game, playerId, plan.markerId)
-  if (Array.isArray(pre)) return pre
-  const { marker } = pre
-
-  let flippedCredits = 0
-  let flippedProduction = 0
-
-  for (const cell of iterRegionCells(game, mapId, marker)) {
-    for (const token of cell.resourceTokens) {
-      if (token.faceUp === false) {
-        token.faceUp = true
-        if (token.type === 'credits') flippedCredits += 1
-        else flippedProduction += 1
-      }
-    }
-  }
-
-  removeProductionMarker(game, marker.id, playerId)
-  markProductionMarkerResolvedThisTurn(game)
-
-  game.eventLog.push({
-    id: `evt-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-    turn: game.turnNumber,
-    phase: game.phase,
-    type: 'production',
-    message: `Перезарядка ресурсов: кредиты ${flippedCredits}, производство ${flippedProduction}`,
-    timestamp: Date.now(),
-  })
-  trimGameEventLog(game)
-
-  return []
+  return ['Перезарядка фишек выполняется автоматически через случайный интервал один, два или три полных хода']
 }
 
 export function validateProductionBuild(
@@ -816,148 +745,20 @@ export function getOwnedFaceUpTokenOptions(
   return options
 }
 
-function tokenValuesForRefs(
-  game: GameSnapshot,
-  refs: TokenSpendRef[],
-): { credits: number; production: number } {
-  let credits = 0
-  let production = 0
-  for (const ref of refs) {
-    const token = tokenAt(game, ref)
-    if (!token) continue
-    const value = getEffectiveTokenValue(game, token.value)
-    if (token.type === 'credits') credits += value
-    else production += value
-  }
-  return { credits, production }
-}
-
-function selectionHasSpareTokens(
-  game: GameSnapshot,
-  refs: TokenSpendRef[],
-  creditsNeeded: number,
-  productionNeeded: number,
-): boolean {
-  if (refs.length <= 1) return false
-  for (let i = 0; i < refs.length; i += 1) {
-    const without = refs.filter((_, j) => j !== i)
-    const totals = tokenValuesForRefs(game, without)
-    if (totals.credits >= creditsNeeded && totals.production >= productionNeeded) return true
-  }
-  return false
-}
 
 export function validateBuyProductionMarker(
-  game: GameSnapshot,
-  playerId: string,
-  spentTokens: TokenSpendRef[],
+  _game: GameSnapshot,
+  _playerId: string,
+  _spentTokens: TokenSpendRef[],
 ): string[] {
-  if (game.phase !== 'production') return ['Покупка маркера производства только в фазе «Производство»']
-  if (game.activePlayerId !== playerId) return ['Сейчас ход другого игрока']
-  if (hasBoughtProductionMarkerThisTurn(game, playerId)) {
-    return [PRODUCTION_MARKER_ALREADY_BOUGHT_MSG]
-  }
-  if (isExtraMarkerBuyBlocked(game)) {
-    return ['Событие хода запрещает покупку дополнительных маркеров']
-  }
-
-  const current = productionMarkerLimitForPlayer(game, playerId)
-  if (current >= MAX_PRODUCTION_MARKERS_PER_PLAYER) {
-    return [`Не более ${MAX_PRODUCTION_MARKERS_PER_PLAYER} маркеров производства`]
-  }
-  const cost = nextProductionMarkerExpandCost(current)
-  if (!cost) return ['Дополнительные маркеры производства недоступны']
-
-  const errors: string[] = []
-  const seen = new Set<string>()
-  let productionTokenCount = 0
-
-  for (const ref of spentTokens) {
-    const key = tokenSpendKey(ref.coord, ref.tokenIndex)
-    if (seen.has(key)) {
-      errors.push('Одна фишка указана дважды')
-      continue
-    }
-    seen.add(key)
-
-    const cell = cellAt(game, ref.coord)
-    if (!cell || cell.controlOwnerId !== playerId) {
-      errors.push(`Нет доступа к фишке (${ref.coord.q}, ${ref.coord.r})`)
-      continue
-    }
-
-    const token = tokenAt(game, ref)
-    if (!token) {
-      errors.push(`Фишка (${ref.coord.q}, ${ref.coord.r}) недоступна`)
-      continue
-    }
-    if (token.type === 'production') productionTokenCount += 1
-  }
-
-  errors.push(...validateProductionTokenSpendLimit(game, playerId, productionTokenCount))
-
-  const totals = tokenValuesForRefs(game, spentTokens)
-  if (totals.credits < cost.credits) {
-    errors.push(`Не хватает кредитов: ${totals.credits}/${cost.credits}`)
-  }
-  if (totals.production < cost.production) {
-    errors.push(`Не хватает производства: ${totals.production}/${cost.production}`)
-  }
-  if (
-    errors.length === 0
-    && selectionHasSpareTokens(game, spentTokens, cost.credits, cost.production)
-  ) {
-    errors.push('Уберите лишние фишки — хватает меньшего набора')
-  }
-
-  return errors
+  return ['Маркеры производства отключены']
 }
 
 export function executeBuyProductionMarker(
-  game: GameSnapshot,
-  mapId: string,
-  playerId: string,
-  spentTokens: TokenSpendRef[],
+  _game: GameSnapshot,
+  _mapId: string,
+  _playerId: string,
+  _spentTokens: TokenSpendRef[],
 ): string[] {
-  const errors = validateBuyProductionMarker(game, playerId, spentTokens)
-  if (errors.length) return errors
-
-  const byCell = new Map<string, number[]>()
-  for (const ref of spentTokens) {
-    const key = hexKey(ref.coord.q, ref.coord.r)
-    const list = byCell.get(key) ?? []
-    list.push(ref.tokenIndex)
-    byCell.set(key, list)
-  }
-
-  let productionSpent = 0
-  for (const [key, indexes] of byCell) {
-    const [q, r] = key.split(',').map(Number)
-    const cell = cellAt(game, { q, r })
-    if (!cell) continue
-    const sorted = [...indexes].sort((a, b) => b - a)
-    for (const tokenIndex of sorted) {
-      const token = cell.resourceTokens[tokenIndex]
-      if (token?.type === 'production') productionSpent += 1
-      cell.resourceTokens.splice(tokenIndex, 1)
-    }
-  }
-
-  recordProductionTokensSpent(game, playerId, productionSpent)
-  ensureMarkerLimits(game)
-  game.productionMarkerLimitByPlayer![playerId] = productionMarkerLimitForPlayer(game, playerId) + 1
-  markProductionMarkerBoughtThisTurn(game, playerId)
-
-  const nextLimit = productionMarkerLimitForPlayer(game, playerId)
-  game.eventLog.push({
-    id: `evt-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-    turn: game.turnNumber,
-    phase: game.phase,
-    type: 'production',
-    message: `Куплен дополнительный маркер производства (лимит ${nextLimit})`,
-    timestamp: Date.now(),
-  })
-  trimGameEventLog(game)
-  applyVictoryAndDefeatChecks(game, mapId)
-  return []
+  return ['Маркеры производства отключены']
 }

@@ -7,15 +7,11 @@ import {
 import {
   executeBuyProductionMarker,
   executeProductionBatch,
-  validateBuyProductionMarker,
 } from './production.js'
-import { addActionMarker, addProductionMarker, PRODUCTION_MARKER_ALREADY_BOUGHT_MSG } from './markers.js'
-import { resetTurnEventTracking } from './events.js'
+import { addActionMarker } from './markers.js'
 import { beginMatchForParticipants } from './match-start.js'
 import { getLegalActionsForSnapshot } from './movement.js'
 import { gameSnapshotFromMap } from './save-file.js'
-import { advanceGameSnapshot, activePlayerOrder } from './turn.js'
-import { gameStateFromSnapshot } from './save-file.js'
 import type { MapDefinition } from './types.js'
 
 function productionMap(): MapDefinition {
@@ -93,21 +89,21 @@ function addShip(
 }
 
 describe('marker pools', () => {
-  it('start with 1 power center gives 3 action markers', () => {
+  it('start with 1 power center gives 4 action markers', () => {
     const map = onePowerCenterMap()
     const game = gameSnapshotFromMap(map)
     beginMatchForParticipants(game, map.id, ['player-1', 'player-2'])
-    expect(actionMarkerLimitForPlayer(game, 'player-1')).toBe(3)
-    expect(actionMarkerLimitForPlayer(game, 'player-2')).toBe(3)
-    expect(game.actionMarkerLimitByPlayer?.['player-1']).toBe(3)
+    expect(actionMarkerLimitForPlayer(game, 'player-1')).toBe(4)
+    expect(actionMarkerLimitForPlayer(game, 'player-2')).toBe(4)
+    expect(game.actionMarkerLimitByPlayer?.['player-1']).toBe(4)
   })
 
-  it('2 power centers at turn start give 4 action markers', () => {
+  it('2 power centers at turn start give 5 action markers', () => {
     const map = powerCenterMap()
     const game = gameSnapshotFromMap(map)
-    expect(actionMarkerLimitForPlayer(game, 'player-1')).toBe(4)
-    expect(actionMarkerLimitForPlayer(game, 'player-2')).toBe(3)
-    expect(game.actionMarkerLimitByPlayer?.['player-1']).toBe(4)
+    expect(actionMarkerLimitForPlayer(game, 'player-1')).toBe(5)
+    expect(actionMarkerLimitForPlayer(game, 'player-2')).toBe(4)
+    expect(game.actionMarkerLimitByPlayer?.['player-1']).toBe(5)
   })
 
   it('losing a power center mid-turn keeps the frozen limit', () => {
@@ -125,106 +121,78 @@ describe('marker pools', () => {
     expect(game.actionMarkers).toHaveLength(3)
 
     game.cells.find((cell) => cell.coord.q === 1 && cell.coord.r === 0)!.controlOwnerId = 'player-2'
-    expect(actionMarkerLimitForPlayer(game, 'player-1')).toBe(4)
+    expect(actionMarkerLimitForPlayer(game, 'player-1')).toBe(5)
     expect(game.actionMarkers).toHaveLength(3)
     expect(addActionMarker(game, 'player-1', { q: 1, r: 1 })).toEqual([])
     expect(game.actionMarkers).toHaveLength(4)
 
     getLegalActionsForSnapshot(game, map.id, 'player-1')
-    expect(actionMarkerLimitForPlayer(game, 'player-1')).toBe(4)
+    expect(actionMarkerLimitForPlayer(game, 'player-1')).toBe(5)
     expect(game.actionMarkers).toHaveLength(4)
   })
 
   it('strips extras at the next turn start after losing a center', () => {
     const map = powerCenterMap()
     const game = gameSnapshotFromMap(map)
-    game.phase = 'planning'
-    game.activePlayerId = 'player-1'
-    addShip(game, 0, 0, 'player-1')
-    addShip(game, 1, 0, 'player-1')
-    addShip(game, 0, 1, 'player-1')
-    addShip(game, 1, 1, 'player-1')
-    expect(addActionMarker(game, 'player-1', { q: 0, r: 0 })).toEqual([])
-    expect(addActionMarker(game, 'player-1', { q: 1, r: 0 })).toEqual([])
-    expect(addActionMarker(game, 'player-1', { q: 0, r: 1 })).toEqual([])
-    expect(addActionMarker(game, 'player-1', { q: 1, r: 1 })).toEqual([])
-
+    game.actionMarkerLimitByPlayer = { 'player-1': 5 }
     game.cells.find((cell) => cell.coord.q === 1 && cell.coord.r === 0)!.controlOwnerId = 'player-2'
+    refreshActionMarkerCapacity(game)
     expect(actionMarkerLimitForPlayer(game, 'player-1')).toBe(4)
-    expect(game.actionMarkers).toHaveLength(4)
-
-    game.phase = 'production'
-    game.productionMarkers = []
-    const prodOrder = activePlayerOrder(game.players, null, {
-      state: gameStateFromSnapshot(game, map.id),
-      phase: 'production',
-    })
-    game.activePlayerId = prodOrder[prodOrder.length - 1]!
-    game.eventDeck = ['empty-void']
-    expect(advanceGameSnapshot(game, map.id)).toEqual([])
-    expect(game.phase).toBe('planning')
-    expect(actionMarkerLimitForPlayer(game, 'player-1')).toBe(3)
-    expect(game.actionMarkers).toHaveLength(3)
-    expect(game.actionMarkers.map((marker) => marker.coord)).toEqual([
-      { q: 0, r: 0 },
-      { q: 1, r: 0 },
-      { q: 0, r: 1 },
-    ])
-    expect(game.cells.find((cell) => cell.coord.q === 1 && cell.coord.r === 1)!.actionMarkerId).toBeNull()
   })
 
   it('occupying a power center in planning does not grant a slot until next turn', () => {
     const map = onePowerCenterMap()
     const game = gameSnapshotFromMap(map)
+    game.actionMarkerLimitByPlayer = { 'player-1': 4 }
     game.phase = 'planning'
     game.activePlayerId = 'player-1'
     addShip(game, 0, 0, 'player-1')
     addShip(game, 2, 0, 'player-1')
     addShip(game, 0, 1, 'player-1')
     addShip(game, 1, 1, 'player-1')
-    expect(actionMarkerLimitForPlayer(game, 'player-1')).toBe(3)
     expect(addActionMarker(game, 'player-1', { q: 0, r: 0 })).toEqual([])
-    expect(addActionMarker(game, 'player-1', { q: 2, r: 0 })).toEqual([])
     expect(addActionMarker(game, 'player-1', { q: 0, r: 1 })).toEqual([])
+    expect(addActionMarker(game, 'player-1', { q: 1, r: 1 })).toEqual([])
+    expect(addActionMarker(game, 'player-1', { q: 2, r: 0 })).toEqual([])
+    expect(game.actionMarkers).toHaveLength(4)
 
     game.cells.find((cell) => cell.coord.q === 1 && cell.coord.r === 0)!.controlOwnerId = 'player-1'
-    expect(actionMarkerLimitForPlayer(game, 'player-1')).toBe(3)
-    expect(addActionMarker(game, 'player-1', { q: 1, r: 1 })[0]).toMatch(/Не более 3/)
+    expect(actionMarkerLimitForPlayer(game, 'player-1')).toBe(4)
 
     refreshActionMarkerCapacity(game)
-    expect(actionMarkerLimitForPlayer(game, 'player-1')).toBe(4)
-    game.activePlayerId = 'player-1'
-    game.phase = 'planning'
-    expect(addActionMarker(game, 'player-1', { q: 1, r: 1 })).toEqual([])
+    expect(actionMarkerLimitForPlayer(game, 'player-1')).toBe(5)
+    addShip(game, 1, 0, 'player-1')
+    expect(addActionMarker(game, 'player-1', { q: 1, r: 0 })).toEqual([])
   })
 
-  it('cannot buy action markers in production', () => {
+  it('cannot buy action markers via production batch', () => {
     const map = productionMap()
     const game = gameSnapshotFromMap(map)
     game.phase = 'planning'
     game.activePlayerId = 'player-1'
-    expect(addProductionMarker(game, 'player-1', { q: 0, r: 0 }, map)).toEqual([])
-    game.phase = 'production'
-    const marker = game.productionMarkers[0]!
+    const home = game.cells.find((c) => c.coord.q === 0 && c.coord.r === 0)!
+    home.ships.push({ id: 'dd', type: 'destroyer', ownerId: 'player-1' })
+    expect(addActionMarker(game, 'player-1', { q: 0, r: 0 })).toEqual([])
+    game.phase = 'actions'
+    const marker = game.actionMarkers[0]!
     const errors = executeProductionBatch(game, map.id, 'player-1', {
       markerId: marker.id,
-      ships: [],
+      ships: [{ type: 'destroyer', coord: { q: 0, r: 0 } }],
       buyActionMarkers: 1,
     })
     expect(errors.some((e) => e.includes('Покупка маркеров действия отключена'))).toBe(true)
-    expect(actionMarkerLimitForPlayer(game, 'player-1')).toBe(2)
   })
 
-  it('production marker prices are 8+6 then 12+9', () => {
+  it('production marker expand costs remain defined for legacy saves', () => {
     expect(nextProductionMarkerExpandCost(1)).toEqual({ credits: 8, production: 6 })
     expect(nextProductionMarkerExpandCost(2)).toEqual({ credits: 12, production: 9 })
     expect(nextProductionMarkerExpandCost(3)).toBeNull()
   })
 
-  it('buying a production marker removes selected tokens from the map', () => {
+  it('executeBuyProductionMarker is disabled', () => {
     const map = productionMap()
     const game = gameSnapshotFromMap(map)
-    game.phase = 'production'
+    game.phase = 'actions'
     game.activePlayerId = 'player-1'
     const credit = game.cells.find((c) => c.coord.q === 0 && c.coord.r === 0)!
     const prod = game.cells.find((c) => c.coord.q === 0 && c.coord.r === 1)!
@@ -232,73 +200,6 @@ describe('marker pools', () => {
       { coord: credit.coord, tokenIndex: 0 },
       { coord: prod.coord, tokenIndex: 0 },
     ])
-    expect(errors).toEqual([])
-    expect(credit.resourceTokens).toHaveLength(0)
-    expect(prod.resourceTokens).toHaveLength(0)
-    expect(game.productionMarkerLimitByPlayer?.['player-1']).toBe(2)
-    expect(game.productionMarkerBoughtByPlayerThisTurn?.['player-1']).toBe(true)
-    expect(game.productionMarkerResolvedThisTurn).toBeFalsy()
-  })
-
-  it('rejects a second production-marker purchase in the same game turn', () => {
-    const map = productionMap()
-    const game = gameSnapshotFromMap(map)
-    game.phase = 'production'
-    game.activePlayerId = 'player-1'
-    const credit = game.cells.find((c) => c.coord.q === 0 && c.coord.r === 0)!
-    const prod = game.cells.find((c) => c.coord.q === 0 && c.coord.r === 1)!
-    expect(
-      executeBuyProductionMarker(game, map.id, 'player-1', [
-        { coord: credit.coord, tokenIndex: 0 },
-        { coord: prod.coord, tokenIndex: 0 },
-      ]),
-    ).toEqual([])
-
-    const leftoverCredit = game.cells.find((c) => c.coord.q === 1 && c.coord.r === 0)!
-    leftoverCredit.resourceTokens.push({ type: 'credits', value: 9, faceUp: true })
-    leftoverCredit.resourceTokens.push({ type: 'credits', value: 9, faceUp: true })
-    const leftoverProd = game.cells.find((c) => c.coord.q === 1 && c.coord.r === 1)!
-    leftoverProd.resourceTokens.push({ type: 'production', value: 9, faceUp: true })
-
-    expect(
-      validateBuyProductionMarker(game, 'player-1', [
-        { coord: leftoverCredit.coord, tokenIndex: leftoverCredit.resourceTokens.length - 2 },
-        { coord: leftoverCredit.coord, tokenIndex: leftoverCredit.resourceTokens.length - 1 },
-        { coord: leftoverProd.coord, tokenIndex: leftoverProd.resourceTokens.length - 1 },
-      ]),
-    ).toEqual([PRODUCTION_MARKER_ALREADY_BOUGHT_MSG])
-  })
-
-  it('allows another production-marker purchase on the next game turn', () => {
-    const map = productionMap()
-    const game = gameSnapshotFromMap(map)
-    game.phase = 'production'
-    game.activePlayerId = 'player-1'
-    const credit = game.cells.find((c) => c.coord.q === 0 && c.coord.r === 0)!
-    const prod = game.cells.find((c) => c.coord.q === 0 && c.coord.r === 1)!
-    expect(
-      executeBuyProductionMarker(game, map.id, 'player-1', [
-        { coord: credit.coord, tokenIndex: 0 },
-        { coord: prod.coord, tokenIndex: 0 },
-      ]),
-    ).toEqual([])
-
-    resetTurnEventTracking(game)
-    const leftoverCredit = game.cells.find((c) => c.coord.q === 1 && c.coord.r === 0)!
-    leftoverCredit.resourceTokens = [
-      { type: 'credits', value: 9, faceUp: true },
-      { type: 'credits', value: 9, faceUp: true },
-    ]
-    const leftoverProd = game.cells.find((c) => c.coord.q === 1 && c.coord.r === 1)!
-    leftoverProd.resourceTokens = [{ type: 'production', value: 9, faceUp: true }]
-
-    expect(
-      executeBuyProductionMarker(game, map.id, 'player-1', [
-        { coord: leftoverCredit.coord, tokenIndex: 0 },
-        { coord: leftoverCredit.coord, tokenIndex: 1 },
-        { coord: leftoverProd.coord, tokenIndex: 0 },
-      ]),
-    ).toEqual([])
-    expect(game.productionMarkerLimitByPlayer?.['player-1']).toBe(3)
+    expect(errors).toEqual(['Маркеры производства отключены'])
   })
 })

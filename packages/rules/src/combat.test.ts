@@ -59,7 +59,9 @@ import {
   setupPendingCombatDestruction,
   stopPendingCombat,
 } from './combat.js'
+import { executeDestroyerSacrifice } from './destroyer-sacrifice.js'
 import { applyGameActionOnSnapshot, executeMarkerMovement, resolveCombatPrep } from './movement.js'
+import { advanceGameSnapshot } from './turn.js'
 import {
   buildBombardmentPreview,
   canShipBombard,
@@ -122,10 +124,10 @@ function placeActionMarker(game: GameSnapshot, ownerId: string, coord: { q: numb
   game.activePlayerId = prevActive
 }
 
-/** d6 = floor(rng*6)+1; 0.4 → всегда 3 (детерминизм тестов вместо удалённого fair-fight). */
+/** Эсминец d4: floor(0.5×4)+1 = 3 (детерминизм тестов). */
 function withAllDiceThree<T>(fn: () => T): T {
   const original = Math.random
-  Math.random = () => 0.4
+  Math.random = () => 0.5
   try {
     return fn()
   } finally {
@@ -411,11 +413,11 @@ describe('combat sketch', () => {
     )
     expect(round.attackerTotal).toBe(sumCombatSideDiceTotal(round.shipRolls, 'attacker'))
     expect(formatCombatRoundDiceTotals(round)).toBe(
-      `Раунд 1 — сумма кубиков: атакующий ${round.attackerTotal}, защитник ${round.defenderTotal}; очки уничтожения ${computeRoundDamage(round)}`,
+      `Раунд 1 — сумма кубиков: атакующий ${round.attackerTotal}, защитник ${round.defenderTotal}; ничья — очки уничтожения 0`,
     )
   })
 
-  it('крейсер на клетке боя бросает d4 (2d4), не d6', () => {
+  it('крейсер на клетке боя бросает 2d6', () => {
     const preview = {
       coord: { q: 1, r: 0 },
       coordKey: '1,0',
@@ -445,10 +447,10 @@ describe('combat sketch', () => {
     }
     const round = rollCombatRound(preview, () => 0.99)
     const cr = round.shipRolls.find((r) => r.shipId === 'att-cr')
-    expect(cr?.combatRolls).toEqual([4, 4])
-    expect(cr?.total).toBe(8)
-    expect(round.attackerTotal).toBe(8)
-    expect(round.defenderTotal).toBe(6)
+    expect(cr?.combatRolls).toEqual([6, 6])
+    expect(cr?.total).toBe(12)
+    expect(round.attackerTotal).toBe(12)
+    expect(round.defenderTotal).toBe(4)
   })
 
   it('resolveCombatAtCell includes incoming attacker ships in dice totals', () => {
@@ -459,17 +461,13 @@ describe('combat sketch', () => {
     addShip(game, 1, 0, 'player-2', 'destroyer', 'def-dd')
     game.cells.find((c) => c.coord.q === 1 && c.coord.r === 0)!.controlOwnerId = 'player-2'
 
-    let seq = 0
-    const rng = () => {
-      const values = [0, 1 / 6, 2 / 6, 3 / 6]
-      return values[seq++ % values.length]
-    }
-
-    const withoutIncoming = resolveCombatAtCell(game, { q: 1, r: 0 }, 'player-1', [], {}, rng)
+    const withoutIncoming = resolveCombatAtCell(game, { q: 1, r: 0 }, 'player-1', [], {})
     expect(withoutIncoming.roundOne!.attackerTotal).toBe(0)
     expect(withoutIncoming.stub).toBe(false)
 
-    seq = 0
+    let seq = 0
+    const rng = () => [0.5, 0.01][seq++ % 2]!
+
     const withIncoming = resolveCombatAtCell(
       game,
       { q: 1, r: 0 },
@@ -478,7 +476,8 @@ describe('combat sketch', () => {
       {},
       rng,
     )
-    expect(withIncoming.roundOne!.attackerTotal).toBeGreaterThan(0)
+    expect(withIncoming.roundOne!.attackerTotal).toBe(3)
+    expect(withIncoming.roundOne!.defenderTotal).toBe(1)
     expect(withIncoming.log.find((e) => e.step === 'dice-roll')!.message).toBe(
       formatCombatRoundDiceTotals(withIncoming.roundOne!),
     )
@@ -662,7 +661,7 @@ describe('combat sketch', () => {
     addShip(game, 1, 0, 'player-2', 'destroyer', 'def-dd')
     game.cells.find((c) => c.coord.q === 1 && c.coord.r === 0)!.controlOwnerId = 'player-2'
 
-    const rolls = [1 / 6, 0] // 2 против 1: бюджет 1, skip эсминца повышает destroyCost до 4.
+    const rolls = [0.5, 0.3] // 3 против 2 на d4: бюджет 1, skip эсминца повышает destroyCost до 4.
     let rollIndex = 0
     const result = resolveCombatAtCell(
       game,
@@ -1160,7 +1159,7 @@ describe('combat sketch', () => {
       { shipsDestroyedInCombat: false },
     )
 
-    // Чередуем высокие/низкие броски — ничья рвётся, автопродолжение доходит до уничтожения/конца.
+    // Чередуем сильный и слабый бросок на d4 — раунд не застревает в ничьей.
     let roll = 0
     const originalRandom = Math.random
     Math.random = () => {
@@ -1175,6 +1174,7 @@ describe('combat sketch', () => {
         (continued.combatResult?.destroyedShipIds.length ?? 0) > 0
         || game.pendingCombat?.shipsDestroyedInCombat === true
         || game.pendingCombat?.phase === 'awaiting-destruction'
+        || game.pendingCombat?.phase === 'awaiting-continue'
         || game.pendingCombat == null
       expect(reachedOutcome).toBe(true)
     } finally {
@@ -1653,7 +1653,98 @@ describe('bombardment', () => {
     }
   })
 
-  it('winning combat on a neutral cell does not grant control', () => {
+  it('destroyer sacrifice on neutral claims control and destroys the ship', () => {
+    const map = createEmptyMap('neutral-dd-sacrifice', 'Neutral DD sacrifice')
+    const game = gameSnapshotFromMap(map)
+    game.phase = 'actions'
+    game.activePlayerId = 'player-1'
+    game.participatingPlayerIds = ['player-1']
+    addShip(game, 0, 0, 'player-1', 'destroyer', 'att-dd')
+    const targetCell = game.cells.find((c) => c.coord.q === 0 && c.coord.r === 0)!
+    placeMarker(game, 'player-1', { q: 0, r: 0 })
+    targetCell.controlOwnerId = null
+
+    const result = executeDestroyerSacrifice(game, map, 'player-1', { q: 0, r: 0 }, 'att-dd')
+    expect(result.errors).toEqual([])
+    expect(targetCell.controlOwnerId).toBe('player-1')
+    expect(targetCell.ships).toHaveLength(0)
+    expect(game.actionMarkers).toHaveLength(0)
+  })
+
+  it('destroyer winning combat on a neutral cell does not claim until sacrificed', () => {
+    const map = createEmptyMap('neutral-dd-combat', 'Neutral DD combat')
+    map.cells.push({ q: 1, r: 0 })
+    const game = gameSnapshotFromMap(map)
+    game.phase = 'actions'
+    game.activePlayerId = 'player-1'
+    game.participatingPlayerIds = ['player-1', 'player-2']
+    addShip(game, 0, 0, 'player-1', 'destroyer', 'att-dd-1')
+    addShip(game, 0, 0, 'player-1', 'destroyer', 'att-dd-2')
+    addShip(game, 1, 0, 'player-2', 'destroyer', 'def-dd')
+    const targetCell = game.cells.find((c) => c.coord.q === 1 && c.coord.r === 0)!
+    targetCell.controlOwnerId = null
+    placeMarker(game, 'player-1', { q: 0, r: 0 })
+
+    const originalRandom = Math.random
+    let roll = 0
+    Math.random = () => {
+      roll += 1
+      return roll % 3 === 0 ? 0.01 : 0.99
+    }
+    try {
+      const result = executeMarkerMovement(
+        game,
+        map,
+        'player-1',
+        { q: 0, r: 0 },
+        [
+          { shipId: 'att-dd-1', to: { q: 1, r: 0 } },
+          { shipId: 'att-dd-2', to: { q: 1, r: 0 } },
+        ],
+        {},
+      )
+      expect(result.errors).toEqual([])
+      expect(result.combatResult?.attackerWon).toBe(true)
+      expect(targetCell.controlOwnerId).toBeNull()
+      expect(targetCell.ships.some((s) => s.ownerId === 'player-1' && s.type === 'destroyer')).toBe(true)
+
+      game.actionMarkers = []
+      expect(advanceGameSnapshot(game, map.id)).toEqual([])
+      expect(targetCell.controlOwnerId).toBeNull()
+    } finally {
+      Math.random = originalRandom
+    }
+  })
+
+  it('destroyer combat win on neutral does not paint before ships land', () => {
+    const map = createEmptyMap('neutral-dd-result', 'Neutral DD result')
+    map.cells.push({ q: 1, r: 0 })
+    const game = gameSnapshotFromMap(map)
+    addShip(game, 1, 0, 'player-2', 'destroyer', 'def-dd')
+    const targetCell = game.cells.find((c) => c.coord.q === 1 && c.coord.r === 0)!
+    targetCell.controlOwnerId = null
+
+    applyCombatResultToSnapshot(
+      game,
+      {
+        coord: { q: 1, r: 0 },
+        winnerId: 'player-1',
+        attackerWon: true,
+        log: [],
+        destroyedShipIds: ['def-dd'],
+        stub: false,
+      },
+      'player-1',
+      'player-2',
+      {
+        incomingAttackerShips: [{ id: 'att-dd', type: 'destroyer', ownerId: 'player-1' }],
+      },
+    )
+
+    expect(targetCell.controlOwnerId).toBeNull()
+  })
+
+  it('battleship winning combat on a neutral cell does not grant control until end of turn', () => {
     const map = createEmptyMap('neutral-combat', 'Neutral combat')
     map.cells.push({ q: 1, r: 0 })
     const game = gameSnapshotFromMap(map)
@@ -1664,7 +1755,6 @@ describe('bombardment', () => {
     addShip(game, 0, 0, 'player-1', 'battleship', 'att-bb')
     addShip(game, 1, 0, 'player-2', 'destroyer', 'def-dd')
     const targetCell = game.cells.find((c) => c.coord.q === 1 && c.coord.r === 0)!
-    // Нейтральная клетка с чужими кораблями — бой возможен, захват только снабжением.
     targetCell.controlOwnerId = null
     placeMarker(game, 'player-1', { q: 0, r: 0 })
 

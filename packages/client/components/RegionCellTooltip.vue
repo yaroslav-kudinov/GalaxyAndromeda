@@ -81,14 +81,8 @@ const regionOwnerName = computed(() => {
         <li v-if="regionInfo.faceDownTokenCount > 0">
           Фишек рубашкой вверх: {{ regionInfo.faceDownTokenCount }}
         </li>
-        <li v-if="regionInfo.productionMarkerCount > 0">
-          Маркеров производства: {{ regionInfo.productionMarkerCount }}
-        </li>
         <li v-if="regionInfo.powerCenterCount > 0">
           Центров власти: {{ regionInfo.powerCenterCount }}
-        </li>
-        <li v-if="!regionInfo.qualifiesForProduction" class="region-note">
-          Регион меньше трёх клеток — маркер производства недоступен
         </li>
       </ul>
     </section>

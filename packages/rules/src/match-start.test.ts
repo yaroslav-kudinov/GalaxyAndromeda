@@ -31,6 +31,14 @@ describe('beginMatchForParticipants', () => {
     expect(game.cells.some((cell) => cell.ships.some((ship) => ship.ownerId === 'player-3'))).toBe(false)
     expect(game.cells.some((cell) => cell.controlOwnerId === 'player-3')).toBe(false)
     expect(['player-1', 'player-2']).toContain(game.activePlayerId)
+    expect(game.resourceRechargeTurnsRemaining).toBeGreaterThanOrEqual(1)
+    expect(game.resourceRechargeTurnsRemaining).toBeLessThanOrEqual(3)
+  })
+
+  it('does not set recharge schedule before match start', () => {
+    const map = twoStartMap()
+    const game = gameSnapshotFromMap(map)
+    expect(game.resourceRechargeTurnsRemaining).toBeUndefined()
   })
 
   it('isPristineMatchSnapshot is false after a marker is placed', () => {

@@ -16,21 +16,15 @@ export interface BoardShipView extends StartingShipDef {
 export interface BoardCellView extends Omit<MapCellDefinition, 'startingShips'> {
   startingShips?: BoardShipView[]
   actionMarker?: boolean
-  productionMarker?: boolean
 }
 
-export function boardMarkerKeys(cells: BoardCellView[]): {
-  action: string[]
-  production: string[]
-} {
+export function boardMarkerKeys(cells: BoardCellView[]): string[] {
   const action: string[] = []
-  const production: string[] = []
   for (const cell of cells) {
     const key = `${cell.q},${cell.r}`
     if (cell.actionMarker) action.push(key)
-    if (cell.productionMarker) production.push(key)
   }
-  return { action, production }
+  return action
 }
 
 export function playerSlotFromId(players: PlayerState[], ownerId: string | null): number | null {
@@ -56,7 +50,6 @@ export function runtimeCellToBoardCell(
       player: playerSlotFromId(players, ship.ownerId) ?? 1,
     })),
     actionMarker: !!cell.actionMarkerId,
-    productionMarker: !!cell.productionMarkerId,
   }
 }
 

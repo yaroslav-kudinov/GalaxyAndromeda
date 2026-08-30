@@ -13,7 +13,7 @@ const PHASE_LABELS: Record<Phase, string> = {
   events: 'События',
   planning: 'Планирование',
   actions: 'Действия',
-  production: 'Производство',
+  production: 'Действия',
 }
 
 const SHOW_MS = 4200

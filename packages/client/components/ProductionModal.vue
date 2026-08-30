@@ -142,12 +142,9 @@ const resourceBalance = computed(() => {
   }
 })
 
-const regionPayHint = computed(() => {
-  if (getTurnModifiers(props.snapshot).oneProductionMarkerPerRegion) {
-    return 'Событие хода: не больше одного маркера производства на регион. Оплата — фишками из региона этого маркера.'
-  }
-  return 'Оплата — фишками лицом вверх из региона этого маркера (в регионе может быть несколько маркеров).'
-})
+const regionPayHint = computed(
+  () => 'Оплата — фишками лицом вверх из региона маркера действия.',
+)
 
 const rechargeBlockedReason = computed(() => {
   if (!canRechargeResources.value) return 'Нет перевёрнутых фишек в регионе'
@@ -156,7 +153,7 @@ const rechargeBlockedReason = computed(() => {
 })
 
 const productionMarkerBuyHint = computed(() => {
-  if (isExtraMarkerBuyBlocked(props.snapshot)) return 'Событие запрещает покупку'
+  if (isExtraMarkerBuyBlocked(props.snapshot)) return 'Маркеры производства отключены'
   if (hasBoughtProductionMarkerThisTurn(props.snapshot, props.playerId)) {
     return 'За этот ход уже куплен один маркер производства'
   }

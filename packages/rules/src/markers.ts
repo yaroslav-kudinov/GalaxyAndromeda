@@ -48,10 +48,8 @@ export const PRODUCTION_MARKER_ALREADY_BOUGHT_MSG =
 export const PRODUCTION_MARKER_REGION_TAKEN_MSG =
   '«Нормирование производства»: в этом регионе уже стоит ваш маркер производства'
 
-export function isOneProductionMarkerPerRegionActive(game: GameSnapshot): boolean {
-  const ev = game.turnEvent
-  if (!ev || ev.turnNumber !== game.turnNumber || !ev.resolvedAt) return false
-  return ev.eventId === 'mandatory-overtime'
+export function isOneProductionMarkerPerRegionActive(_game: GameSnapshot): boolean {
+  return false
 }
 
 export function productionMarkerAdvanceBlockMessage(
@@ -132,10 +130,7 @@ export function markProductionMarkerBoughtThisTurn(game: GameSnapshot, playerId:
 }
 
 export function canExecuteProductionMarkerThisTurn(game: GameSnapshot, ownerId: string): boolean {
-  if (game.phase !== 'production') return false
-  if (game.activePlayerId !== ownerId) return false
-  if (game.productionMarkerResolvedThisTurn) return false
-  return true
+  return canExecuteActionMarkerThisTurn(game, ownerId)
 }
 
 export function canRemoveProductionMarkerThisTurn(game: GameSnapshot, ownerId: string): boolean {
@@ -439,12 +434,9 @@ export function hasUnplacedProductionMarkerCapacity(
 
 export function shouldConfirmPlanningPhaseAdvance(
   game: GameSnapshot,
-  map: MapDefinition,
+  _map: MapDefinition,
   ownerId: string,
 ): boolean {
   if (game.phase !== 'planning' || game.activePlayerId !== ownerId) return false
-  return (
-    hasUnplacedActionMarkerCapacity(game, ownerId)
-    || hasUnplacedProductionMarkerCapacity(game, map, ownerId)
-  )
+  return hasUnplacedActionMarkerCapacity(game, ownerId)
 }

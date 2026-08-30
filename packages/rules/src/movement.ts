@@ -10,12 +10,10 @@ import {
   removeActionMarker,
   removeProductionMarker,
   toggleMarkerAtCell,
-  PRODUCTION_MARKER_ALREADY_RESOLVED_MSG,
-  PRODUCTION_MARKER_MUST_RESOLVE_BEFORE_ADVANCE_MSG,
-  mustResolveProductionMarkerBeforeAdvance,
   type MarkerKind,
 } from './markers.js'
 import { transferControlIfEnemyOwned } from './claim.js'
+import { executeDestroyerSacrifice } from './destroyer-sacrifice.js'
 import type { GameSnapshot, RuntimeCellState } from './save-file.js'
 import { gameStateFromSnapshot } from './save-file.js'
 import {
@@ -226,7 +224,7 @@ export function hexPathDistance(
   return null
 }
 
-/** @deprecated Мирный захват с хода убран (ADR 008); всегда false. */
+/** @deprecated Жертва эсминца — отдельное действие маркера, не движение. */
 export function canDeclareControlForMove(
   _game: GameSnapshot,
   _ship: ShipUnit,
@@ -280,7 +278,10 @@ export function validateDestinationForMove(
     return errors
   }
 
-  void declareControl
+  if (declareControl) {
+    errors.push('Захват эсминцем — отдельное действие маркера, не перемещение')
+    return errors
+  }
 
   const incoming = countIncomingMoves(priorMoves, toKey, playerId, game)
   const playerCount = countPlayerShipsAt(dest, playerId) + incoming.player
@@ -407,6 +408,14 @@ export interface MarkerActionExecution {
   combatResult?: CombatResolutionResult
 }
 
+function applyControlAfterShipLanding(
+  game: GameSnapshot,
+  destCell: RuntimeCellState,
+  ship: ShipUnit,
+): void {
+  transferControlIfEnemyOwned(game, destCell, ship.ownerId)
+}
+
 function finishPendingMovementPlans(
   game: GameSnapshot,
   playerId: string,
@@ -434,7 +443,7 @@ function finishPendingMovementPlans(
     const [ship] = sourceCell.ships.splice(shipIdx, 1)
 
     destCell.ships.push(ship)
-    transferControlIfEnemyOwned(game, destCell, ship.ownerId)
+    applyControlAfterShipLanding(game, destCell, ship)
     summaries.push(`${SHIP_LABELS[ship.type]} → (${move.to.q},${move.to.r})`)
   }
 
@@ -575,6 +584,7 @@ export function executeMarkerMovement(
         combatResult,
         playerId,
         preview.defenderId,
+        { incomingAttackerShips: incomingShips },
       )
 
       const followUp = beginOrAwaitCombatContinuation(game, {
@@ -626,7 +636,7 @@ export function executeMarkerMovement(
     const [ship] = sourceCell.ships.splice(shipIdx, 1)
 
     destCell.ships.push(ship)
-    transferControlIfEnemyOwned(game, destCell, ship.ownerId)
+    applyControlAfterShipLanding(game, destCell, ship)
     summaries.push(`${SHIP_LABELS[ship.type]} → (${move.to.q},${move.to.r})`)
   }
 
@@ -755,23 +765,7 @@ export function getLegalActionsForSnapshot(
   }
 
   if (game.phase === 'production' && game.activePlayerId === playerId) {
-    const ownMarkers = game.productionMarkers.filter((m) => m.ownerId === playerId)
-    if (mustResolveProductionMarkerBeforeAdvance(game, playerId)) {
-      return actions
-        .filter((a) => a.id !== 'advance-phase')
-        .concat({
-          id: 'production-marker-unresolved',
-          type: 'info',
-          description: PRODUCTION_MARKER_MUST_RESOLVE_BEFORE_ADVANCE_MSG,
-        })
-    }
-    if (ownMarkers.length > 0 && game.productionMarkerResolvedThisTurn) {
-      actions.push({
-        id: 'production-marker-used',
-        type: 'info',
-        description: PRODUCTION_MARKER_ALREADY_RESOLVED_MSG,
-      })
-    }
+    // legacy phase — игнорируем
   }
 
   return actions
@@ -991,6 +985,13 @@ export function applyGameActionOnSnapshot(
     if (!from || !Array.isArray(moves)) return { errors: ['Некорректные параметры действия'] }
     const result = executeMarkerMovement(game, map, playerId, from, moves, combatOptions)
     return { errors: result.errors, combatResult: result.combatResult }
+  }
+
+  if (actionId === 'execute-destroyer-sacrifice') {
+    const from = params?.from as HexCoord | undefined
+    const shipId = params?.shipId as string | undefined
+    if (!from || !shipId) return { errors: ['Некорректные параметры действия'] }
+    return executeDestroyerSacrifice(game, map, playerId, from, shipId)
   }
 
   if (actionId === 'execute-marker-bombardment') {
