@@ -4,9 +4,9 @@ Tooling for agent development, MCP integration, and smoke tests.
 
 ## CI/CD и деплой
 
-Деплой production-сборки — **только по явной команде** (человек или отдельный deploy-workflow). Push в GitHub сам по себе не выкладывает приложение на Amvera/Railway.
+**Amvera синхронизирована с `main` на GitHub.** Для выкладки на хостинг агенту достаточно `git push origin main`. **Не** пушить в remote `amvera` (`git push amvera …`) — это лишний и устаревший шаг.
 
-См. [docs/cicd-deploy-policy.md](../docs/cicd-deploy-policy.md) и [docs/deploy-amvera.md](../docs/deploy-amvera.md).
+См. [docs/cicd-deploy-policy.md](../docs/cicd-deploy-policy.md). Конфиг контейнера: [docs/deploy-amvera.md](../docs/deploy-amvera.md).
 
 ## MCP server
 
