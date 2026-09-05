@@ -328,6 +328,8 @@ export interface GameSnapshot {
   resourceRechargeTurnsRemaining?: 1 | 2 | 3
   /** @deprecated миграция; см. resourceRechargeTurnsRemaining */
   resourceRechargeInterval?: 1 | 2 | 3
+  /** Прогресс обучающего сценария */
+  scenarioProgress?: import('./scenario.js').ScenarioProgress
 }
 
 export interface GalaxySaveFile {

@@ -13,7 +13,8 @@ import {
   type MapDefinition,
 } from '@galaxy/rules'
 import type { LobbyPlayerSlot } from '~/components/LobbyPlayerList.vue'
-import { checkServerHealth, createRoom, createRoomFromSave, fetchLobbies, fetchRoomBootstrap, GameApiError, joinRoom, type LobbyListEntry } from '~/composables/useGameApi'
+import { checkServerHealth, createRoom, createRoomFromSave, createRoomFromCatalog, createTutorialRoom, fetchLobbies, fetchRoomBootstrap, GameApiError, joinRoom, type LobbyListEntry } from '~/composables/useGameApi'
+import { useCatalogMaps } from '~/composables/useCatalogMaps'
 import { gameSaveStorageKey, saveGameSession } from '~/composables/useGameSession'
 import { loadPlayerClaim, savePlayerClaim } from '~/composables/usePlayerClaim'
 import { bootstrapToLobbySlots, defaultSlotForRoom, joinAsLabel, roomHasFreeSlot } from '~/utils/lobby-slot'
@@ -31,12 +32,21 @@ definePageMeta({
 
 const MAPS_STORAGE_KEY = 'galaxy-maps'
 const DRAFT_STORAGE_KEY = 'galaxy-editor-draft'
+const TERMS_KEY = 'galaxy-terms-accepted'
+
+const { officialMaps, refreshOfficialMaps, loadOfficialMap } = useCatalogMaps()
+const termsAccepted = ref(false)
+const termsDraft = ref(false)
+const tutorialBusy = ref(false)
+const tutorialSetupOpen = ref(false)
+const menuError = ref<string | null>(null)
 
 interface MapOption {
   id: string
   name: string
   map: MapDefinition
   fullSave?: GalaxySaveFile
+  official?: boolean
 }
 
 const importError = ref<string | null>(null)
@@ -65,7 +75,7 @@ const joinPreviewLoading = ref(false)
 const joinPreviewError = ref<string | null>(null)
 const selectedJoinSlot = ref<string | null>(null)
 
-const selectedMapId = ref('default')
+const selectedMapId = ref('duel')
 const serverOnline = ref<boolean | null>(null)
 const busy = ref(false)
 const error = ref<string | null>(null)
@@ -76,22 +86,17 @@ const mapOptions = ref<MapOption[]>([])
 
 let joinPreviewTimer: ReturnType<typeof setTimeout> | null = null
 
-async function loadBundledDefaultMap() {
-  try {
-    const res = await fetch('/maps/default.json')
-    if (res.ok) {
-      defaultMap.value = normalizeMapDefinition((await res.json()) as MapDefinition)
-    }
-  } catch {
-    /* keep createEmptyMap fallback */
-  }
-}
+async function refreshMapList() {
+  await refreshOfficialMaps()
+  const options: MapOption[] = []
+  const seen = new Set<string>()
 
-function refreshMapList() {
-  const options: MapOption[] = [
-    { id: defaultMap.value.id, name: defaultMap.value.name, map: defaultMap.value },
-  ]
-  const seen = new Set<string>([defaultMap.value.id])
+  for (const entry of officialMaps.value) {
+    const map = await loadOfficialMap(entry.id)
+    if (!map) continue
+    seen.add(entry.id)
+    options.push({ id: entry.id, name: entry.name, map, official: true })
+  }
 
   if (import.meta.client) {
     try {
@@ -108,37 +113,6 @@ function refreshMapList() {
           fullSave: save,
         })
       }
-
-      const list = JSON.parse(localStorage.getItem(MAPS_STORAGE_KEY) ?? '[]') as unknown[]
-      for (const entry of list) {
-        try {
-          const save = parseGalaxySave(entry)
-          if (seen.has(save.map.id)) continue
-          seen.add(save.map.id)
-          options.push({
-            id: save.map.id,
-            name: save.map.name || save.map.id,
-            map: normalizeMapDefinition(save.map),
-          })
-        } catch {
-          /* skip */
-        }
-      }
-
-      const draftRaw = localStorage.getItem(DRAFT_STORAGE_KEY)
-      if (draftRaw) {
-        const draft = JSON.parse(draftRaw) as { save?: unknown }
-        if (draft.save) {
-          const save = parseGalaxySave(draft.save)
-          if (!seen.has(save.map.id)) {
-            options.push({
-              id: save.map.id,
-              name: `${save.map.name || save.map.id} (черновик)`,
-              map: normalizeMapDefinition(save.map),
-            })
-          }
-        }
-      }
     } catch {
       /* ignore */
     }
@@ -146,7 +120,7 @@ function refreshMapList() {
 
   mapOptions.value = options
   if (!options.some((o) => o.id === selectedMapId.value)) {
-    selectedMapId.value = options[0]?.id ?? 'default'
+    selectedMapId.value = options.find((o) => o.id === 'duel')?.id ?? options[0]?.id ?? 'duel'
   }
 }
 
@@ -241,9 +215,17 @@ function syncCreatorDefaultSlot() {
 
 function enterLobby() {
   nicknameError.value = null
+  if (!termsAccepted.value && !termsDraft.value) {
+    nicknameError.value = 'Примите условия использования'
+    return
+  }
   if (!confirmNickname(nicknameDraft.value)) {
     nicknameError.value = 'Введите никнейм (1–32 символа)'
     return
+  }
+  if (import.meta.client && termsDraft.value) {
+    localStorage.setItem(TERMS_KEY, '1')
+    termsAccepted.value = true
   }
   lobbyReady.value = true
 }
@@ -338,7 +320,6 @@ async function startGame() {
           return
         }
         const { playerId } = await joinRoom(roomId, name, preferredPlayerId)
-        localStorage.setItem(gameSaveStorageKey(roomId), serializeGalaxySave(save))
         saveGameSession({ roomId, playerId, playerName: name, code })
         savePlayerClaim({ roomId, playerId, playerName: name })
         await router.push(`/game/${roomId}`)
@@ -370,12 +351,14 @@ async function startGame() {
 
     if (serverOnline.value) {
       const mapMax = resolveMapPlayerCount(map)
-      const { roomId, code } = await createRoom(map, Math.min(MAX_LOBBY_PLAYERS, mapMax))
+      const create = option?.official
+        ? await createRoomFromCatalog(map.id, Math.min(MAX_LOBBY_PLAYERS, mapMax))
+        : await createRoom(map, Math.min(MAX_LOBBY_PLAYERS, mapMax))
+      const { roomId, code } = create
       const { playerId } = await joinRoom(roomId, name, preferredPlayerId)
       const save = galaxySaveFromMap(map)
       save.game = gameSnapshotFromMap(map)
       ensurePlayerSlots(save.game, resolveMapPlayerCount(map))
-      localStorage.setItem(gameSaveStorageKey(roomId), serializeGalaxySave(save))
       saveGameSession({ roomId, playerId, playerName: name, code })
       savePlayerClaim({ roomId, playerId, playerName: name })
       await router.push(`/game/${roomId}`)
@@ -447,6 +430,26 @@ const roomListLoading = ref(false)
 const roomListError = ref<string | null>(null)
 const enteringListedRoomId = ref<string | null>(null)
 let roomListTimer: ReturnType<typeof setInterval> | null = null
+let healthTimer: ReturnType<typeof setInterval> | null = null
+
+async function refreshServerHealth() {
+  serverOnline.value = await checkServerHealth()
+}
+
+function stopHealthPoll() {
+  if (healthTimer) {
+    clearInterval(healthTimer)
+    healthTimer = null
+  }
+}
+
+function startHealthPoll() {
+  stopHealthPoll()
+  void refreshServerHealth()
+  healthTimer = setInterval(() => {
+    void refreshServerHealth()
+  }, 5000)
+}
 
 function slotsForListedRoom(lobby: LobbyListEntry): LobbyPlayerSlot[] {
   const claim = loadPlayerClaim(lobby.roomId)
@@ -521,11 +524,93 @@ watch(
   },
 )
 
+async function onTutorialClick() {
+  menuError.value = null
+  await refreshServerHealth()
+  if (!serverOnline.value) {
+    menuError.value = 'Сервер недоступен. Запустите pnpm dev и подождите несколько секунд.'
+    return
+  }
+  if (!termsAccepted.value && !termsDraft.value) {
+    tutorialSetupOpen.value = true
+    if (hasNickname.value) nicknameDraft.value = nickname.value
+    return
+  }
+  const name = nickname.value.trim() || nicknameDraft.value.trim()
+  if (!name) {
+    tutorialSetupOpen.value = true
+    return
+  }
+  await startTutorial()
+}
+
+async function confirmTutorialSetup() {
+  menuError.value = null
+  if (!termsDraft.value) {
+    menuError.value = 'Примите условия использования'
+    return
+  }
+  if (!confirmNickname(nicknameDraft.value)) {
+    menuError.value = 'Введите никнейм (1–32 символа)'
+    return
+  }
+  if (import.meta.client) {
+    localStorage.setItem(TERMS_KEY, '1')
+    termsAccepted.value = true
+  }
+  tutorialSetupOpen.value = false
+  await startTutorial()
+}
+
+async function startTutorial() {
+  if (!serverOnline.value) {
+    await refreshServerHealth()
+  }
+  if (!serverOnline.value) {
+    menuError.value = 'Обучение доступно только при подключении к серверу'
+    error.value = menuError.value
+    return
+  }
+  if (!termsAccepted.value && !termsDraft.value) {
+    menuError.value = 'Примите условия использования'
+    error.value = menuError.value
+    return
+  }
+  const name = nickname.value.trim() || nicknameDraft.value.trim()
+  if (!name) {
+    menuError.value = 'Введите никнейм'
+    error.value = menuError.value
+    return
+  }
+  if (!hasNickname.value) confirmNickname(name)
+
+  tutorialBusy.value = true
+  menuError.value = null
+  error.value = null
+  try {
+    const { roomId, code, playerId } = await createTutorialRoom(name)
+    if (!playerId) throw new Error('Не удалось создать обучение')
+    saveGameSession({ roomId, playerId, playerName: name, code })
+    savePlayerClaim({ roomId, playerId, playerName: name })
+    if (import.meta.client) localStorage.setItem(TERMS_KEY, '1')
+    await router.push(`/game/${roomId}`)
+  } catch (e) {
+    const message = e instanceof Error ? e.message : 'Не удалось начать обучение'
+    menuError.value = message
+    error.value = message
+  } finally {
+    tutorialBusy.value = false
+  }
+}
+
 onMounted(async () => {
-  await loadBundledDefaultMap()
-  refreshMapList()
+  if (import.meta.client) {
+    termsAccepted.value = localStorage.getItem(TERMS_KEY) === '1'
+    termsDraft.value = termsAccepted.value
+  }
+  await refreshMapList()
   syncCreatorDefaultSlot()
-  serverOnline.value = await checkServerHealth()
+  startHealthPoll()
   if (hasNickname.value) {
     nicknameDraft.value = nickname.value
     lobbyReady.value = true
@@ -535,6 +620,7 @@ onMounted(async () => {
 onUnmounted(() => {
   if (joinPreviewTimer) clearTimeout(joinPreviewTimer)
   stopRoomListPoll()
+  stopHealthPoll()
 })
 </script>
 
@@ -560,9 +646,57 @@ onUnmounted(() => {
           <button type="button" class="landing-link landing-link--play" @click="openPlay">
             Играть
           </button>
+          <button
+            type="button"
+            class="landing-link"
+            :disabled="tutorialBusy"
+            @click="onTutorialClick"
+          >
+            {{ tutorialBusy ? 'Запуск…' : 'Обучение' }}
+          </button>
+          <section v-if="tutorialSetupOpen" class="card tutorial-gate">
+            <p class="gate-lead">Для обучения нужны никнейм и согласие с условиями.</p>
+            <label class="field">
+              Никнейм
+              <input
+                v-model="nicknameDraft"
+                type="text"
+                maxlength="32"
+                placeholder="Например, Командор"
+                @keydown.enter.prevent="confirmTutorialSetup"
+              />
+            </label>
+            <label class="field terms-field">
+              <input v-model="termsDraft" type="checkbox" />
+              Я принимаю
+              <NuxtLink to="/legal/terms" target="_blank">условия использования</NuxtLink>
+              и
+              <NuxtLink to="/legal/privacy" target="_blank">политику конфиденциальности</NuxtLink>
+            </label>
+            <div class="tutorial-gate-actions">
+              <button type="button" class="primary" :disabled="tutorialBusy" @click="confirmTutorialSetup">
+                Начать обучение
+              </button>
+              <button type="button" class="secondary" @click="tutorialSetupOpen = false">
+                Отмена
+              </button>
+            </div>
+          </section>
+          <p v-if="menuError" class="err landing-menu-err">{{ menuError }}</p>
           <NuxtLink class="landing-link" to="/editor">Редактор карт</NuxtLink>
+          <NuxtLink class="landing-link" to="/faq">Вопросы и ответы</NuxtLink>
           <NuxtLink class="landing-link" to="/patch-notes">Патчноуты</NuxtLink>
         </div>
+
+        <footer class="landing-footer">
+          <p>© 2026 Galaxy Andromeda. Все права защищены.</p>
+          <p>
+            <NuxtLink to="/legal/terms">Условия использования</NuxtLink>
+            ·
+            <NuxtLink to="/legal/privacy">Конфиденциальность</NuxtLink>
+          </p>
+          <p class="landing-support">Поддержка: galaxy-andromeda@example.com</p>
+        </footer>
 
         <p class="landing-meta">
           <span v-if="hasNickname" class="landing-you">Вы: <strong>{{ nickname }}</strong></span>
@@ -595,6 +729,14 @@ onUnmounted(() => {
           autofocus
           @keydown.enter.prevent="enterLobby"
         />
+      </label>
+
+      <label class="field terms-field">
+        <input v-model="termsDraft" type="checkbox" />
+        Я принимаю
+        <NuxtLink to="/legal/terms" target="_blank">условия использования</NuxtLink>
+        и
+        <NuxtLink to="/legal/privacy" target="_blank">политику конфиденциальности</NuxtLink>
       </label>
 
       <p v-if="nicknameError" class="err">{{ nicknameError }}</p>
@@ -988,9 +1130,32 @@ onUnmounted(() => {
   backdrop-filter: blur(10px);
 }
 
-.landing-link:hover {
+.landing-link:hover:not(:disabled) {
   border-color: #93c5fd;
   background: #1e293bf2;
+}
+
+.landing-link:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.landing-menu-err {
+  margin: 0;
+  text-align: center;
+}
+
+.tutorial-gate {
+  margin-top: 0.25rem;
+  padding: 1rem 1.1rem;
+  text-align: left;
+}
+
+.tutorial-gate-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+  margin-top: 0.75rem;
 }
 
 .landing-link--play {

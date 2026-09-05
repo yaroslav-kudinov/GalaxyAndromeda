@@ -39,9 +39,14 @@ import {
   serializeGalaxySave,
   validateMapDefinition,
 } from '@galaxy/rules'
+import { submitMapForModeration } from '~/composables/useGameApi'
+import { usePlayerProfile } from '~/composables/usePlayerProfile'
 import { loadStoredOrientation, storeOrientation, type HexOrientation } from '~/utils/hex-layout'
 
 definePageMeta({ layout: 'immersive' })
+
+const { nickname } = usePlayerProfile()
+const moderationMessage = ref<string | null>(null)
 
 const SYMMETRY_STORAGE_KEY = 'galaxy-editor-symmetry'
 
@@ -402,6 +407,27 @@ function exportJson() {
   URL.revokeObjectURL(url)
 }
 
+async function submitForModeration() {
+  moderationMessage.value = null
+  const name = nickname.value.trim()
+  if (!name) {
+    moderationMessage.value = 'Укажите никнейм на главной странице'
+    return
+  }
+  const errors = validateMapDefinition(normalizeMapDefinition(map.value))
+  if (errors.length) {
+    moderationMessage.value = errors[0] ?? 'Карта не прошла проверку'
+    return
+  }
+  try {
+    const save = galaxySaveFromMap(normalizeMapDefinition(map.value))
+    await submitMapForModeration(name, save)
+    moderationMessage.value = 'Заявка отправлена на модерацию'
+  } catch (e) {
+    moderationMessage.value = e instanceof Error ? e.message : 'Не удалось отправить'
+  }
+}
+
 function importJson(event: Event) {
   const input = event.target as HTMLInputElement
   const file = input.files?.[0]
@@ -680,11 +706,13 @@ useMapEditorHotkeys({
             <button type="button" class="danger" @click="clearMap">Очистить</button>
             <button type="button" @click="saveLocal">Сохранить</button>
             <button type="button" @click="exportJson">Экспорт</button>
+            <button type="button" @click="submitForModeration">На модерацию</button>
             <label class="file-btn">
               Импорт
               <input type="file" accept="application/json,.json,.galaxy.json" hidden @change="importJson" />
             </label>
           </div>
+          <p v-if="moderationMessage" class="hint">{{ moderationMessage }}</p>
           <div v-if="savedMaps.length" class="load-row">
             <select v-model="loadMapId">
               <option value="" disabled>Загрузить из браузера…</option>

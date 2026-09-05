@@ -41,8 +41,8 @@ import {
   formatResourceRechargeBannerText,
   getCombatRetreatDestinations,
 } from '@galaxy/rules'
-import { fetchObservation, fetchRoomBootstrap, GameApiError, joinRoom, rejoinRoom, startRoom, closeRoom, submitGameAction, updateCombatPrepAction } from '~/composables/useGameApi'
-import { gameSaveStorageKey, loadGameSessionForRoom, saveGameSession } from '~/composables/useGameSession'
+import { advanceScenarioStep, fetchObservation, fetchRoomBootstrap, GameApiError, joinRoom, rejoinRoom, startRoom, closeRoom, submitGameAction, updateCombatPrepAction } from '~/composables/useGameApi'
+import { loadGameSessionForRoom, saveGameSession, persistLocalGalaxySave, clearLocalGalaxySave, loadLocalGalaxySaveRaw, pruneOnlineGalaxySaveCache } from '~/composables/useGameSession'
 import { loadPlayerClaim, savePlayerClaim } from '~/composables/usePlayerClaim'
 import { bootstrapToLobbySlots, defaultSlotForRoom, joinAsLabel, roomHasFreeSlot } from '~/utils/lobby-slot'
 import { useGamePresence } from '~/composables/useGamePresence'
@@ -118,6 +118,7 @@ const legalActions = ref<LegalAction[]>([])
 const serverStatus = ref<'idle' | 'loading' | 'online' | 'offline'>('idle')
 const loadError = ref<string | null>(null)
 const participationHint = ref<string | null>(null)
+const tutorialCoach = ref<{ title: string; body: string; manual?: boolean } | null>(null)
 
 const observationSync = useObservationSync({
   enabled: () =>
@@ -996,6 +997,17 @@ const showActionsControls = computed(
   () => isMyTurn.value && (currentPhase.value === 'actions' || currentPhase.value === 'production'),
 )
 
+async function onScenarioCoachNext() {
+  if (!roomId.value || !playerId.value) return
+  try {
+    const obs = await advanceScenarioStep(roomId.value, playerId.value)
+    applyObservation(obs, undefined, 'action')
+    persistLocal()
+  } catch (e) {
+    loadError.value = e instanceof Error ? e.message : String(e)
+  }
+}
+
 const advancePhaseLabel = computed(() => {
   if (!saveFile.value?.game) return 'Далее'
   return phaseAdvanceActionLabelForSnapshot(saveFile.value.game, saveFile.value.map.id)
@@ -1012,6 +1024,16 @@ function applyObservation(
   if (revision != null) appliedObservationRevision.value = revision
 
   legalActions.value = obs.legalActions ?? []
+  const tutorial = (obs as { tutorial?: { scenarioStep?: { title: string; body: string; id: string } } }).tutorial
+  if (tutorial?.scenarioStep) {
+    tutorialCoach.value = {
+      title: tutorial.scenarioStep.title,
+      body: tutorial.scenarioStep.body,
+      manual: true,
+    }
+  } else if (tutorial) {
+    tutorialCoach.value = null
+  }
   if (mechExtra.roomStatus === 'lobby' || mechExtra.roomStatus === 'playing') {
     roomMatchStatus.value = mechExtra.roomStatus
   }
@@ -1915,9 +1937,9 @@ function onMapPickKeydown(e: KeyboardEvent) {
 }
 
 function loadFromLocalRoom() {
-  if (!import.meta.client) return false
+  if (!import.meta.client || !roomId.value.startsWith('local-')) return false
   try {
-    const raw = localStorage.getItem(gameSaveStorageKey(roomId.value))
+    const raw = loadLocalGalaxySaveRaw(roomId.value)
     if (!raw) return false
     saveFile.value = parseGalaxySave(JSON.parse(raw))
     if (!saveFile.value.game) {
@@ -1970,8 +1992,8 @@ watch(
 )
 
 function persistLocal() {
-  if (!import.meta.client || !saveFile.value) return
-  localStorage.setItem(gameSaveStorageKey(roomId.value), serializeGalaxySave(saveFile.value))
+  if (!saveFile.value) return
+  persistLocalGalaxySave(roomId.value, saveFile.value)
 }
 
 async function ensureJoined(): Promise<boolean> {
@@ -2288,10 +2310,11 @@ async function tryLoadFromServer() {
       selectedKey.value = hexKey(bootstrap.map.cells[0]?.q ?? 0, bootstrap.map.cells[0]?.r ?? 0)
     }
     serverStatus.value = 'online'
+    clearLocalGalaxySave(roomId.value)
+    pruneOnlineGalaxySaveCache(roomId.value)
     if (bootstrap.status !== 'lobby') {
       repairLobbyParticipation(bootstrap.joinedPlayerIds)
     }
-    persistLocal()
   } catch (e) {
     if (isRoomNotFoundError(e)) {
       redirectRoomClosed()
@@ -2545,7 +2568,9 @@ onMounted(async () => {
       syncHudChromeHeight()
     })
   }
-  if (!loadFromLocalRoom()) {
+  if (roomId.value.startsWith('local-')) {
+    if (!loadFromLocalRoom()) loadFallbackMap()
+  } else {
     loadFallbackMap()
   }
   refreshLocalLegalActions()
@@ -3001,6 +3026,13 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
           >
             Сдаться
           </button>
+          <ScenarioCoachPanel
+            v-if="tutorialCoach"
+            :title="tutorialCoach.title"
+            :body="tutorialCoach.body"
+            :manual="tutorialCoach.manual"
+            @next="onScenarioCoachNext"
+          />
           <PhasePanel
             v-if="snapshot"
             variant="hero"

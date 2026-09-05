@@ -2,3 +2,4 @@
 # Документация: https://docs.amvera.ru/applications/configuration/docker.html
 run:
   containerPort: 80
+persistenceMount: /data

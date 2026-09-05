@@ -53,8 +53,11 @@ git push amvera main:master
 | `NODE_ENV` | `production` | Режим production |
 | `CLIENT_STATIC_DIR` | `/app/packages/client/.output/public` | Статика Nuxt |
 | `LOG_LEVEL` | выкл. | Логи Fastify |
+| `GALAXY_DATA_DIR` | `/data` | SQLite-каталог карт, логи партий, баг-репорты |
+| `GALAXY_ADMIN_TOKEN` | — | Bearer-токен админ-панели |
+| `GALAXY_MAINTENANCE` | `0` | `1` — режим техработ (кроме `/api/health`) |
 
-Дополнительно настраивать обычно не нужно.
+В `amvera.yaml` включён `persistenceMount: /data` — данные переживают перезапуск контейнера.
 
 ## Проверка
 

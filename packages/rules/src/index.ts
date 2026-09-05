@@ -23,6 +23,9 @@ export * from './destroyer-sacrifice.js'
 export * from './claim.js'
 export * from './resource-recharge.js'
 export * from './surrender.js'
+export * from './scenario.js'
+export * from './scenario-runner.js'
+export * from './tutorial-bot.js'
 export {
   START_PRODUCTION_MARKER_LIMIT,
   MAX_PRODUCTION_MARKERS_PER_PLAYER,

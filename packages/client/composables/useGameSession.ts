@@ -1,3 +1,6 @@
+import type { GalaxySaveFile } from '@galaxy/rules'
+import { serializeGalaxySave } from '@galaxy/rules'
+
 const SESSION_KEY = 'galaxy-game-session'
 
 export interface GameSession {
@@ -37,4 +40,63 @@ export function clearGameSession(): void {
 
 export function gameSaveStorageKey(roomId: string): string {
   return `galaxy-game-${roomId}`
+}
+
+/** Локальное хранение сейва — только для offline-комнат (`local-*`). */
+export function shouldPersistLocalGalaxySave(roomId: string): boolean {
+  return roomId.startsWith('local-')
+}
+
+export function loadLocalGalaxySaveRaw(roomId: string): string | null {
+  if (!import.meta.client || !shouldPersistLocalGalaxySave(roomId)) return null
+  try {
+    return localStorage.getItem(gameSaveStorageKey(roomId))
+  } catch {
+    return null
+  }
+}
+
+export function persistLocalGalaxySave(roomId: string, save: GalaxySaveFile): boolean {
+  if (!import.meta.client || !shouldPersistLocalGalaxySave(roomId)) return false
+  try {
+    localStorage.setItem(gameSaveStorageKey(roomId), serializeGalaxySave(save, false))
+    return true
+  } catch (error) {
+    if (isStorageQuotaError(error)) {
+      console.warn('@galaxy/client: local save quota exceeded', roomId)
+      return false
+    }
+    throw error
+  }
+}
+
+export function clearLocalGalaxySave(roomId: string): void {
+  if (!import.meta.client) return
+  try {
+    localStorage.removeItem(gameSaveStorageKey(roomId))
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Удаляет устаревшие кэши онлайн-комнат — освобождает квоту после старых версий клиента. */
+export function pruneOnlineGalaxySaveCache(activeRoomId?: string): void {
+  if (!import.meta.client) return
+  const prefix = 'galaxy-game-'
+  try {
+    for (let index = localStorage.length - 1; index >= 0; index -= 1) {
+      const key = localStorage.key(index)
+      if (!key?.startsWith(prefix)) continue
+      const roomId = key.slice(prefix.length)
+      if (roomId.startsWith('local-')) continue
+      if (activeRoomId && roomId === activeRoomId) continue
+      localStorage.removeItem(key)
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
+function isStorageQuotaError(error: unknown): boolean {
+  return error instanceof DOMException && (error.name === 'QuotaExceededError' || error.code === 22)
 }

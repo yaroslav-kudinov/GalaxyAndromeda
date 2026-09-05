@@ -1,0 +1,22 @@
+{
+  "maps": [
+    {
+      "id": "duel",
+      "name": "Дуэль",
+      "playerCount": 2,
+      "sortOrder": 1
+    },
+    {
+      "id": "trio-start",
+      "name": "Карта на троих (Старт)",
+      "playerCount": 3,
+      "sortOrder": 2
+    },
+    {
+      "id": "maltese-cross-4",
+      "name": "Мальтийский крест (4)",
+      "playerCount": 4,
+      "sortOrder": 3
+    }
+  ]
+}

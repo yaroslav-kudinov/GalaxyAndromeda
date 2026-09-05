@@ -1,5 +1,5 @@
 # Galaxy Andromeda — один контейнер: Fastify API + статика Nuxt
-FROM node:20-bookworm-slim AS base
+FROM node:22-bookworm-slim AS base
 ENV PNPM_HOME="/pnpm"
 ENV PATH="$PNPM_HOME:$PATH"
 RUN corepack enable && corepack prepare pnpm@10.13.1 --activate
@@ -18,6 +18,7 @@ COPY packages/rules packages/rules
 COPY packages/client packages/client
 COPY packages/server packages/server
 COPY maps maps
+COPY scenarios scenarios
 RUN pnpm run build:deploy
 RUN pnpm prune --prod
 
@@ -25,6 +26,7 @@ FROM base AS runner
 ENV NODE_ENV=production
 ENV HOST=0.0.0.0
 ENV CLIENT_STATIC_DIR=/app/packages/client/.output/public
+ENV GALAXY_DATA_DIR=/data
 WORKDIR /app
 COPY --from=build /app /app
 EXPOSE 3001

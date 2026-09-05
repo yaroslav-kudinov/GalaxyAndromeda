@@ -1,0 +1,59 @@
+{
+  "id": "tutorial-basics",
+  "name": "Основы игры",
+  "mapId": "duel",
+  "solo": true,
+  "botPlayerId": "player-2",
+  "botName": "Тренировочный противник",
+  "botPolicy": "passive",
+  "steps": [
+    {
+      "id": "welcome",
+      "title": "Добро пожаловать",
+      "body": "Это обучающая партия на карте «Дуэль». Вы играете за первого игрока. Противник пассивен и не будет мешать. Прочитайте подсказку и нажмите «Далее».",
+      "botPolicy": "passive",
+      "highlight": "phase-panel",
+      "advanceWhen": { "type": "manual" }
+    },
+    {
+      "id": "planning-intro",
+      "title": "Фаза планирования",
+      "body": "Сейчас фаза планирования. Здесь игроки расставляют маркеры действия на клетки со своими кораблями. Нажмите «Далее» в панели фазы, когда будете готовы перейти к действиям.",
+      "botPolicy": "passive",
+      "highlight": "phase-panel",
+      "allowedActions": ["advance-phase", "place-action-marker", "remove-action-marker"],
+      "advanceWhen": { "type": "phase", "phase": "actions" }
+    },
+    {
+      "id": "actions-intro",
+      "title": "Фаза действий",
+      "body": "Фаза действий: исполняйте маркеры — перемещайте корабли или обстреливайте. Выберите свой маркер действия на карте и выполните ход. Можно также снять маркер без действия.",
+      "botPolicy": "passive",
+      "highlight": "board",
+      "advanceWhen": { "type": "manual" }
+    },
+    {
+      "id": "production-intro",
+      "title": "Фаза производства",
+      "body": "В фазе производства игроки строят корабли и расширяют маркеры производства. Когда дойдёт ваша очередь в производстве — попробуйте построить эсминец или нажмите «Далее», чтобы завершить ход.",
+      "botPolicy": "passive",
+      "highlight": "phase-panel",
+      "advanceWhen": { "type": "manual" }
+    },
+    {
+      "id": "events-intro",
+      "title": "События хода",
+      "body": "После производства вытягивается карта события на всех игроков. Прочитайте её и подтвердите. Затем начнётся следующий ход.",
+      "botPolicy": "passive",
+      "highlight": "phase-panel",
+      "advanceWhen": { "type": "phase", "phase": "planning" }
+    },
+    {
+      "id": "complete",
+      "title": "Обучение завершено",
+      "body": "Вы познакомились с основным циклом: планирование → действия → производство → события. Можете продолжить партию или вернуться на главную и создать обычную игру.",
+      "botPolicy": "passive",
+      "advanceWhen": { "type": "manual" }
+    }
+  ]
+}

@@ -64,6 +64,20 @@ import {
   scheduleRoomPersist,
 } from './room-persistence.js'
 
+import { insertGameLog } from './db/index.js'
+import { getPublishedMapDefinition } from './db/index.js'
+import { sanitizePlayerName } from './admin.js'
+import {
+  advanceTutorialScenario,
+  initTutorialRoomState,
+  loadScenarioScriptById,
+  manualAdvanceScenarioStep,
+  runBotTicksForRoom,
+  scenarioObservationExtras,
+} from './bot-tick.js'
+import { clientIp } from './catalog.js'
+import { canCreateRoom, trackRoomCreate } from './security.js'
+
 
 
 export interface Room {
@@ -97,6 +111,21 @@ export interface Room {
 
   /** Когда зафиксирована победа — для автозакрытия комнаты через 30 с */
   gameOverAt?: number | null
+
+  /** Режим комнаты */
+  mode?: 'normal' | 'tutorial'
+
+  /** Идентификатор сценария обучения */
+  scenarioId?: string
+
+  /** Слот бота в tutorial-режиме */
+  botPlayerId?: string
+
+  /** Время создания комнаты (ISO) */
+  createdAt?: string
+
+  /** IP создателя (лимит комнат) */
+  creatorIp?: string
 
 }
 
@@ -208,6 +237,7 @@ function countActivePlayers(roomId: string, now = Date.now()): number {
 function destroyRoom(roomId: string, reason: string): boolean {
   const room = rooms.get(roomId)
   if (!room) return false
+  persistGameLog(room, reason)
   clearVictoryCloseTimer(roomId)
   rooms.delete(roomId)
   presenceByRoom.delete(roomId)
@@ -220,6 +250,28 @@ function destroyRoom(roomId: string, reason: string): boolean {
     idleMs: Date.now() - room.lastActivityAt,
   })
   return true
+}
+
+function persistGameLog(room: Room, outcome: string): void {
+  if (room.status !== 'playing') return
+  try {
+    insertGameLog({
+      roomId: room.id,
+      mapId: room.map.id,
+      scenarioId: room.scenarioId,
+      startedAt: room.createdAt,
+      playersJson: JSON.stringify(
+        room.state.players.filter((p) => room.playerIds.includes(p.id)).map((p) => ({
+          id: p.id,
+          name: p.name,
+        })),
+      ),
+      eventLogJson: JSON.stringify(room.state.eventLog.slice(-200)),
+      outcome,
+    })
+  } catch (err) {
+    console.error('@galaxy/server game log write failed', err)
+  }
 }
 
 /**
@@ -408,9 +460,14 @@ function roomObservation(
     hostPlayerId: room.hostPlayerId,
   }
 
-  return buildObservation(state as unknown as Parameters<typeof buildObservation>[0], legal, {
+  const obs = buildObservation(state as unknown as Parameters<typeof buildObservation>[0], legal, {
     geometry: includeGeometry,
   })
+  const extras = scenarioObservationExtras(room)
+  if (extras.tutorialMode) {
+    ;(obs as GameObservation & { tutorial?: typeof extras }).tutorial = extras
+  }
+  return obs
 }
 
 
@@ -447,6 +504,8 @@ export function createRoom(map: MapDefinition, maxPlayers = 6): Room {
 
     lastActivityAt: Date.now(),
 
+    createdAt: new Date().toISOString(),
+
   }
 
   rooms.set(id, room)
@@ -455,6 +514,40 @@ export function createRoom(map: MapDefinition, maxPlayers = 6): Room {
 
   return room
 
+}
+
+export function createTutorialRoom(
+  scenarioId: string,
+  playerName: string,
+  creatorIp?: string,
+): { ok: true; room: Room; playerId: string } | { ok: false; error: string } {
+  const script = loadScenarioScriptById(scenarioId)
+  if (!script) return { ok: false, error: 'Сценарий не найден' }
+  const map = getPublishedMapDefinition(script.mapId)
+  if (!map) return { ok: false, error: 'Карта сценария не найдена в каталоге' }
+
+  const room = createRoom(map, 2)
+  room.createdAt = new Date().toISOString()
+  room.creatorIp = creatorIp
+  initTutorialRoomState(room, scenarioId)
+
+  const joinHuman = joinRoom(room.id, playerName, 'player-1')
+  if (!joinHuman.ok) return { ok: false, error: joinHuman.error }
+
+  const botId = script.botPlayerId
+  const botPlayer = room.state.players.find((p) => p.id === botId)
+  if (botPlayer) {
+    botPlayer.name = script.botName
+    botPlayer.isAi = true
+    if (!room.playerIds.includes(botId)) room.playerIds.push(botId)
+    syncParticipatingPlayerIds(room.state, room.playerIds)
+  }
+
+  const start = startRoom(room.id, joinHuman.playerId)
+  if (!start.ok) return { ok: false, error: start.error }
+
+  runBotTicksForRoom(room, applyBotActionInternal)
+  return { ok: true, room: start.room, playerId: joinHuman.playerId }
 }
 
 export function createRoomFromSave(save: GalaxySaveFile, maxPlayers = 6): Room {
@@ -522,9 +615,9 @@ function assignPlayerToSlot(room: Room, playerId: string, playerName: string): b
   const existing = room.state.players.find((p) => p.id === playerId)
   if (!existing) return false
 
-  const name = playerName.trim() || existing.name
+  const name = sanitizePlayerName(playerName, existing.name)
   existing.name = name
-  existing.isAi = false
+  existing.isAi = playerId === room.botPlayerId
 
   if (!room.playerIds.includes(playerId)) {
     room.playerIds.push(playerId)
@@ -797,8 +890,43 @@ export function submitAction(
   }
 
   maybeScheduleVictoryRoomClose(room)
+
+  if (room.mode === 'tutorial' && playerId !== room.botPlayerId) {
+    advanceTutorialScenario(room, action)
+    runBotTicksForRoom(room, applyBotActionInternal)
+  }
+
   return roomObservation(room, playerId, includeGeometry)
 
+}
+
+function applyBotActionInternal(
+  room: Room,
+  botId: string,
+  actionId: string,
+  params?: Record<string, unknown>,
+): void {
+  if (room.state.gameOver) return
+  const violations = releaseInvalidPendingCombat(room.state)
+  if (violations.length) bumpObservationRevision(room, 'combat:invariant-released')
+  if (actionId !== 'update-combat-prep' && !room.state.pendingCombat) {
+    room.lastCombatResult = undefined
+  }
+  const { errors, combatResult } = applyGameActionOnSnapshot(
+    room.state,
+    room.map,
+    botId,
+    actionId,
+    params,
+  )
+  if (errors.length) throw new Error(errors[0]!)
+  if (combatResult) room.lastCombatResult = combatResult
+  const advanced = maybeAdvanceCombatPrep(room)
+  if (combatResult) room.lastCombatResult = combatResult
+  if (advanced.combatResult) room.lastCombatResult = advanced.combatResult
+  bumpObservationRevision(room, `bot:${actionId}`)
+  maybeScheduleVictoryRoomClose(room)
+  scheduleRoomPersist(room)
 }
 
 export type RoomCloseFailure = { ok: false; error: string }
@@ -826,8 +954,6 @@ export function closeRoom(roomId: string, playerId: string): RoomCloseResult {
 
 export function registerHttpRoutes(app: FastifyInstance): void {
   startEmptyLobbyJanitor()
-
-  app.get('/health', async () => ({ ok: true, service: '@galaxy/server' }))
 
   app.addHook('onResponse', async (req, reply) => {
     if (reply.statusCode >= 400) {
@@ -882,7 +1008,36 @@ export function registerHttpRoutes(app: FastifyInstance): void {
     },
   )
 
-  app.post<{ Body: { map?: MapDefinition; maxPlayers?: number; save?: unknown } }>('/rooms', async (req, reply) => {
+  app.post<{
+    Body: {
+      map?: MapDefinition
+      catalogMapId?: string
+      scenarioId?: string
+      playerName?: string
+      maxPlayers?: number
+      save?: unknown
+    }
+  }>('/rooms', async (req, reply) => {
+    const ip = clientIp(req)
+
+    if (req.body.scenarioId) {
+      const name = sanitizePlayerName(req.body.playerName ?? '', 'Игрок')
+      if (!name) return reply.status(400).send({ error: 'Укажите никнейм для обучения' })
+      const result = createTutorialRoom(req.body.scenarioId, name, ip)
+      if (!result.ok) return reply.status(400).send({ error: result.error })
+      return {
+        roomId: result.room.id,
+        code: result.room.code,
+        playerId: result.playerId,
+        tutorial: true,
+        started: true,
+      }
+    }
+
+    if (!canCreateRoom(ip)) {
+      return reply.status(429).send({ error: 'Слишком много комнат с вашего адреса' })
+    }
+
     if (req.body.save != null) {
       let normalized: GalaxySaveFile
       try {
@@ -892,6 +1047,8 @@ export function registerHttpRoutes(app: FastifyInstance): void {
       }
       try {
         const room = createRoomFromSave(normalized, req.body.maxPlayers ?? 6)
+        room.creatorIp = ip
+        trackRoomCreate(ip)
         return { roomId: room.id, code: room.code }
       } catch (e) {
         const msg = e instanceof Error ? e.message : 'Cannot create room from save'
@@ -899,14 +1056,20 @@ export function registerHttpRoutes(app: FastifyInstance): void {
       }
     }
 
-    if (!req.body.map) {
-      return reply.status(400).send({ error: 'Need map or save in request body' })
+    let map = req.body.map
+    if (!map && req.body.catalogMapId) {
+      map = getPublishedMapDefinition(req.body.catalogMapId) ?? undefined
+      if (!map) return reply.status(404).send({ error: 'Карта не найдена в каталоге' })
     }
 
-    const room = createRoom(req.body.map, req.body.maxPlayers ?? 6)
+    if (!map) {
+      return reply.status(400).send({ error: 'Need map, catalogMapId, save or scenarioId' })
+    }
 
+    const room = createRoom(map, req.body.maxPlayers ?? 6)
+    room.creatorIp = ip
+    trackRoomCreate(ip)
     return { roomId: room.id, code: room.code }
-
   })
 
 
@@ -919,7 +1082,7 @@ export function registerHttpRoutes(app: FastifyInstance): void {
     async (req, reply) => {
       const result = joinRoom(
         req.params.id,
-        req.body.playerName,
+        sanitizePlayerName(req.body.playerName, 'Игрок'),
         req.body.preferredPlayerId,
       )
       if (!result.ok) {
@@ -1036,6 +1199,21 @@ export function registerHttpRoutes(app: FastifyInstance): void {
   )
 
 
+
+  app.post<{ Params: { id: string }; Body: { playerId: string }; Querystring: { geometry?: string } }>(
+    '/rooms/:id/scenario/next',
+    async (req, reply) => {
+      const room = getRoom(req.params.id)
+      if (!room) return reply.status(404).send({ error: 'Room not found' })
+      assertRoomMember(room, req.body.playerId)
+      if (!manualAdvanceScenarioStep(room)) {
+        return reply.status(400).send({ error: 'Шаг нельзя пропустить вручную' })
+      }
+      bumpObservationRevision(room, 'scenario:manual-next')
+      scheduleRoomPersist(room)
+      return roomObservation(room, req.body.playerId, wantsFullGeometry(req.query.geometry))
+    },
+  )
 
   app.get<{ Params: { id: string } }>('/rooms/:id/action', async (_req, reply) => {
     return reply

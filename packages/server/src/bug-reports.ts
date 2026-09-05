@@ -11,9 +11,9 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { join, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
 import { randomUUID } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
+import { bugReportsDataDir } from './db/paths.js'
 
 export const BUG_REPORT_TTL_MS = 60 * 24 * 60 * 60 * 1000
 export const BUG_REPORT_MAX_DESCRIPTION = 4000
@@ -50,13 +50,10 @@ export interface CreateBugReportInput {
   userAgent?: string
 }
 
-function repoRoot(): string {
-  return resolve(fileURLToPath(new URL('../../..', import.meta.url)))
-}
 
 export const bugReportsDir = process.env.BUG_REPORTS_DIR
   ? resolve(process.env.BUG_REPORTS_DIR)
-  : join(repoRoot(), '.bug-reports')
+  : bugReportsDataDir()
 
 function ensureStore(): void {
   if (!existsSync(bugReportsDir)) mkdirSync(bugReportsDir, { recursive: true })

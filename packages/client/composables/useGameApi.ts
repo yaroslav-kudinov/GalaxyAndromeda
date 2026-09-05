@@ -38,6 +38,12 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
       durationMs: Math.round(performance.now() - startedAt),
       error: error instanceof Error ? error.message : String(error),
     })
+    if (error instanceof TypeError) {
+      throw new GameApiError(
+        'Сервер недоступен. Активные партии могли сброситься после перезапуска.',
+        502,
+      )
+    }
     throw error
   }
   if (!res.ok) {
@@ -76,6 +82,19 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
 export interface RoomCreated {
   roomId: string
   code: string
+  playerId?: string
+  tutorial?: boolean
+  started?: boolean
+}
+
+export interface CatalogMapEntry {
+  id: string
+  name: string
+  playerCount: number
+}
+
+export interface CatalogMapsResponse {
+  maps: CatalogMapEntry[]
 }
 
 export interface RoomBootstrap {
@@ -131,6 +150,45 @@ export async function checkServerHealth(): Promise<boolean> {
   } catch {
     return false
   }
+}
+
+export async function fetchCatalogMaps(): Promise<CatalogMapEntry[]> {
+  try {
+    const res = await apiFetch<CatalogMapsResponse>('/catalog/maps')
+    return res.maps
+  } catch {
+    return []
+  }
+}
+
+export async function fetchCatalogMap(id: string): Promise<MapDefinition | null> {
+  try {
+    const res = await apiFetch<{ map: MapDefinition }>(`/catalog/maps/${encodeURIComponent(id)}`)
+    return res.map
+  } catch {
+    return null
+  }
+}
+
+export async function createRoomFromCatalog(catalogMapId: string, maxPlayers = 6): Promise<RoomCreated> {
+  return apiFetch<RoomCreated>('/rooms', {
+    method: 'POST',
+    body: JSON.stringify({ catalogMapId, maxPlayers }),
+  })
+}
+
+export async function createTutorialRoom(playerName: string): Promise<RoomCreated> {
+  return apiFetch<RoomCreated>('/rooms', {
+    method: 'POST',
+    body: JSON.stringify({ scenarioId: 'tutorial-basics', playerName }),
+  })
+}
+
+export async function submitMapForModeration(nickname: string, save: GalaxySaveFile): Promise<{ ok: boolean; submissionId: number }> {
+  return apiFetch('/maps/submit', {
+    method: 'POST',
+    body: JSON.stringify({ nickname, save }),
+  })
 }
 
 export async function createRoom(map: MapDefinition, maxPlayers = 6): Promise<RoomCreated> {
@@ -207,6 +265,16 @@ export async function closeRoom(roomId: string, playerId: string): Promise<{ ok:
 export async function fetchObservation(roomId: string, playerId: string): Promise<GameObservation> {
   const qs = new URLSearchParams({ playerId, geometry: '0' })
   return apiFetch<GameObservation>(`/rooms/${roomId}/state?${qs}`)
+}
+
+export async function advanceScenarioStep(
+  roomId: string,
+  playerId: string,
+): Promise<GameObservation> {
+  return apiFetch(`/rooms/${roomId}/scenario/next`, {
+    method: 'POST',
+    body: JSON.stringify({ playerId }),
+  })
 }
 
 export async function submitGameAction(
