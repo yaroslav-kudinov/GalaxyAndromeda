@@ -146,7 +146,12 @@ function canPlayerActInPhase(game: GameSnapshot, state: GameState, playerId: str
 
   if (state.phase === 'planning') {
     const canPlaceAction = game.cells.some(
-      (cell) => cell.ships.some((ship) => ship.ownerId === playerId) && !cell.actionMarkerId,
+      (cell) =>
+        !cell.actionMarkerId
+        && (
+          cell.ships.some((ship) => ship.ownerId === playerId)
+          || (!!cell.isPowerCenter && cell.controlOwnerId === playerId)
+        ),
     )
     return canPlaceAction || game.actionMarkers.some((marker) => marker.ownerId === playerId)
   }

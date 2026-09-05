@@ -34,6 +34,7 @@ export const MAX_FLEET_SIZE_PER_PLAYER: Record<ShipType, number> = {
   cruiser: 12,
   battleship: 6,
   shield: 4,
+  carrier: 3,
   hyper: 2,
 }
 
@@ -42,6 +43,7 @@ export const SHIP_TYPES: ShipType[] = [
   'cruiser',
   'battleship',
   'shield',
+  'carrier',
   'hyper',
 ]
 
@@ -50,6 +52,7 @@ export const SHIP_LABELS: Record<ShipType, string> = {
   cruiser: 'Крейсер',
   battleship: 'Линкор',
   shield: 'Щитоносец',
+  carrier: 'Авианосец',
   hyper: 'Гиперпространственное орудие',
 }
 
@@ -58,5 +61,6 @@ export const SHIP_ABBREV: Record<ShipType, string> = {
   cruiser: 'CR',
   battleship: 'BB',
   shield: 'SH',
+  carrier: 'CV',
   hyper: 'HY',
 }

@@ -46,6 +46,7 @@ export type ShipType =
   | 'cruiser'
   | 'battleship'
   | 'shield'
+  | 'carrier'
   | 'hyper'
 
 export interface HexCoord {

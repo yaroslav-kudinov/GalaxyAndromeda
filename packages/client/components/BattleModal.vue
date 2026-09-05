@@ -816,10 +816,16 @@ onUnmounted(() => {
                   :style="{ background: playerColor(localPlayerId) }"
                   aria-hidden="true"
                 />
-                {{ SHIP_LABELS[ship.type] }} · +{{ ship.supportDice }}d6
+                {{ SHIP_LABELS[ship.type] }} · +{{ ship.supportDice }}d{{ SHIP_SUPPORT_DIE_FACES[ship.type] ?? 4 }}
                 <span class="muted">({{ ship.fromCoord.q }}, {{ ship.fromCoord.r }})</span>
               </li>
             </ul>
+            <p v-if="selfReady" class="observer-hint">
+              Готовность подтверждена. Ждём остальных участников.
+            </p>
+            <p v-else class="observer-hint">
+              Выберите сторону или «Не поддерживать» — без вашего ответа бой не начнётся.
+            </p>
           </template>
           <template v-else>
           <p v-if="isDefenderObserver" class="observer-banner">
@@ -1302,26 +1308,37 @@ onUnmounted(() => {
 
       <footer class="battle-foot">
         <template v-if="phase === 'pre' && isThirdParty && localSupportCandidate">
-          <button type="button" class="btn-secondary" :disabled="resolving" @click="emit('supportSide', null)">
-            Не поддерживать
-          </button>
+          <template v-if="!selfReady">
+            <button type="button" class="btn-secondary" :disabled="resolving" @click="emit('supportSide', null)">
+              Не поддерживать
+            </button>
+            <button
+              type="button"
+              class="btn-side"
+              :style="sideColorVars(preview.attackerId)"
+              :disabled="resolving"
+              @click="emit('supportSide', 'attacker')"
+            >
+              Поддержать {{ playerLabel(preview.attackerId) }}
+            </button>
+            <button
+              type="button"
+              class="btn-side btn-side--emphasis"
+              :style="sideColorVars(preview.defenderId)"
+              :disabled="resolving"
+              @click="emit('supportSide', 'defender')"
+            >
+              Поддержать {{ playerLabel(preview.defenderId) }}
+            </button>
+          </template>
           <button
+            v-else
             type="button"
-            class="btn-side"
-            :style="sideColorVars(preview.attackerId)"
-            :disabled="resolving"
-            @click="emit('supportSide', 'attacker')"
+            class="btn-secondary"
+            :disabled="resolving || prepPhase === 'countdown'"
+            @click="emit('prepUnready')"
           >
-            Поддержать {{ playerLabel(preview.attackerId) }}
-          </button>
-          <button
-            type="button"
-            class="btn-side btn-side--emphasis"
-            :style="sideColorVars(preview.defenderId)"
-            :disabled="resolving"
-            @click="emit('supportSide', 'defender')"
-          >
-            Поддержать {{ playerLabel(preview.defenderId) }}
+            {{ resolving ? 'Отмена…' : 'Изменить выбор / снять готовность' }}
           </button>
         </template>
         <template v-if="phase === 'pre' && isOnlinePrep && !isDefenderObserver && !isThirdParty">

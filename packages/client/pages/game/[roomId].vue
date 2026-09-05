@@ -37,6 +37,7 @@ import {
   combatPrepOf,
   combatRoundStateOf,
   combatResolutionFingerprint,
+  combatResolutionFromPending,
   formatResourceRechargeBannerText,
   getCombatRetreatDestinations,
 } from '@galaxy/rules'
@@ -493,10 +494,12 @@ const combatSupportCandidate = computed(() => {
   )
 })
 
-/** Роль игрока в текущем бою; null — посторонний наблюдатель */
+/** Роль игрока в текущем бою; null — посторонний наблюдатель или выбывший */
 const combatParticipantRole = computed<'attacker' | 'defender' | 'supporter' | null>(() => {
   const pending = pendingCombatState.value
   if (!pending) return null
+  const me = snapshot.value?.players.find((p) => p.id === playerId.value)
+  if (me?.eliminated) return null
   if (pending.attackerId === playerId.value) return 'attacker'
   if (isCombatDefender(pending, playerId.value)) return 'defender'
   if (combatSupportCandidate.value) return 'supporter'
@@ -530,18 +533,25 @@ const combatPrepAttackerReady = computed(() => {
   const prep = combatPrepState.value
   const attId = pendingCombatState.value?.attackerId
   if (!prep || !attId) return false
+  const eliminated = snapshot.value?.players.find((p) => p.id === attId)?.eliminated
+  if (eliminated) return true
   return prep.readyBy[attId] === true
 })
 
 const combatPrepDefenderReady = computed(() => {
   const prep = combatPrepState.value
   if (!prep) return false
+  const eliminated = snapshot.value?.players.find((p) => p.id === prep.defenderId)?.eliminated
+  if (eliminated) return true
   return prep.readyBy[prep.defenderId] === true
 })
 
-const combatDecisionRole = computed(() =>
-  combatContinueDecisionRole(pendingCombatState.value, playerId.value),
-)
+const combatDecisionRole = computed(() => {
+  const me = snapshot.value?.players.find((p) => p.id === playerId.value)
+  return combatContinueDecisionRole(pendingCombatState.value, playerId.value, {
+    eliminated: me?.eliminated === true,
+  })
+})
 
 const currentCombatRollsKey = computed(() => combatResultRollsKey(battleResolution.value))
 
@@ -1023,6 +1033,29 @@ function applyObservation(
       battleResolution.value = next
     }
   }
+  // Наблюдатели: если lastCombatResult не пришёл, восстановить броски из pendingCombat.roundState
+  if (
+    (!battleResolution.value || combatResultRollsKey(battleResolution.value) == null)
+    && game.pendingCombat
+  ) {
+    const fromPending = combatResolutionFromPending(game.pendingCombat)
+    if (fromPending) {
+      const prevKey = combatResolutionFingerprint(battleResolution.value)
+      const nextKey = combatResolutionFingerprint(fromPending)
+      if (prevKey !== nextKey) battleResolution.value = fromPending
+    }
+  } else if (
+    battleResolution.value
+    && game.pendingCombat
+    && (game.pendingCombat.phase === 'awaiting-destruction' || game.pendingCombat.phase === 'awaiting-continue')
+  ) {
+    const fromPending = combatResolutionFromPending(game.pendingCombat)
+    const pendingRolls = combatResultRollsKey(fromPending)
+    const currentRolls = combatResultRollsKey(battleResolution.value)
+    if (fromPending && pendingRolls && pendingRolls !== currentRolls) {
+      battleResolution.value = fromPending
+    }
+  }
   if (saveFile.value) {
     saveFile.value = {
       ...saveFile.value,
@@ -1209,10 +1242,11 @@ const boardInteractiveKeys = computed(() => {
   for (const cell of game.cells) {
     const key = hexKey(cell.coord.q, cell.coord.r)
     const hasMyShip = cell.ships.some((ship) => ship.ownerId === playerId.value)
+    const hasMyPowerCenter = !!cell.isPowerCenter && cell.controlOwnerId === playerId.value
     const hasMyMarker =
       !!cell.actionMarkerId &&
       game.actionMarkers.some((m) => m.id === cell.actionMarkerId && m.ownerId === playerId.value)
-    if (hasMyShip || hasMyMarker) keys.push(key)
+    if (hasMyShip || hasMyPowerCenter || hasMyMarker) keys.push(key)
   }
   return keys
 })
@@ -1508,12 +1542,15 @@ async function submitCombatSupportSide(side: 'attacker' | 'defender' | null) {
   try {
     bumpObservationEpoch()
     const obs = await submitGameAction(roomId.value, playerId.value, 'update-combat-prep', {
-      ready: false,
+      ready: true,
       supportSide: side,
     })
     applyObservation(obs)
     persistLocal()
-    markerActionHint.value = side == null ? 'Вы не поддерживаете никого в этом бою' : 'Поддержка выбрана'
+    markerActionHint.value =
+      side == null
+        ? 'Вы не поддерживаете никого — готовность подтверждена'
+        : 'Поддержка выбрана — готовность подтверждена'
   } catch (e) {
     markerActionHint.value = actionErrorMessage(e, 'Не удалось выбрать поддержку')
   } finally {
@@ -2309,8 +2346,14 @@ async function toggleMarkerOnCell(q: number, r: number) {
   const game = saveFile.value.game
   const cell = game.cells.find((candidate) => candidate.coord.q === q && candidate.coord.r === r)
 
-  if (!cell?.actionMarkerId && !cell?.ships.some((ship) => ship.ownerId === playerId.value)) {
-    markerHint.value = 'Маркер действия ставится только на клетку с вашим кораблём'
+  if (
+    !cell?.actionMarkerId
+    && !(
+      cell?.ships.some((ship) => ship.ownerId === playerId.value)
+      || (!!cell?.isPowerCenter && cell.controlOwnerId === playerId.value)
+    )
+  ) {
+    markerHint.value = 'Маркер действия ставится на клетку с вашим кораблём или на ваш центр власти'
     return
   }
 

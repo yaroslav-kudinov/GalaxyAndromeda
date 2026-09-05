@@ -46,6 +46,7 @@ import {
   setupPendingCombatDestruction,
   setupCombatPrepForMovement,
   stopPendingCombat,
+  syncEliminatedCombatAutomation,
   updateCombatPrep,
   cancelCombatPrep,
   validateCombatOptions,
@@ -781,7 +782,9 @@ export function applyGameActionOnSnapshot(
   if (game.gameOver) return { errors: ['Игра завершена'] }
 
   if (actionId === 'surrender') {
-    return { errors: surrenderPlayer(game, map.id, playerId) }
+    const errors = surrenderPlayer(game, map.id, playerId)
+    if (!errors.length) syncEliminatedCombatAutomation(game)
+    return { errors }
   }
 
   const isPrepAction = actionId === 'update-combat-prep' || actionId === 'cancel-combat-prep'

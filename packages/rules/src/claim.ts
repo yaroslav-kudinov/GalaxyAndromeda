@@ -6,6 +6,7 @@ const COLONIZER_TYPES: ReadonlySet<ShipType> = new Set([
   'cruiser',
   'battleship',
   'shield',
+  'carrier',
   'hyper',
 ])
 

@@ -40,7 +40,9 @@ export function isCombatDefender(pending: PendingCombat, playerId: string): bool
 export function combatContinueDecisionRole(
   pending: PendingCombat | null | undefined,
   playerId: string,
+  options?: { eliminated?: boolean },
 ): CombatContinueRole | null {
+  if (options?.eliminated) return null
   if (pending?.phase !== 'awaiting-continue') return null
   if (pending.attackerId === playerId && pending.continueDecisions?.attacker == null) {
     return 'attacker'

@@ -8,6 +8,21 @@ export function isEliminatedPlayer(game: GameSnapshot, playerId: string): boolea
   return game.players.find((p) => p.id === playerId)?.eliminated === true
 }
 
+/** Выбывший не подтверждает prep / continue / выбор уничтожения. */
+export function isCombatInteractivePlayer(game: GameSnapshot, playerId: string): boolean {
+  return !isEliminatedPlayer(game, playerId)
+}
+
+/** Готовность стороны в prep: выбывший считается готовым без нажатия. */
+export function isCombatPrepSideReady(
+  game: GameSnapshot,
+  playerId: string,
+  readyBy: Record<string, boolean>,
+): boolean {
+  if (!isCombatInteractivePlayer(game, playerId)) return true
+  return readyBy[playerId] === true
+}
+
 export function surrenderPlayer(
   game: GameSnapshot,
   mapId: string,
@@ -53,6 +68,17 @@ function autoResolveSurrenderedCombatDecisions(game: GameSnapshot, playerId: str
     pending.prep.readyBy[playerId] = true
     if (pending.prep.combatOptions.supportSides) {
       delete pending.prep.combatOptions.supportSides[playerId]
+    }
+    const prep = pending.prep
+    const attackerReady = isCombatPrepSideReady(game, pending.attackerId, prep.readyBy)
+    const defenderReady = isCombatPrepSideReady(game, prep.defenderId, prep.readyBy)
+    // Кандидаты поддержки пересчитываются в combat; здесь достаточно сторон боя.
+    if (pending.trigger !== 'bombardment' && attackerReady && defenderReady && prep.phase === 'prep') {
+      prep.phase = 'countdown'
+      prep.countdownStartedAt = Date.now()
+    } else if (pending.trigger === 'bombardment' && attackerReady && prep.phase === 'prep') {
+      prep.phase = 'countdown'
+      prep.countdownStartedAt = Date.now()
     }
   }
   if (pending.phase === 'awaiting-continue') {

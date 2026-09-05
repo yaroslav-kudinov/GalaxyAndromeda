@@ -250,7 +250,7 @@ const oddsSummaryParts = computed(() => {
             <span class="muted">({{ sh.fromCoord.q }}, {{ sh.fromCoord.r }})</span>
           </li>
         </ul>
-        <p class="shield-total">Суммарно до {{ preview.shieldAbsorbTotal }} (пример 4+2)</p>
+        <p class="shield-total">Суммарно до {{ preview.shieldAbsorbTotal }} (пример 6+3)</p>
       </section>
 
       <section class="priority">

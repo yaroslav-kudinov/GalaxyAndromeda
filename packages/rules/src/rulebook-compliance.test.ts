@@ -40,7 +40,7 @@ function addShip(
 }
 
 describe('По правилам (PDF / rulebook compliance)', () => {
-  it('щиты поглощают 4 на клетке + 2 с соседа', () => {
+  it('щиты поглощают 6 на клетке + 3 с соседа', () => {
     expect(
       applyShieldAbsorption(8, [
         {
@@ -58,7 +58,25 @@ describe('По правилам (PDF / rulebook compliance)', () => {
           fromCoord: { q: 0, r: 0 },
         },
       ]),
-    ).toEqual({ remainingDamage: 2, absorbed: 6 })
+    ).toEqual({ remainingDamage: 0, absorbed: 8 })
+    expect(
+      applyShieldAbsorption(12, [
+        {
+          shipId: 'sh-self',
+          ownerId: 'p2',
+          absorbCapacity: SHIELD_ABSORB_SELF,
+          scope: 'self',
+          fromCoord: { q: 1, r: 0 },
+        },
+        {
+          shipId: 'sh-nei',
+          ownerId: 'p2',
+          absorbCapacity: SHIELD_ABSORB_NEIGHBOR,
+          scope: 'neighbor',
+          fromCoord: { q: 0, r: 0 },
+        },
+      ]),
+    ).toEqual({ remainingDamage: 3, absorbed: 9 })
   })
 
   it('очки уничтожения = |разница сумм|, не полная сумма победителя', () => {
@@ -85,8 +103,8 @@ describe('По правилам (PDF / rulebook compliance)', () => {
     expect(selectShipsToDestroy(ships, 14, new Set(['battleship']))).toEqual(['dd', 'bb'])
   })
 
-  it('баланс B+F: destroyCost эсминца 4, support d4; крейсер в бою 2d6', () => {
-    expect(getDestroyCost('destroyer')).toBe(4)
+  it('баланс: destroyCost эсминца 3 (дуэль 1d4), support d4; крейсер в бою 2d6', () => {
+    expect(getDestroyCost('destroyer')).toBe(3)
     expect(SHIP_SUPPORT_DIE_FACES).toMatchObject({
       cruiser: 4,
       battleship: 4,

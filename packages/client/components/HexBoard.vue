@@ -1120,10 +1120,11 @@ function onPointerUp(e: PointerEvent) {
   stroke: none;
 }
 .hex-overlay--reachable {
-  fill: rgba(74, 222, 128, 0.22);
+  /* Magenta: контраст с зелёным/синим/красным/фиолетовым/янтарным/бирюзовым контролем */
+  fill: rgba(232, 121, 249, 0.28);
 }
 .hex-overlay--destination {
-  fill: rgba(56, 189, 248, 0.28);
+  fill: rgba(250, 204, 21, 0.34);
 }
 .hex-overlay--contested {
   fill: rgba(248, 113, 113, 0.32);
@@ -1143,8 +1144,8 @@ function onPointerUp(e: PointerEvent) {
   pointer-events: none;
 }
 .hex.reachable {
-  stroke: rgba(74, 222, 128, 0.85);
-  stroke-width: 2;
+  stroke: rgba(232, 121, 249, 0.95);
+  stroke-width: 2.4;
 }
 .hex.contested {
   stroke: rgba(248, 113, 113, 0.95);
@@ -1160,12 +1161,12 @@ function onPointerUp(e: PointerEvent) {
   stroke-width: 2;
 }
 .hex.destination {
-  stroke: rgba(56, 189, 248, 0.95);
-  stroke-width: 2.5;
+  stroke: rgba(250, 204, 21, 0.98);
+  stroke-width: 2.8;
 }
 .move-preview-line {
   fill: none;
-  stroke: rgba(56, 189, 248, 0.85);
+  stroke: rgba(250, 204, 21, 0.9);
   stroke-width: 2.5;
   stroke-dasharray: 6 4;
   opacity: 0.9;

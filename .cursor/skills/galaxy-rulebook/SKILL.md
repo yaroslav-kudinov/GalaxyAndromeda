@@ -18,7 +18,7 @@ When changing rules:
 
 Key examples to test:
 
-- Shield absorb 4+2 points
+- Shield absorb 6+3 points
 - Priority skip: battleship cost 9+1=10
 - Production by region size
 - Hyper fireRange [2, 3] (not adjacent)

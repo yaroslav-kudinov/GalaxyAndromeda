@@ -184,6 +184,15 @@ function cellAt(game: GameSnapshot, coord: HexCoord) {
   return game.cells.find((c) => hexKey(c.coord.q, c.coord.r) === key)
 }
 
+/** Клетка с вашим кораблём или ваш центр власти (для постройки без флота на клетке). */
+export function canPlaceActionMarkerOnCell(
+  cell: { ships: { ownerId: string }[]; isPowerCenter?: boolean; controlOwnerId?: string | null },
+  ownerId: string,
+): boolean {
+  if (cell.ships.some((s) => s.ownerId === ownerId)) return true
+  return !!cell.isPowerCenter && cell.controlOwnerId === ownerId
+}
+
 export function addActionMarker(
   game: GameSnapshot,
   ownerId: string,
@@ -199,8 +208,8 @@ export function addActionMarker(
   const cell = cellAt(game, coord)
   const key = hexKey(coord.q, coord.r)
   if (!cell) return [`Клетка ${key} не найдена`]
-  if (!cell.ships.some((s) => s.ownerId === ownerId)) {
-    return ['Маркер действия ставится только на клетку с вашим кораблём']
+  if (!canPlaceActionMarkerOnCell(cell, ownerId)) {
+    return ['Маркер действия ставится на клетку с вашим кораблём или на ваш центр власти']
   }
   if (cell.actionMarkerId) return ['На клетке уже есть маркер действия']
 

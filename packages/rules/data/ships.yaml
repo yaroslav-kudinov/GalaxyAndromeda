@@ -2,7 +2,7 @@ destroyer:
   move: 3
   combatDice: 1
   combatDieFaces: 4
-  destroyCost: 4
+  destroyCost: 3
   productionRegionSize: [3, 4]
   cost: { credits: 2, production: 2 }
 
@@ -29,10 +29,18 @@ battleship:
 
 shield:
   move: 2
-  shieldAbsorb: { self: 4, neighbor: 2 }
+  shieldAbsorb: { self: 6, neighbor: 3 }
   destroyCost: 4
   productionRegionSize: [12, 13]
   cost: { credits: 3, production: 4 }
+
+carrier:
+  move: 1
+  # Аура: на клетке боя +1d6 каждому союзнику (не авианосцу); с соседа +1d4. Не стакается.
+  carrierAura: { selfDieFaces: 6, neighborDieFaces: 4 }
+  destroyCost: 5
+  productionRegionSize: [12, 13]
+  cost: { credits: 6, production: 5 }
 
 hyper:
   move: 1
@@ -47,5 +55,6 @@ destructionPriority:
   - destroyer
   - hyper
   - shield
+  - carrier
   - cruiser
   - battleship

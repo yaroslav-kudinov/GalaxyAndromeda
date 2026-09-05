@@ -44,6 +44,12 @@ export const SHIP_GLYPHS: Record<ShipType, ShipGlyphDef> = {
     body: 'M0,9 L9,-6.5 L-9,-6.5 Z',
   },
 
+  /** Wide diamond + deck stripe — авианосец */
+  carrier: {
+    body: diamond(8.6),
+    accent: 'M-6.5,0 L6.5,0',
+  },
+
   /** Four-pointed star */
   hyper: {
     body: 'M0,-10.5 L2.4,-2.4 L10.5,0 L2.4,2.4 L0,10.5 L-2.4,2.4 L-10.5,0 L-2.4,-2.4 Z',

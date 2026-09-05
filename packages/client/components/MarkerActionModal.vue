@@ -34,6 +34,7 @@ const SHIP_SHORT: Record<ShipType, string> = {
   cruiser: 'Крейсер',
   battleship: 'Линкор',
   shield: 'Щитоносец',
+  carrier: 'Авианосец',
   hyper: 'Г.О.',
 }
 

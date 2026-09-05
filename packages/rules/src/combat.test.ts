@@ -136,10 +136,10 @@ function withAllDiceThree<T>(fn: () => T): T {
 }
 
 describe('combat sketch', () => {
-  it('shield absorb follows rulebook 4+2 example', () => {
-    expect(SHIELD_ABSORB_SELF).toBe(4)
-    expect(SHIELD_ABSORB_NEIGHBOR).toBe(2)
-    expect(totalShieldAbsorbExample()).toBe(6)
+  it('shield absorb follows rulebook 6+3 example', () => {
+    expect(SHIELD_ABSORB_SELF).toBe(6)
+    expect(SHIELD_ABSORB_NEIGHBOR).toBe(3)
+    expect(totalShieldAbsorbExample()).toBe(9)
   })
 
   it('formatShieldContributionLabel describes self and neighbor shields', () => {
@@ -147,20 +147,66 @@ describe('combat sketch', () => {
       formatShieldContributionLabel({
         shipId: 'sh-1',
         ownerId: 'p2',
-        absorbCapacity: 4,
+        absorbCapacity: 6,
         scope: 'self',
         fromCoord: { q: 1, r: 0 },
       }),
-    ).toBe('щит · до 4 на клетке')
+    ).toBe('щит · до 6 на клетке')
     expect(
       formatShieldContributionLabel({
         shipId: 'sh-2',
         ownerId: 'p2',
-        absorbCapacity: 2,
+        absorbCapacity: 3,
         scope: 'neighbor',
         fromCoord: { q: 2, r: 0 },
       }),
-    ).toBe('щит · до 2 с соседа')
+    ).toBe('щит · до 3 с соседа')
+  })
+
+  it('carrier aura: сосед +1d4 на каждый не-авианосец; на клетке +1d6; не стакается', () => {
+    const map = createEmptyMap('carrier-aura', 'Carrier')
+    map.cells.push({ q: 1, r: 0 }, { q: 2, r: 0 }, { q: 0, r: 1 })
+    const game = gameSnapshotFromMap(map)
+    game.phase = 'actions'
+    game.activePlayerId = 'player-1'
+    addShip(game, 1, 0, 'player-1', 'destroyer', 'att-dd')
+    addShip(game, 1, 0, 'player-1', 'destroyer', 'att-dd2')
+    addShip(game, 2, 0, 'player-1', 'carrier', 'att-cv')
+    addShip(game, 1, 0, 'player-2', 'destroyer', 'def-dd')
+    game.cells.find((c) => c.coord.q === 1 && c.coord.r === 0)!.controlOwnerId = 'player-2'
+
+    const preview = buildCombatPreview(
+      game,
+      { q: 1, r: 0 },
+      'player-1',
+      [
+        { id: 'att-dd', type: 'destroyer', ownerId: 'player-1' },
+        { id: 'att-dd2', type: 'destroyer', ownerId: 'player-1' },
+      ],
+    )
+    expect(preview?.attacker.carrierAura).toMatchObject({ faces: 4, scope: 'neighbor' })
+
+    addShip(game, 1, 0, 'player-1', 'carrier', 'att-cv-self')
+    const previewSelf = buildCombatPreview(
+      game,
+      { q: 1, r: 0 },
+      'player-1',
+      [
+        { id: 'att-dd', type: 'destroyer', ownerId: 'player-1' },
+        { id: 'att-dd2', type: 'destroyer', ownerId: 'player-1' },
+      ],
+    )
+    expect(previewSelf?.attacker.carrierAura).toMatchObject({ faces: 6, scope: 'self' })
+
+    const round = rollCombatRound(previewSelf!, () => 0.99)
+    const attRolls = round.shipRolls.filter((r) => r.side === 'attacker' && r.combatRolls.length)
+    expect(attRolls).toHaveLength(2)
+    for (const roll of attRolls) {
+      expect(roll.supportRolls?.[0]?.rolls).toHaveLength(1)
+      expect(roll.total).toBe(
+        roll.combatRolls.reduce((a, b) => a + b, 0) + (roll.supportRolls?.[0]?.rolls[0] ?? 0),
+      )
+    }
   })
 
   it('combatResolutionFingerprint is stable for identical results', () => {
@@ -551,7 +597,7 @@ describe('combat sketch', () => {
     ).toBe(0)
   })
 
-  it('margin damage 15 vs 7 with shield 4 leaves 4 destruction points', () => {
+  it('margin damage 15 vs 7 with shield 6 leaves 2 points (ниже destroyCost эсминца)', () => {
     const round = { attackerTotal: 15, defenderTotal: 7, winner: 'attacker' as const, shipRolls: [] }
     expect(computeRoundDamage(round)).toBe(8)
 
@@ -564,7 +610,7 @@ describe('combat sketch', () => {
         fromCoord: { q: 1, r: 0 },
       },
     ])
-    expect(shieldResult).toEqual({ absorbed: 4, remainingDamage: 4 })
+    expect(shieldResult).toEqual({ absorbed: 6, remainingDamage: 2 })
 
     const defenderShips = [
       { id: 'dd-1', type: 'destroyer' as ShipType, ownerId: 'p2' },
@@ -572,9 +618,8 @@ describe('combat sketch', () => {
       { id: 'dd-3', type: 'destroyer' as ShipType, ownerId: 'p2' },
       { id: 'sh-1', type: 'shield' as ShipType, ownerId: 'p2' },
     ]
-    expect(selectShipsToDestroy(defenderShips, shieldResult.remainingDamage, new Set())).toEqual([
-      'dd-1',
-    ])
+    // 2 < destroyCost эсминца (3) — уничтожения нет
+    expect(selectShipsToDestroy(defenderShips, shieldResult.remainingDamage, new Set())).toEqual([])
 
     const grossWinnerTotal = round.attackerTotal
     const grossAfterShields = applyShieldAbsorption(grossWinnerTotal, [
@@ -586,9 +631,11 @@ describe('combat sketch', () => {
         fromCoord: { q: 1, r: 0 },
       },
     ])
+    // 15−6=9 → три эсминца (3+3+3)
     expect(selectShipsToDestroy(defenderShips, grossAfterShields.remainingDamage, new Set())).toEqual([
       'dd-1',
       'dd-2',
+      'dd-3',
     ])
   })
 
@@ -765,7 +812,7 @@ describe('combat sketch', () => {
     expect(errors).toEqual([])
   })
 
-  it('applyShieldAbsorption follows 4+2 rulebook example', () => {
+  it('applyShieldAbsorption follows 6+3 rulebook example', () => {
     const contributions = [
       {
         shipId: 'sh-self',
@@ -783,8 +830,12 @@ describe('combat sketch', () => {
       },
     ]
     expect(applyShieldAbsorption(8, contributions)).toEqual({
-      remainingDamage: 2,
-      absorbed: 6,
+      remainingDamage: 0,
+      absorbed: 8,
+    })
+    expect(applyShieldAbsorption(12, contributions)).toEqual({
+      remainingDamage: 3,
+      absorbed: 9,
     })
   })
 
@@ -814,9 +865,9 @@ describe('combat sketch', () => {
       { id: 'dd-2', type: 'destroyer' as ShipType, ownerId: 'p2' },
       { id: 'dd-3', type: 'destroyer' as ShipType, ownerId: 'p2' },
     ]
-    // skip: destroyCost 4+1=5; бюджет 6 → один эсминец; бюджет 10 → два
+    // skip: destroyCost 3+1=4; бюджет 6 → один эсминец; бюджет 8 → два
     expect(selectShipsToDestroy(ships, 6, new Set(['destroyer']))).toEqual(['dd-1'])
-    expect(selectShipsToDestroy(ships, 10, new Set(['destroyer']))).toEqual(['dd-1', 'dd-2'])
+    expect(selectShipsToDestroy(ships, 8, new Set(['destroyer']))).toEqual(['dd-1', 'dd-2'])
   })
 
   it('getImmediatelyDestroyableShipIds highlights front tier within budget', () => {
@@ -1919,8 +1970,8 @@ describe('покрытие непокрытых боевых путей', () => 
     game.participatingPlayerIds = ['player-1', 'player-2']
     game.turnNumber = 2
 
-    // 8 эсминцев атаки vs 4 защиты, d6=3 → 24 vs 12, урон 12 = ровно 3 эсминца (не full wipe).
-    for (let i = 0; i < 8; i++) {
+    // 7 эсминцев атаки vs 4 защиты, d4=3 → 21 vs 12, урон 9 = ровно 3 эсминца (не full wipe).
+    for (let i = 0; i < 7; i++) {
       addShip(game, 0, 0, 'player-1', 'destroyer', `att-dd-${i}`)
     }
     for (let i = 1; i <= 4; i++) {
@@ -1938,7 +1989,7 @@ describe('покрытие непокрытых боевых путей', () => 
     )
     expect(result.attackerWon).toBe(true)
     expect(result.needsDestructionSelection).toBe(true)
-    expect(result.rawDamage).toBe(12)
+    expect(result.rawDamage).toBe(9)
 
     setupPendingCombatDestruction(
       game,
@@ -2148,13 +2199,14 @@ describe('покрытие непокрытых боевых путей', () => 
       ),
     ).toEqual([])
 
-    expect(updateCombatPrep(game, 'player-3', false, undefined, 'attacker').errors).toEqual([])
+    expect(updateCombatPrep(game, 'player-3', true, undefined, 'attacker').errors).toEqual([])
     expect(combatPrepOf(game.pendingCombat)?.combatOptions.supportSides?.['player-3']).toBe('attacker')
+    expect(combatPrepOf(game.pendingCombat)?.readyBy['player-3']).toBe(true)
 
-    expect(updateCombatPrep(game, 'player-3', false, undefined, 'defender').errors).toEqual([])
+    expect(updateCombatPrep(game, 'player-3', true, undefined, 'defender').errors).toEqual([])
     expect(combatPrepOf(game.pendingCombat)?.combatOptions.supportSides?.['player-3']).toBe('defender')
 
-    expect(updateCombatPrep(game, 'player-3', false, undefined, null).errors).toEqual([])
+    expect(updateCombatPrep(game, 'player-3', true, undefined, null).errors).toEqual([])
     expect(combatPrepOf(game.pendingCombat)?.combatOptions.supportSides?.['player-3']).toBeUndefined()
 
     // Игрок без подходящих кораблей рядом — не может вмешиваться.
@@ -2165,11 +2217,11 @@ describe('покрытие непокрытых боевых путей', () => 
       isAi: false,
       eliminated: false,
     })
-    expect(updateCombatPrep(game, 'player-4', false, undefined, 'attacker').errors[0])
+    expect(updateCombatPrep(game, 'player-4', true, undefined, 'attacker').errors[0])
       .toMatch(/не можете поддержать/)
   })
 
-  it('prep на трёх игроков: countdown стартует от готовности атакующего и защитника', () => {
+  it('prep на трёх игроков: countdown ждёт готовности и третьей стороны с поддержкой', () => {
     const map = createEmptyMap('prep3', 'Prep 3')
     map.cells.push({ q: 1, r: 0 }, { q: 2, r: 0 })
     const game = gameSnapshotFromMap(map)
@@ -2198,11 +2250,11 @@ describe('покрытие непокрытых боевых путей', () => 
       ['att-dd'],
     )
 
-    expect(updateCombatPrep(game, 'player-3', false, undefined, 'attacker').errors).toEqual([])
     expect(updateCombatPrep(game, 'player-1', true).errors).toEqual([])
+    expect(updateCombatPrep(game, 'player-2', true).errors).toEqual([])
     expect(combatPrepOf(game.pendingCombat)?.phase).toBe('prep')
 
-    expect(updateCombatPrep(game, 'player-2', true).errors).toEqual([])
+    expect(updateCombatPrep(game, 'player-3', true, undefined, 'attacker').errors).toEqual([])
     expect(combatPrepOf(game.pendingCombat)?.phase).toBe('countdown')
     expect(pendingCombatInvariantViolations(game)).toEqual([])
   })

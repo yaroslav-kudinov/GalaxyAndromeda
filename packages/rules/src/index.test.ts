@@ -851,6 +851,19 @@ describe('game markers', () => {
     expect(game.productionMarkers).toHaveLength(0)
   })
 
+  it('allows action marker on controlled power center without ships', () => {
+    const map = createEmptyMap()
+    map.cells[0]!.isPowerCenter = true
+    map.cells[0]!.startPlayer = 1
+    const game = gameSnapshotFromMap(map)
+    game.activePlayerId = 'player-1'
+    game.cells[0].controlOwnerId = 'player-1'
+    expect(game.cells[0].ships).toHaveLength(0)
+
+    expect(addActionMarker(game, 'player-1', { q: 0, r: 0 })).toEqual([])
+    expect(game.actionMarkers).toHaveLength(1)
+  })
+
   it('allows action marker on cell with ship even without control', () => {
     const map = createEmptyMap()
     map.cells.push({ q: 1, r: 0, isPowerCenter: true, startPlayer: 1 })
@@ -861,6 +874,18 @@ describe('game markers', () => {
 
     expect(addActionMarker(game, 'player-1', { q: 0, r: 0 })).toEqual([])
     expect(game.actionMarkers).toHaveLength(1)
+  })
+
+  it('rejects action marker on enemy power center without own ships', () => {
+    const map = createEmptyMap()
+    map.cells[0]!.isPowerCenter = true
+    const game = gameSnapshotFromMap(map)
+    game.activePlayerId = 'player-1'
+    game.cells[0].controlOwnerId = 'player-2'
+
+    expect(addActionMarker(game, 'player-1', { q: 0, r: 0 })).toEqual([
+      'Маркер действия ставится на клетку с вашим кораблём или на ваш центр власти',
+    ])
   })
 
   it('rejects adding action marker outside planning phase', () => {

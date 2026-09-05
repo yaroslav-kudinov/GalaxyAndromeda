@@ -753,12 +753,11 @@ export function submitAction(
   }
 
   if (action.actionId !== 'update-combat-prep') {
-    // Результат последнего боя нужен клиенту, пока бой ещё на экране.
-    if (!room.state.pendingCombat) {
-      room.lastCombatResult = undefined
-    }
+    // lastCombatResult оставляем до старта следующего боя — иначе наблюдатели
+    // с более редким poll могут не успеть увидеть броски.
   }
   const prepBefore = combatPrepOf(room.state.pendingCombat)
+  const pendingPhaseBefore = room.state.pendingCombat?.phase
 
   const { errors, combatResult: actionCombatResult } = applyGameActionOnSnapshot(
     room.state,
@@ -769,6 +768,13 @@ export function submitAction(
   )
 
   if (errors.length) throw new Error(errors[0])
+
+  if (
+    room.state.pendingCombat?.phase === 'prep'
+    && pendingPhaseBefore !== 'prep'
+  ) {
+    room.lastCombatResult = undefined
+  }
 
   if (actionCombatResult) room.lastCombatResult = actionCombatResult
 

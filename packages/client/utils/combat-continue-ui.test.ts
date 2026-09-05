@@ -67,6 +67,10 @@ describe('combatContinueDecisionRole', () => {
     const pending = awaitingContinue({ continueDecisions: { attacker: true } })
     assert.equal(combatContinueDecisionRole(pending, 'p-att'), null)
     assert.equal(combatContinueDecisionRole(pending, 'p-def'), 'defender')
+    assert.equal(
+      combatContinueDecisionRole(pending, 'p-def', { eliminated: true }),
+      null,
+    )
   })
 
   it('ignores whose turn it is on the map — non-active defender still decides', () => {
