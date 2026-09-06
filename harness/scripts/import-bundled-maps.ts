@@ -24,6 +24,12 @@ const BUNDLED = [
     outName: 'Мальтийский крест (4)',
     sortOrder: 3,
   },
+  {
+    source: 'maps/bundled/five-point-path.source.galaxy.json',
+    outId: 'five-point-path',
+    outName: 'Пятиконечный путь',
+    sortOrder: 4,
+  },
 ]
 
 const outDirs = [join(root, 'maps/bundled'), join(root, 'packages/client/public/maps')]

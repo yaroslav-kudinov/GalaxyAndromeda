@@ -23,7 +23,7 @@ export function getDb(): DatabaseSync {
     `INSERT INTO schema_meta(key, value) VALUES ('version', ?)
      ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
   ).run(String(SCHEMA_VERSION))
-  seedBundledMapsIfEmpty()
+  seedBundledMaps()
   seedBundledScenariosIfEmpty()
   return db
 }
@@ -136,21 +136,24 @@ export function deleteMap(id: string): boolean {
   return result.changes > 0
 }
 
-function seedBundledMapsIfEmpty(): void {
-  const count = (getDb().prepare(`SELECT COUNT(*) AS c FROM maps`).get() as { c: number }).c
-  if (count > 0) return
+function seedBundledMaps(): void {
   const manifestPath = join(repoRoot(), 'maps/bundled/manifest.json')
   if (!existsSync(manifestPath)) return
   const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as {
     maps: { id: string; sortOrder: number }[]
   }
+  let added = 0
   for (const entry of manifest.maps) {
+    if (getMapById(entry.id)) continue
     const mapPath = join(repoRoot(), 'maps/bundled', `${entry.id}.json`)
     if (!existsSync(mapPath)) continue
     const map = normalizeMapDefinition(JSON.parse(readFileSync(mapPath, 'utf8')) as MapDefinition)
     upsertMap(map, { source: 'bundled', published: true, sortOrder: entry.sortOrder })
+    added += 1
   }
-  console.log(`@galaxy/server db: seeded ${manifest.maps.length} bundled maps`)
+  if (added) {
+    console.log(`@galaxy/server db: seeded ${added} bundled map(s)`)
+  }
 }
 
 export interface ScenarioRow {

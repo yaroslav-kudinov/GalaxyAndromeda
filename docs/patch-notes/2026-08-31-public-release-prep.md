@@ -14,7 +14,8 @@
 ## Код
 
 - SQLite-каталог карт и сценариев на сервере (`packages/server/src/db/`).
-- Три официальные карты: `duel`, `trio-start`, `maltese-cross-4` в `maps/bundled/` и `packages/client/public/maps/`.
+- Официальные карты: `duel`, `trio-start`, `maltese-cross-4`, `five-point-path` в `maps/bundled/` и `packages/client/public/maps/`.
+- Карта «Пятиконечный путь» (`five-point-path`, пять игроков) в том же каталоге.
 - Движок сценариев и бот: `packages/rules/src/scenario.ts`, `scenario-runner.ts`, `tutorial-bot.ts`.
 - Сценарий `scenarios/tutorial-basics.json`.
 
@@ -46,7 +47,7 @@
 
 ## Миграции
 
-При первом запуске сервер создаёт SQLite в `GALAXY_DATA_DIR` (локально `.galaxy-data/`, на Amvera `/data`) и загружает bundled-карты. Старые сохранения в браузере не затрагиваются.
+При запуске сервер создаёт SQLite в `GALAXY_DATA_DIR` (локально `.galaxy-data/`, на хостинге `/data`) и добавляет недостающие bundled-карты, даже если каталог уже не пустой. Старые сохранения в браузере не затрагиваются.
 
 ## Дополнение (локальный запуск)
 

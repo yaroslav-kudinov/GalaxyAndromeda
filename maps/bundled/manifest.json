@@ -17,6 +17,12 @@
       "name": "Мальтийский крест (4)",
       "playerCount": 4,
       "sortOrder": 3
+    },
+    {
+      "id": "five-point-path",
+      "name": "Пятиконечный путь",
+      "playerCount": 5,
+      "sortOrder": 4
     }
   ]
 }
