@@ -13,8 +13,29 @@ describe('pickTutorialBotAction', () => {
     expect(picked?.actionId).toBe('advance-phase')
   })
 
-  it('simple prefers advance when no movement', () => {
-    const picked = pickTutorialBotAction({} as never, legal, 'simple')
-    expect(picked?.actionId).toBe('advance-phase')
+  it('passive готовит бота к бою с поддержкой', () => {
+    const legal: LegalAction[] = [
+      { id: 'surrender', type: 'surrender', description: 'Сдаться' },
+      { id: 'update-combat-prep', type: 'combat', description: 'Готовность к бою' },
+    ]
+    const observation = {
+      mechanics: {
+        pendingCombat: {
+          phase: 'prep',
+          prep: { phase: 'prep', readyBy: {} },
+        },
+      },
+    } as never
+    const picked = pickTutorialBotAction(
+      observation,
+      legal,
+      'passive',
+      { botSupportSide: { 'player-3': 'attacker' } } as never,
+      'player-3',
+    )
+    expect(picked).toEqual({
+      actionId: 'update-combat-prep',
+      params: { ready: true, supportSide: 'attacker' },
+    })
   })
 })

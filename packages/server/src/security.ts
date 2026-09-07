@@ -13,8 +13,15 @@ export function registerSecurityPlugins(app: FastifyInstance): void {
 
   void app.register(rateLimit, {
     global: true,
-    max: Number(process.env.GALAXY_RATE_LIMIT_MAX ?? 200),
+    // Клиент в партии опрашивает /state ~каждые 750 мс (~80/мин), в бою до 250 мс (~240/мин),
+    // плюс presence, bootstrap лобби и health. Старый потолок 200/мин ломал обучение при
+    // нескольких вкладках и давал лавину 429 → мигание UI и отказ действий.
+    max: Number(process.env.GALAXY_RATE_LIMIT_MAX ?? 900),
     timeWindow: '1 minute',
+    allowList: (req) => {
+      const path = (req.url ?? '').split('?')[0] ?? ''
+      return path === '/health' || path === '/api/health'
+    },
   })
 }
 

@@ -137,10 +137,17 @@ export function useObservationSync(options: UseObservationSyncOptions) {
   function recordPollFailure(error: unknown) {
     if (!options.enabled()) return
     consecutivePollFailures++
+    const status =
+      error && typeof error === 'object' && 'status' in error
+        ? Number((error as { status?: number }).status)
+        : undefined
     debugLog('sync.poll-failure', {
       consecutivePollFailures,
+      status,
       error: error instanceof Error ? error.message : String(error),
     })
+    // 429: не запускать resync — он добавляет ещё запросы и усиливает лимит.
+    if (status === 429) return
     if (consecutivePollFailures >= POLL_FAILURE_LIMIT) {
       void resync('Не удаётся получить актуальное состояние с сервера.')
     }

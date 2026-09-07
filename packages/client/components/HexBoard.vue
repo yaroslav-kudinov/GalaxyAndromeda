@@ -63,6 +63,8 @@ const props = withDefaults(
     /** Полупрозрачная заливка гексов — космос за картой просвечивает (игровая комната). */
     translucentCells?: boolean
     combatPulseKeys?: string[]
+    /** Целевая клетка текущего шага обучения. */
+    tutorialHighlightKeys?: string[]
     incomingShipIds?: string[]
     /** Корабли, для которых сейчас выбирают клетку назначения (пульс глифа). */
     activeShipIds?: string[]
@@ -105,6 +107,7 @@ const props = withDefaults(
     cellHoverTooltip: undefined,
     translucentCells: false,
     combatPulseKeys: () => [],
+    tutorialHighlightKeys: () => [],
     incomingShipIds: () => [],
     activeShipIds: () => [],
     combatGhosts: () => [],
@@ -323,6 +326,7 @@ function cellOutlineClass(cell: MapCellDefinition): Record<string, boolean> {
     reachable: isReachable(key) && !isContested(key),
     contested: isContested(key),
     'combat-pulse': isCombatPulse(key),
+    'tutorial-highlight': isTutorialHighlight(key),
     'supply-chain': isSupplyChain(key),
     destination: isDestination(key),
     symmetric: isSymmetricMate(key),
@@ -337,6 +341,7 @@ function hasCellOutline(cell: MapCellDefinition): boolean {
     c.reachable ||
     c.contested ||
     c['combat-pulse'] ||
+    c['tutorial-highlight'] ||
     c['supply-chain'] ||
     c.destination ||
     c.symmetric
@@ -422,6 +427,10 @@ function isContested(key: string): boolean {
 
 function isCombatPulse(key: string): boolean {
   return props.combatPulseKeys.includes(key)
+}
+
+function isTutorialHighlight(key: string): boolean {
+  return props.tutorialHighlightKeys.includes(key)
 }
 
 function isSupplyChain(key: string): boolean {
@@ -798,6 +807,12 @@ function onPointerUp(e: PointerEvent) {
           pointer-events="none"
         />
         <polygon
+          v-if="isTutorialHighlight(hexKey(cell.q, cell.r))"
+          :points="points(cell.q, cell.r)"
+          class="hex-overlay hex-overlay--tutorial-highlight"
+          pointer-events="none"
+        />
+        <polygon
           v-if="isDestination(hexKey(cell.q, cell.r))"
           :points="points(cell.q, cell.r)"
           class="hex-overlay hex-overlay--destination"
@@ -1133,6 +1148,13 @@ function onPointerUp(e: PointerEvent) {
   fill: rgba(248, 113, 113, 0.22);
   animation: combat-hex-pulse 1.15s ease-in-out infinite;
 }
+.hex-overlay--tutorial-highlight {
+  /* Непрозрачный rgb + fill-opacity: иначе rgba × fill-opacity почти незаметен */
+  fill: rgb(56, 189, 248);
+  stroke: rgb(186, 230, 253);
+  stroke-width: 3.2;
+  animation: tutorial-hex-pulse 1.15s ease-in-out infinite;
+}
 .hex-overlay--interactive-hover {
   fill: rgba(255, 255, 255, 0.18);
   stroke: rgba(248, 250, 252, 0.98);
@@ -1155,6 +1177,12 @@ function onPointerUp(e: PointerEvent) {
   stroke: rgba(248, 113, 113, 1);
   stroke-width: 3.1;
   filter: drop-shadow(0 0 6px rgba(248, 113, 113, 0.7));
+}
+.hex.tutorial-highlight {
+  stroke: rgb(125, 211, 252);
+  stroke-width: 3.2;
+  filter: drop-shadow(0 0 7px rgba(56, 189, 248, 0.85));
+  animation: tutorial-outline-pulse 1.15s ease-in-out infinite;
 }
 .hex.supply-chain {
   stroke: rgba(52, 211, 153, 0.75);
@@ -1261,6 +1289,30 @@ function onPointerUp(e: PointerEvent) {
     fill-opacity: 0.85;
   }
 }
+@keyframes tutorial-hex-pulse {
+  0%,
+  100% {
+    fill-opacity: 0.1;
+    stroke-opacity: 0.35;
+  }
+  50% {
+    fill-opacity: 0.48;
+    stroke-opacity: 1;
+  }
+}
+@keyframes tutorial-outline-pulse {
+  0%,
+  100% {
+    stroke-opacity: 0.35;
+    stroke-width: 2.4;
+    filter: drop-shadow(0 0 2px rgba(56, 189, 248, 0.25));
+  }
+  50% {
+    stroke-opacity: 1;
+    stroke-width: 3.6;
+    filter: drop-shadow(0 0 10px rgba(56, 189, 248, 0.95));
+  }
+}
 @keyframes ship-incoming-pulse {
   0%,
   100% {
@@ -1289,10 +1341,21 @@ function onPointerUp(e: PointerEvent) {
 }
 @media (prefers-reduced-motion: reduce) {
   .hex-overlay--combat-pulse,
+  .hex-overlay--tutorial-highlight,
+  .hex.tutorial-highlight,
   .ship-incoming-glyph,
   .ship-active-move-glyph,
   .ship-death-glyph {
     animation: none;
+  }
+  .hex-overlay--tutorial-highlight {
+    fill-opacity: 0.32;
+    stroke-opacity: 0.95;
+  }
+  .hex.tutorial-highlight {
+    stroke-opacity: 1;
+    stroke-width: 3.2;
+    filter: drop-shadow(0 0 7px rgba(56, 189, 248, 0.85));
   }
   .ship-death-glyph {
     opacity: 0.45;

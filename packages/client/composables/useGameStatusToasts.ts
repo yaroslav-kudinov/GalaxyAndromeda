@@ -28,14 +28,29 @@ export function useGameStatusToasts(
   snapshot: Ref<GameSnapshot | null | undefined>,
   playerId: Ref<string>,
   playerName: Ref<string>,
+  options?: { quiet?: Ref<boolean> | ComputedRef<boolean> },
 ) {
   const { play: playSfx } = useGameSfx()
   const toasts = ref<GameToast[]>([])
   let seq = 0
   let bootstrapped = false
 
+  function isQuiet(): boolean {
+    return Boolean(options?.quiet?.value)
+  }
+
   function removeToast(id: number) {
     toasts.value = toasts.value.filter((t) => t.id !== id)
+  }
+
+  if (options?.quiet) {
+    watch(
+      () => options.quiet!.value,
+      (quiet) => {
+        if (quiet) toasts.value = []
+      },
+      { immediate: true },
+    )
   }
 
   function pushToast(
@@ -61,16 +76,22 @@ export function useGameStatusToasts(
   }
 
   function announceIdentity() {
+    if (isQuiet()) return
     pushToast('identity', `Вы: ${playerName.value}`, 'Ваша сторона', true)
   }
 
   function announcePhase(phase: Phase, turnNumber: number) {
+    if (isQuiet()) return
     pushToast('phase', PHASE_LABELS[phase], `Ход ${turnNumber}`)
   }
 
   function announceActivePlayer(activeId: string | null | undefined, playTurnSfx: boolean) {
     if (!activeId) return
     const isMe = activeId === playerId.value
+    if (isQuiet()) {
+      if (playTurnSfx && isMe) playSfx('turn')
+      return
+    }
     if (isMe) {
       pushToast('turn', 'Ваш ход', PHASE_LABELS[snapshot.value?.phase ?? 'planning'], true)
       if (playTurnSfx) playSfx('turn')

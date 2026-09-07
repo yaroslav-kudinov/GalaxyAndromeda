@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { GalaxySaveFile, GameSnapshot, HexCoord, LegalAction, MapDefinition, ShipMovePlan, BombardmentPlan, CombatOptions, CombatResolutionResult } from '@galaxy/rules'
+import type { GalaxySaveFile, GameSnapshot, HexCoord, LegalAction, MapDefinition, ScenarioHighlight, ScenarioStep, ShipMovePlan, BombardmentPlan, CombatOptions, CombatResolutionResult } from '@galaxy/rules'
 import {
   createEmptyMap,
   executeMarkerBombardment,
@@ -115,10 +115,68 @@ const saveFile = ref<GalaxySaveFile | null>(null)
 const selectedKey = ref<string | null>(null)
 const panelCollapsed = ref(false)
 const legalActions = ref<LegalAction[]>([])
+const tutorialMode = ref(false)
 const serverStatus = ref<'idle' | 'loading' | 'online' | 'offline'>('idle')
 const loadError = ref<string | null>(null)
 const participationHint = ref<string | null>(null)
-const tutorialCoach = ref<{ title: string; body: string; manual?: boolean } | null>(null)
+const tutorialCoach = ref<{
+  title: string
+  body: string
+  objective?: string
+  why?: string
+  hint?: string
+  manual: boolean
+  stepNumber: number
+  stepCount: number
+  highlight?: ScenarioHighlight
+  allowedActions?: ScenarioStep['allowedActions']
+} | null>(null)
+const tutorialHighlightKeys = computed(() => {
+  const highlight = tutorialCoach.value?.highlight
+  return highlight && typeof highlight === 'object'
+    ? [hexKey(highlight.q, highlight.r)]
+    : []
+})
+function tutorialAllowsAction(actionId: string): boolean {
+  if (!tutorialMode.value) return true
+  const allowed = tutorialCoach.value?.allowedActions
+  // Пока шаг не пришёл — опираемся на отфильтрованные legalActions.
+  if (allowed === undefined) {
+    return legalActions.value.some((action) => action.id === actionId)
+  }
+  // Пустой список = информационный шаг без действий игрока.
+  if (allowed.length === 0) return false
+  return allowed.some((entry) =>
+    (typeof entry === 'string' ? entry : entry.actionId) === actionId,
+  )
+}
+const tutorialAllowedSourceKeys = computed(() => {
+  if (!tutorialMode.value) return [] as string[]
+  const keys = new Set<string>()
+  for (const allowed of tutorialCoach.value?.allowedActions ?? []) {
+    if (typeof allowed === 'string') continue
+    const params = allowed.params
+    const coord = (params?.from ?? params?.coord) as HexCoord | undefined
+    if (coord && Number.isFinite(coord.q) && Number.isFinite(coord.r)) {
+      keys.add(hexKey(coord.q, coord.r))
+    }
+  }
+  return [...keys]
+})
+const tutorialMarkerActionModes = computed(() => {
+  if (!tutorialMode.value) return undefined
+  const ids = new Set(
+    (tutorialCoach.value?.allowedActions ?? []).map((allowed) =>
+      typeof allowed === 'string' ? allowed : allowed.actionId,
+    ),
+  )
+  const modes: Array<'movement' | 'bombardment' | 'build' | 'sacrifice'> = []
+  if (ids.has('execute-marker-movement')) modes.push('movement')
+  if (ids.has('execute-marker-bombardment')) modes.push('bombardment')
+  if (ids.has('execute-production')) modes.push('build')
+  if (ids.has('execute-destroyer-sacrifice')) modes.push('sacrifice')
+  return modes
+})
 
 const observationSync = useObservationSync({
   enabled: () =>
@@ -148,7 +206,7 @@ let lastHudHeaderHeightPx = 0
 
 /** Верхняя плашка, без бейджа/модалок — иначе min-height завязанный на CSS-var разгоняет высоту. */
 const HUD_HEADER_MIN_PX = 48
-const HUD_HEADER_MAX_PX = 220
+const HUD_HEADER_MAX_PX = 140
 
 function syncHudChromeHeight() {
   const header = hudTopRef.value
@@ -355,7 +413,12 @@ watch(roomBootstrap, () => {
   if (needsJoin.value) syncDefaultJoinSlot()
 })
 
-const { toasts: statusToasts, pushToast: pushStatusToast } = useGameStatusToasts(snapshot, playerId, myPlayerName)
+const { toasts: statusToasts, pushToast: pushStatusToast } = useGameStatusToasts(
+  snapshot,
+  playerId,
+  myPlayerName,
+  { quiet: tutorialMode },
+)
 const { play: playGameSfx, muted: sfxMuted, toggleMute: toggleSfxMute } = useGameSfx()
 
 const activePlayerName = computed(() => {
@@ -918,7 +981,10 @@ watch(
 const supplyChainHighlightKeys = computed((): string[] => [])
 
 const canPlaceMarkers = computed(
-  () => isMyTurn.value && snapshot.value?.phase === 'planning',
+  () =>
+    isMyTurn.value
+    && snapshot.value?.phase === 'planning'
+    && (tutorialAllowsAction('toggle-marker') || tutorialAllowsAction('remove-marker')),
 )
 
 const actionMarkerUsedThisTurn = computed(() =>
@@ -936,7 +1002,9 @@ const phaseAdvanceBlockedReason = computed(() => {
   return actionMarkerAdvanceBlockMessage(saveFile.value.game, playerId.value)
 })
 
-const canAdvancePhase = computed(() => !phaseAdvanceBlockedReason.value)
+const canAdvancePhase = computed(
+  () => !phaseAdvanceBlockedReason.value && tutorialAllowsAction('advance-phase'),
+)
 
 /** Хук для модалки перемещения: открывать только если маркер ещё не исполнен */
 const canOpenMovementModal = computed(() => {
@@ -1024,12 +1092,36 @@ function applyObservation(
   if (revision != null) appliedObservationRevision.value = revision
 
   legalActions.value = obs.legalActions ?? []
-  const tutorial = (obs as { tutorial?: { scenarioStep?: { title: string; body: string; id: string } } }).tutorial
+  const tutorial = (obs as {
+    tutorial?: {
+      scenarioStep?: {
+        id: string
+        title: string
+        body: string
+        objective?: string
+        why?: string
+        hint?: string
+        highlight?: ScenarioHighlight
+        manual: boolean
+        stepNumber: number
+        stepCount: number
+        allowedActions?: ScenarioStep['allowedActions']
+      }
+    }
+  }).tutorial
+  tutorialMode.value = Boolean(tutorial)
   if (tutorial?.scenarioStep) {
     tutorialCoach.value = {
       title: tutorial.scenarioStep.title,
       body: tutorial.scenarioStep.body,
-      manual: true,
+      objective: tutorial.scenarioStep.objective,
+      why: tutorial.scenarioStep.why,
+      hint: tutorial.scenarioStep.hint,
+      highlight: tutorial.scenarioStep.highlight,
+      manual: tutorial.scenarioStep.manual,
+      stepNumber: tutorial.scenarioStep.stepNumber,
+      stepCount: tutorial.scenarioStep.stepCount,
+      allowedActions: tutorial.scenarioStep.allowedActions,
     }
   } else if (tutorial) {
     tutorialCoach.value = null
@@ -1226,6 +1318,12 @@ const canRemoveActionMarkerOnSelected = computed(() => {
 
 const remainingActionMarkersCount = computed(() => actionMarkers.value.length)
 
+function filterTutorialMarkerKeys(keys: string[]): string[] {
+  if (!tutorialMode.value || !tutorialAllowedSourceKeys.value.length) return keys
+  const allowed = new Set(tutorialAllowedSourceKeys.value)
+  return keys.filter((key) => allowed.has(key))
+}
+
 const availableActionMarkerKeys = computed(() => {
   if (!snapshot.value || !isMyTurn.value) return [] as string[]
   const game = snapshot.value
@@ -1234,14 +1332,14 @@ const availableActionMarkerKeys = computed(() => {
   const keys = () => mine.map((m) => hexKey(m.coord.q, m.coord.r))
 
   if (phase === 'actions' && canExecuteActionMarkerThisTurn(game, playerId.value)) {
-    return keys()
+    return filterTutorialMarkerKeys(keys())
   }
 
   if (
     phase === 'planning'
     && canRemoveActionMarkerThisTurn(game, playerId.value)
   ) {
-    return keys()
+    return filterTutorialMarkerKeys(keys())
   }
 
   if (
@@ -1249,7 +1347,7 @@ const availableActionMarkerKeys = computed(() => {
     && !canExecuteActionMarkerThisTurn(game, playerId.value)
     && canRemoveActionMarkerThisTurn(game, playerId.value)
   ) {
-    return keys()
+    return filterTutorialMarkerKeys(keys())
   }
 
   return []
@@ -1270,7 +1368,7 @@ const boardInteractiveKeys = computed(() => {
       game.actionMarkers.some((m) => m.id === cell.actionMarkerId && m.ownerId === playerId.value)
     if (hasMyShip || hasMyPowerCenter || hasMyMarker) keys.push(key)
   }
-  return keys
+  return filterTutorialMarkerKeys(keys)
 })
 
 const boardReachableKeys = computed(() => {
@@ -1351,6 +1449,7 @@ function hasMyActionMarkerAt(q: number, r: number): boolean {
 const canSurrender = computed(() => {
   if (!snapshot.value || snapshot.value.gameOver) return false
   if (roomMatchStatus.value === 'lobby') return false
+  if (!tutorialAllowsAction('surrender')) return false
   const me = snapshot.value.players.find((p) => p.id === playerId.value)
   return !!me && !me.eliminated
 })
@@ -2211,6 +2310,7 @@ function startPolling() {
   const generation = pollingGeneration
   const NORMAL_POLL_MS = 750
   const COMBAT_POLL_MS = 250
+  let rateLimitBackoffMs = 0
   const interval = () => (hasActivePendingCombat.value ? COMBAT_POLL_MS : NORMAL_POLL_MS)
   const scheduleNextPoll = (delay = interval()) => {
     if (
@@ -2225,6 +2325,7 @@ function startPolling() {
   const poll = async () => {
     if (generation !== pollingGeneration) return
     pollTimer = null
+    let nextDelay = interval()
     try {
       if (serverStatus.value !== 'online' || needsJoin.value) return
       // Действие уже вернёт свежий observation; важно всё равно запланировать
@@ -2237,14 +2338,23 @@ function startPolling() {
         observationSync.recordPollSuccess()
         persistLocal()
       }
+      rateLimitBackoffMs = 0
+      nextDelay = interval()
     } catch (e) {
       if (isRoomNotFoundError(e)) {
         redirectRoomClosed()
       } else {
         observationSync.recordPollFailure(e)
+        if (e instanceof GameApiError && e.status === 429) {
+          rateLimitBackoffMs = Math.min(
+            15_000,
+            Math.max(2_000, (rateLimitBackoffMs || 1_000) * 2),
+          )
+          nextDelay = rateLimitBackoffMs
+        }
       }
     } finally {
-      scheduleNextPoll()
+      scheduleNextPoll(nextDelay)
     }
   }
   scheduleNextPoll(0)
@@ -2706,6 +2816,7 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
     <section class="board-layer">
       <GameBoard
         v-if="boardCells.length"
+        :class="{ 'tutorial-board-highlight': tutorialCoach?.highlight === 'board' }"
         :cells="boardCells"
         mode="game"
         :auto-fit-on-map-change="true"
@@ -2714,6 +2825,7 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
         :reachable-keys="boardReachableKeys"
         :contested-keys="boardContestedKeys"
         :combat-pulse-keys="boardCombatPulseKeys"
+        :tutorial-highlight-keys="tutorialHighlightKeys"
         :incoming-ship-ids="boardIncomingShipIds"
         :active-ship-ids="boardActiveShipIds"
         :combat-ghosts="boardCombatGhosts"
@@ -2904,6 +3016,8 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
       :map="saveFile.map"
       :player-id="playerId"
       :source="markerActionSource"
+      :allowed-modes="tutorialMarkerActionModes"
+      :allow-remove-marker="!tutorialMode || tutorialAllowsAction('remove-marker')"
       @close="closeMarkerActionModal"
       @start-pick="startMarkerMapPick"
       @execute-build="confirmMarkerBuild($event.orders)"
@@ -2989,12 +3103,83 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
     </div>
 
     <div class="hud-chrome">
-      <header ref="hudTopRef" class="hud-top">
+      <header ref="hudTopRef" class="hud-top" :class="{ 'hud-top--tutorial': !!tutorialCoach }">
         <div class="hud-top-left">
-          <NuxtLink to="/" class="back-link">← Lobby</NuxtLink>
-          <div v-if="saveFile" class="hud-title">
+          <NuxtLink to="/" class="back-link">← Лобби</NuxtLink>
+          <div v-if="saveFile" class="hud-title" :title="`Комната ${roomId}`">
             <strong>{{ saveFile.map.name }}</strong>
-            <span class="hud-id">{{ roomId }}</span>
+          </div>
+          <div class="hud-tools">
+            <button
+              v-if="canSurrender"
+              type="button"
+              class="sfx-mute-btn"
+              title="Сдаться"
+              :disabled="!canSurrender"
+              @click="surrenderMatch"
+            >
+              Сдаться
+            </button>
+            <span class="server-pill" :class="serverStatus">
+              {{ serverStatus === 'online' ? 'Сервер' : serverStatus === 'offline' ? 'Offline' : '…' }}
+            </span>
+            <button
+              type="button"
+              class="sfx-mute-btn"
+              :title="sfxMuted ? 'Включить звуки' : 'Выключить звуки'"
+              :aria-label="sfxMuted ? 'Включить звуки' : 'Выключить звуки'"
+              :aria-pressed="sfxMuted"
+              @click="toggleSfxMute"
+            >
+              {{ sfxMuted ? '🔇' : '🔊' }}
+            </button>
+            <SoundtrackPanel placement="hud" />
+            <button
+              type="button"
+              class="bug-report-btn"
+              title="Сообщить о баге"
+              @click="bugReportOpen = true"
+            >
+              Баг
+            </button>
+            <div class="rules-help-wrap">
+              <button
+                type="button"
+                class="rules-help-btn"
+                title="Справка по правилам"
+                :aria-describedby="showRulesNewbieTip ? 'rules-newbie-tip' : undefined"
+                @click="openRulesHelp"
+              >
+                Правила
+              </button>
+              <div
+                v-if="showRulesNewbieTip"
+                id="rules-newbie-tip"
+                class="rules-newbie-tip"
+                role="status"
+              >
+                <p class="rules-newbie-tip-text">
+                  Не знаете что делать? Ознакомьтесь с разделом правил!
+                </p>
+                <button
+                  type="button"
+                  class="rules-newbie-tip-dismiss"
+                  title="Скрыть подсказку"
+                  aria-label="Скрыть подсказку"
+                  @click.stop="dismissRulesNewbieTip"
+                >
+                  ×
+                </button>
+              </div>
+            </div>
+            <button
+              v-if="serverStatus === 'online' && roomBootstrap && roomBootstrap.playerCount < roomBootstrap.maxPlayers"
+              type="button"
+              class="invite-btn"
+              @click="copyInviteLink"
+            >
+              {{ inviteCopied ? 'Ссылка скопирована' : 'Ссылка-приглашение' }}
+            </button>
           </div>
         </div>
 
@@ -3017,94 +3202,19 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
         <div v-else class="hud-top-center hud-top-center--idle" aria-hidden="true" />
 
         <div class="hud-top-right">
-          <button
-            v-if="canSurrender"
-            type="button"
-            class="sfx-mute-btn"
-            title="Сдаться"
-            @click="surrenderMatch"
-          >
-            Сдаться
-          </button>
-          <ScenarioCoachPanel
-            v-if="tutorialCoach"
-            :title="tutorialCoach.title"
-            :body="tutorialCoach.body"
-            :manual="tutorialCoach.manual"
-            @next="onScenarioCoachNext"
-          />
           <PhasePanel
             v-if="snapshot"
+            :class="{ 'tutorial-panel-highlight': tutorialCoach?.highlight === 'phase-panel' }"
             variant="hero"
             :phase="snapshot.phase"
             :turn-number="snapshot.turnNumber"
             :active-player-id="snapshot.activePlayerId"
             :players="snapshot.players"
             :is-my-turn="isMyTurn"
-            :prompt="phaseGuidance?.prompt"
-            :count-hint="phaseGuidance?.countHint"
+            :prompt="tutorialCoach ? undefined : phaseGuidance?.prompt"
+            :count-hint="tutorialCoach ? undefined : phaseGuidance?.countHint"
             :guidance-accent="phaseGuidance?.accent"
           />
-          <span class="server-pill" :class="serverStatus">
-            {{ serverStatus === 'online' ? 'Сервер' : serverStatus === 'offline' ? 'Offline' : '…' }}
-          </span>
-          <button
-            type="button"
-            class="sfx-mute-btn"
-            :title="sfxMuted ? 'Включить звуки' : 'Выключить звуки'"
-            :aria-label="sfxMuted ? 'Включить звуки' : 'Выключить звуки'"
-            :aria-pressed="sfxMuted"
-            @click="toggleSfxMute"
-          >
-            {{ sfxMuted ? '🔇' : '🔊' }}
-          </button>
-          <SoundtrackPanel placement="hud" />
-          <button
-            type="button"
-            class="bug-report-btn"
-            title="Сообщить о баге"
-            @click="bugReportOpen = true"
-          >
-            Баг
-          </button>
-          <div class="rules-help-wrap">
-            <button
-              type="button"
-              class="rules-help-btn"
-              title="Справка по правилам"
-              :aria-describedby="showRulesNewbieTip ? 'rules-newbie-tip' : undefined"
-              @click="openRulesHelp"
-            >
-              Правила
-            </button>
-            <div
-              v-if="showRulesNewbieTip"
-              id="rules-newbie-tip"
-              class="rules-newbie-tip"
-              role="status"
-            >
-              <p class="rules-newbie-tip-text">
-                Не знаете что делать? Ознакомьтесь с разделом правил!
-              </p>
-              <button
-                type="button"
-                class="rules-newbie-tip-dismiss"
-                title="Скрыть подсказку"
-                aria-label="Скрыть подсказку"
-                @click.stop="dismissRulesNewbieTip"
-              >
-                ×
-              </button>
-            </div>
-          </div>
-          <button
-            v-if="serverStatus === 'online' && roomBootstrap && roomBootstrap.playerCount < roomBootstrap.maxPlayers"
-            type="button"
-            class="invite-btn"
-            @click="copyInviteLink"
-          >
-            {{ inviteCopied ? 'Ссылка скопирована' : 'Ссылка-приглашение' }}
-          </button>
         </div>
       </header>
 
@@ -3117,14 +3227,30 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
         @close="bugReportOpen = false"
       />
 
-      <div class="you-plaque-slot" aria-live="polite">
-        <div
-          class="you-plaque"
-          :class="{ 'you-plaque--turn': isMyTurn }"
-          :style="youBadgeStyle"
-          :title="`Вы — ${myPlayerName}`"
-        >
-          {{ myPlayerName }}
+      <div class="hud-below">
+        <div class="hud-below-left">
+          <ScenarioCoachPanel
+            v-if="tutorialCoach"
+            :title="tutorialCoach.title"
+            :body="tutorialCoach.body"
+            :objective="tutorialCoach.objective"
+            :why="tutorialCoach.why"
+            :hint="tutorialCoach.hint"
+            :manual="tutorialCoach.manual"
+            :step-number="tutorialCoach.stepNumber"
+            :step-count="tutorialCoach.stepCount"
+            @next="onScenarioCoachNext"
+          />
+          <div class="you-plaque-slot" aria-live="polite">
+            <div
+              class="you-plaque"
+              :class="{ 'you-plaque--turn': isMyTurn }"
+              :style="youBadgeStyle"
+              :title="`Вы — ${myPlayerName}`"
+            >
+              {{ myPlayerName }}
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -3343,6 +3469,14 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
   background-position: center;
   background-repeat: no-repeat;
 }
+.tutorial-panel-highlight {
+  outline: 2px solid rgba(56, 189, 248, 0.9);
+  outline-offset: 3px;
+  box-shadow: 0 0 18px rgba(56, 189, 248, 0.45);
+}
+.tutorial-board-highlight {
+  box-shadow: inset 0 0 0 3px rgba(56, 189, 248, 0.65);
+}
 .game-over-overlay {
   position: fixed;
   inset: 0;
@@ -3456,11 +3590,13 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: center;
-  gap: 0.5rem 0.75rem;
-  min-height: 3.75rem;
-  padding: 0.5rem 0.75rem;
-  background: linear-gradient(to bottom, rgba(15, 23, 42, 0.95), rgba(15, 23, 42, 0.65), transparent);
-  backdrop-filter: blur(6px);
+  gap: 0.4rem 0.75rem;
+  min-height: 3.25rem;
+  padding: 0.4rem 0.75rem;
+  border-bottom: 1px solid rgba(71, 85, 105, 0.45);
+  background: rgba(15, 23, 42, 0.92);
+  backdrop-filter: blur(10px);
+  box-shadow: 0 8px 24px rgba(2, 6, 23, 0.35);
 }
 .hud-top-left,
 .hud-top-center,
@@ -3470,34 +3606,72 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
 .hud-top-left {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
+  gap: 0.45rem 0.55rem;
   flex-wrap: wrap;
   justify-self: start;
+  grid-column: 1;
   min-width: 0;
+  z-index: 1;
 }
 .hud-top-center {
+  position: static;
+  transform: none;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 0.35rem;
+  gap: 0.2rem;
   justify-self: center;
-  max-width: min(440px, 42vw);
+  grid-column: 2;
+  max-width: min(280px, 22vw);
+  z-index: 2;
 }
 .hud-top-center--idle {
   pointer-events: none;
+  min-width: 0;
+  width: 0;
+  overflow: hidden;
 }
 .hud-top-right {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 0.65rem;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  gap: 0.4rem;
   justify-self: end;
+  grid-column: 3;
   min-width: 0;
+  z-index: 1;
 }
 .hud-top-right :deep(.phase-panel--hero) {
-  flex: 0 1 auto;
+  flex: 1 1 auto;
   justify-content: flex-end;
+  max-width: 100%;
+  min-width: 0;
+}
+.hud-tools {
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 0.28rem;
+  flex: 0 1 auto;
+  min-width: 0;
+}
+.hud-below {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.35rem 0.75rem 0;
+  pointer-events: none;
+}
+.hud-below-left {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.35rem;
+  max-width: min(24rem, calc(100vw - 22rem));
+  /* Колонка не должна ловить клики по карте; контролы включают захват сами */
+  pointer-events: none;
 }
 .hud-center-hint {
   margin: 0;
@@ -3589,23 +3763,32 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
   opacity: 0.9;
 }
 .back-link {
+  flex-shrink: 0;
   color: #93c5fd;
   text-decoration: none;
-  font-size: 0.85rem;
+  font-size: 0.82rem;
+  padding: 0.2rem 0.45rem;
+  border-radius: 6px;
+  border: 1px solid transparent;
+}
+.back-link:hover {
+  border-color: rgba(147, 197, 253, 0.35);
+  background: rgba(30, 41, 59, 0.65);
 }
 .you-plaque-slot {
   align-self: flex-start;
-  padding: 0.2rem 0.75rem 0.55rem;
+  padding: 0;
+  pointer-events: auto;
 }
 .you-plaque {
   display: inline-block;
-  max-width: min(360px, 62vw);
-  padding: 0.6rem 1.35rem 0.55rem;
-  border-radius: 12px;
+  max-width: min(280px, 52vw);
+  padding: 0.45rem 1rem 0.4rem;
+  border-radius: 10px;
   font-family: Orbitron, "Segoe UI", "Trebuchet MS", sans-serif;
-  font-size: 1.28rem;
+  font-size: 1.05rem;
   font-weight: 700;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.06em;
   line-height: 1.2;
   color: #fff;
   text-shadow:
@@ -3655,10 +3838,13 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
   display: flex;
   flex-direction: column;
   gap: 0.1rem;
+  min-width: 0;
 }
-.hud-id {
-  font-size: 0.72rem;
-  color: #94a3b8;
+.hud-title strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.95rem;
 }
 .server-pill {
   font-size: 0.72rem;
@@ -4126,11 +4312,16 @@ button,
 }
 .phase-advance-btn--hero {
   width: auto;
-  min-width: 11rem;
+  min-width: 10rem;
+  max-width: min(100%, 20rem);
   margin-top: 0;
-  padding: 0.55rem 1.25rem;
-  font-size: 0.92rem;
+  padding: 0.4rem 0.85rem;
+  font-size: 0.8rem;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.2;
+  text-align: center;
 }
 .phase-advance-btn:hover:not(:disabled) {
   filter: brightness(1.06);
@@ -4385,8 +4576,8 @@ button,
     --hud-header-height: 5.75rem;
   }
   .you-plaque {
-    font-size: 1.12rem;
-    padding: 0.5rem 1.15rem 0.45rem;
+    font-size: 0.98rem;
+    padding: 0.4rem 0.9rem 0.35rem;
   }
   .hud-top {
     min-height: 5.75rem;
@@ -4397,18 +4588,35 @@ button,
   .hud-top-left,
   .hud-top-center,
   .hud-top-right {
+    position: static;
+    transform: none;
     justify-self: stretch;
+    max-width: none;
+    grid-column: auto;
+    width: auto;
   }
   .hud-top-center {
-    max-width: none;
     order: 2;
+  }
+  .hud-top-center--idle {
+    display: none;
   }
   .hud-top-right {
     justify-content: flex-start;
+    flex-wrap: wrap;
     order: 3;
   }
   .hud-top-right :deep(.phase-panel--hero) {
     justify-content: flex-start;
+    max-width: none;
+    flex-wrap: wrap;
+  }
+  .hud-tools {
+    justify-content: flex-start;
+    flex-wrap: wrap;
+  }
+  .hud-below-left {
+    max-width: min(24rem, 94vw);
   }
   .phase-advance-btn--hero {
     width: 100%;

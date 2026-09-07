@@ -2,7 +2,12 @@
 const props = defineProps<{
   title: string
   body: string
+  objective?: string
+  why?: string
+  hint?: string
   manual?: boolean
+  stepNumber?: number
+  stepCount?: number
 }>()
 
 const emit = defineEmits<{ next: [] }>()
@@ -10,49 +15,121 @@ const emit = defineEmits<{ next: [] }>()
 
 <template>
   <aside class="coach-panel" aria-live="polite">
-    <p class="coach-badge">Обучение</p>
-    <h2 class="coach-title">{{ title }}</h2>
+    <header class="coach-head">
+      <p class="coach-badge">
+        Обучение
+        <span v-if="stepNumber && stepCount">· {{ stepNumber }}/{{ stepCount }}</span>
+      </p>
+      <h2 class="coach-title">{{ title }}</h2>
+    </header>
     <p class="coach-body">{{ body }}</p>
+    <section v-if="objective" class="coach-objective">
+      <strong>Сейчас</strong>
+      <p>{{ objective }}</p>
+    </section>
+    <details v-if="why || hint" class="coach-more">
+      <summary>Подробнее</summary>
+      <p v-if="why"><strong>Зачем:</strong> {{ why }}</p>
+      <p v-if="hint"><strong>Подсказка:</strong> {{ hint }}</p>
+    </details>
     <button v-if="manual" type="button" class="coach-next" @click="emit('next')">
-      Далее
+      {{ stepNumber === stepCount ? 'Завершить обучение' : 'Далее' }}
     </button>
   </aside>
 </template>
 
 <style scoped>
 .coach-panel {
-  background: rgba(15, 23, 42, 0.92);
-  border: 1px solid #475569;
-  border-radius: 8px;
-  padding: 0.75rem 1rem;
-  max-width: 22rem;
-  margin-bottom: 0.5rem;
+  width: min(22rem, calc(100vw - 1.5rem));
+  padding: 0.7rem 0.8rem 0.75rem;
+  border: 1px solid rgba(56, 189, 248, 0.35);
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.94);
+  box-shadow: 0 10px 28px rgba(2, 6, 23, 0.45);
+  backdrop-filter: blur(8px);
+  /* Панель лежит поверх левого края карты (стартовые клетки обучения).
+     Пропускаем клики к гексам; кнопки и «Подробнее» снова включают захват. */
+  pointer-events: none;
+}
+.coach-panel .coach-next,
+.coach-panel .coach-more {
+  pointer-events: auto;
+}
+.coach-head {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  margin-bottom: 0.35rem;
 }
 .coach-badge {
-  font-size: 0.75rem;
+  margin: 0;
+  font-size: 0.7rem;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: #94a3b8;
-  margin: 0 0 0.35rem;
+  letter-spacing: 0.06em;
+  color: #7dd3fc;
 }
 .coach-title {
-  font-size: 1rem;
-  margin: 0 0 0.35rem;
+  margin: 0;
+  font-size: 0.98rem;
+  line-height: 1.25;
   color: #f8fafc;
 }
 .coach-body {
-  font-size: 0.9rem;
-  line-height: 1.45;
-  color: #cbd5e1;
   margin: 0;
+  font-size: 0.82rem;
+  line-height: 1.4;
+  color: #cbd5e1;
+}
+.coach-objective {
+  margin-top: 0.55rem;
+  padding: 0.45rem 0.55rem;
+  border-radius: 7px;
+  border: 1px solid rgba(56, 189, 248, 0.4);
+  background: rgba(14, 116, 144, 0.2);
+}
+.coach-objective strong {
+  display: block;
+  margin-bottom: 0.15rem;
+  color: #e0f2fe;
+  font-size: 0.72rem;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+.coach-objective p,
+.coach-more p {
+  margin: 0;
+  color: #e2e8f0;
+  font-size: 0.82rem;
+  line-height: 1.35;
+}
+.coach-more {
+  margin-top: 0.45rem;
+  color: #bae6fd;
+  font-size: 0.78rem;
+}
+.coach-more summary {
+  cursor: pointer;
+  user-select: none;
+}
+.coach-more p + p {
+  margin-top: 0.35rem;
+}
+.coach-more strong {
+  color: #f8fafc;
 }
 .coach-next {
+  display: block;
+  width: 100%;
   margin-top: 0.65rem;
-  padding: 0.35rem 0.75rem;
-  border-radius: 6px;
-  border: 1px solid #64748b;
-  background: #1e293b;
-  color: #f1f5f9;
+  padding: 0.45rem 0.75rem;
+  border-radius: 7px;
+  border: 1px solid rgba(56, 189, 248, 0.55);
+  background: #0e7490;
+  color: #f0f9ff;
+  font-weight: 600;
   cursor: pointer;
+}
+.coach-next:hover {
+  filter: brightness(1.08);
 }
 </style>

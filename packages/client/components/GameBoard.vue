@@ -43,6 +43,7 @@ const props = withDefaults(
     players?: PlayerState[]
     translucentCells?: boolean
     combatPulseKeys?: string[]
+    tutorialHighlightKeys?: string[]
     incomingShipIds?: string[]
     activeShipIds?: string[]
     combatGhosts?: {
@@ -80,6 +81,7 @@ const props = withDefaults(
     players: () => [],
     translucentCells: false,
     combatPulseKeys: () => [],
+    tutorialHighlightKeys: () => [],
     incomingShipIds: () => [],
     activeShipIds: () => [],
     combatGhosts: () => [],
@@ -129,6 +131,7 @@ const markerKeys = computed(() => boardMarkerKeys(props.cells))
     :players="players"
     :translucent-cells="translucentCells"
     :combat-pulse-keys="combatPulseKeys"
+    :tutorial-highlight-keys="tutorialHighlightKeys"
     :incoming-ship-ids="incomingShipIds"
     :active-ship-ids="activeShipIds"
     :combat-ghosts="combatGhosts"

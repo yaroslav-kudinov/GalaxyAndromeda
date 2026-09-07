@@ -34,6 +34,7 @@ import {
   applyCombatResultToSnapshot,
   beginOrAwaitCombatContinuation,
   buildCombatPreview,
+  buildCombatPreviewFromPending,
   combatPrepOf,
   combatRoundStateOf,
   confirmCombatDestruction,
@@ -745,6 +746,8 @@ export function getLegalActionsForSnapshot(
     })
   }
 
+  appendCombatParticipantActions(game, playerId, actions)
+
   if (game.phase === 'actions' && game.activePlayerId === playerId) {
     const ownMarkers = game.actionMarkers.filter((m) => m.ownerId === playerId)
     if (mustResolveActionMarkerBeforeAdvance(game, playerId)) {
@@ -770,6 +773,68 @@ export function getLegalActionsForSnapshot(
   }
 
   return actions
+}
+
+/** Действия боя доступны участникам даже вне своего хода фазы. */
+function appendCombatParticipantActions(
+  game: GameSnapshot,
+  playerId: string,
+  actions: LegalAction[],
+): void {
+  const pending = game.pendingCombat
+  if (!pending) return
+  const me = game.players.find((p) => p.id === playerId)
+  if (!me || me.eliminated) return
+
+  const pushUnique = (action: LegalAction) => {
+    if (!actions.some((candidate) => candidate.id === action.id)) actions.push(action)
+  }
+
+  if (pending.phase === 'prep') {
+    const prep = combatPrepOf(pending)
+    if (!prep) return
+    const isAttacker = pending.attackerId === playerId
+    const isDefender = prep.defenderId === playerId
+    const preview = buildCombatPreviewFromPending(game)
+    const isSupport = Boolean(
+      preview?.supportCandidates?.some((candidate) => candidate.playerId === playerId),
+    )
+    if (!isAttacker && !isDefender && !isSupport) return
+    if (pending.trigger === 'bombardment' && !isAttacker) return
+    pushUnique({
+      id: 'update-combat-prep',
+      type: 'combat',
+      description: 'Готовность к бою',
+    })
+    return
+  }
+
+  if (pending.phase === 'awaiting-destruction') {
+    if (pending.roundState.winnerId === playerId) {
+      pushUnique({
+        id: 'confirm-combat-destruction',
+        type: 'combat',
+        description: 'Подтвердить уничтожение',
+      })
+    }
+    return
+  }
+
+  if (pending.phase === 'awaiting-continue') {
+    const isAttacker = pending.attackerId === playerId
+    const isDefender = pending.defenderIds.includes(playerId)
+    if (!isAttacker && !isDefender) return
+    pushUnique({
+      id: 'continue-combat',
+      type: 'combat',
+      description: 'Продолжить бой',
+    })
+    pushUnique({
+      id: 'stop-combat',
+      type: 'combat',
+      description: 'Отступить',
+    })
+  }
 }
 
 export function applyGameActionOnSnapshot(

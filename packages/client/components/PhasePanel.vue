@@ -79,15 +79,18 @@ const activePlayerStyle = computed(() => {
 .phase-panel--hero {
   flex: 1;
   min-width: 0;
-  gap: 0.5rem 1rem;
-  font-size: 0.92rem;
+  gap: 0.4rem 0.65rem;
+  font-size: 0.88rem;
+  flex-wrap: nowrap;
+  align-items: center;
 }
 
 .phase-primary {
   display: flex;
   align-items: center;
-  gap: 0.65rem;
-  flex-wrap: wrap;
+  gap: 0.5rem;
+  flex-wrap: nowrap;
+  flex-shrink: 0;
 }
 
 .phase-badge {
@@ -100,8 +103,9 @@ const activePlayerStyle = computed(() => {
 }
 
 .phase-panel--hero .phase-badge {
-  padding: 0.45rem 0.9rem;
-  font-size: 1rem;
+  padding: 0.28rem 0.65rem;
+  font-size: 0.88rem;
+  white-space: nowrap;
 }
 
 .phase--events .phase-badge {
@@ -122,9 +126,10 @@ const activePlayerStyle = computed(() => {
 }
 
 .phase-panel--hero .turn-meta {
-  font-size: 0.95rem;
+  font-size: 0.85rem;
   font-weight: 600;
   color: #e2e8f0;
+  white-space: nowrap;
 }
 
 .phase-guidance {
@@ -134,6 +139,13 @@ const activePlayerStyle = computed(() => {
   border-radius: 8px;
   border: 1px solid rgba(100, 116, 139, 0.45);
   background: rgba(15, 23, 42, 0.55);
+}
+
+.phase-panel--hero .phase-guidance {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: 16rem;
+  padding: 0.22rem 0.5rem;
 }
 
 .phase-guidance.planning-action {
@@ -157,6 +169,14 @@ const activePlayerStyle = computed(() => {
   color: #f8fafc;
 }
 
+.phase-panel--hero .phase-count {
+  font-size: 0.82rem;
+  line-height: 1.25;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .phase-secondary {
   margin: 0.15rem 0 0;
   font-size: 0.82rem;
@@ -172,8 +192,21 @@ const activePlayerStyle = computed(() => {
   color: #cbd5e1;
 }
 
+.phase-panel--hero .phase-prompt {
+  margin: 0;
+  font-size: 0.75rem;
+  line-height: 1.25;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .phase-count + .phase-prompt {
   margin-top: 0.2rem;
+}
+
+.phase-panel--hero .phase-count + .phase-prompt {
+  margin-top: 0.1rem;
 }
 
 .active-player-badge {
@@ -197,8 +230,10 @@ const activePlayerStyle = computed(() => {
 }
 
 .phase-panel--hero .active-player-badge {
-  padding: 0.4rem 0.85rem;
-  font-size: 0.9rem;
+  padding: 0.28rem 0.7rem;
+  font-size: 0.85rem;
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .active-player-badge--you {

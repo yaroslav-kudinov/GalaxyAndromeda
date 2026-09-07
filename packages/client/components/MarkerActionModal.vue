@@ -14,12 +14,21 @@ import {
 import type { ShipBuildOrder } from '~/composables/useProductionShipPick'
 import type { MarkerActionMode } from '~/composables/useActionOrderDraft'
 
-const props = defineProps<{
-  snapshot: GameSnapshot
-  map: MapDefinition
-  playerId: string
-  source: HexCoord
-}>()
+const props = withDefaults(
+  defineProps<{
+    snapshot: GameSnapshot
+    map: MapDefinition
+    playerId: string
+    source: HexCoord
+    /** В обучении скрывает типы приказов, которые не относятся к текущему шагу. */
+    allowedModes?: MarkerActionMode[]
+    allowRemoveMarker?: boolean
+  }>(),
+  {
+    allowedModes: undefined,
+    allowRemoveMarker: true,
+  },
+)
 
 const emit = defineEmits<{
   close: []
@@ -43,6 +52,8 @@ const selectedShipIds = ref<string[]>([])
 const sacrificeShipId = ref<string | null>(null)
 const buildCounts = ref<Partial<Record<ShipType, number>>>({})
 const stepError = ref<string | null>(null)
+const modeAllowed = (mode: MarkerActionMode) =>
+  props.allowedModes === undefined || props.allowedModes.includes(mode)
 
 function shipRangeLabel(
   opt: import('@galaxy/rules').MovableShipOption | import('@galaxy/rules').BombardableShipOption,
@@ -76,7 +87,9 @@ const sacrificeDestroyerOptions = computed(() =>
   getSacrificableDestroyersAtMarker(props.snapshot, props.playerId, props.source),
 )
 
-const showSacrificeTab = computed(() => sacrificeDestroyerOptions.value.length > 0)
+const showSacrificeTab = computed(
+  () => modeAllowed('sacrifice') && sacrificeDestroyerOptions.value.length > 0,
+)
 
 const shipOptions = computed(() => {
   if (actionMode.value === 'build' || actionMode.value === 'sacrifice') return []
@@ -148,6 +161,14 @@ function resetForm() {
 watch(showSacrificeTab, (visible) => {
   if (!visible && actionMode.value === 'sacrifice') actionMode.value = 'movement'
 })
+
+watch(
+  () => props.allowedModes,
+  (modes) => {
+    if (modes?.length && !modes.includes(actionMode.value)) actionMode.value = modes[0]!
+  },
+  { immediate: true },
+)
 
 watch(() => props.source, () => resetForm(), { immediate: true })
 
@@ -326,6 +347,7 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
 
       <div class="mode-tabs" role="tablist" aria-label="Тип приказа">
         <button
+          v-if="modeAllowed('movement')"
           type="button"
           role="tab"
           class="mode-tab"
@@ -336,6 +358,7 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
           Перемещение
         </button>
         <button
+          v-if="modeAllowed('bombardment')"
           type="button"
           role="tab"
           class="mode-tab"
@@ -357,6 +380,7 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
           Жертва эсминца
         </button>
         <button
+          v-if="modeAllowed('build')"
           type="button"
           role="tab"
           class="mode-tab"
@@ -546,7 +570,7 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
       <p v-if="stepError" class="step-error">{{ stepError }}</p>
 
       <footer class="modal-footer">
-        <button type="button" class="btn-danger-ghost" @click="onRemoveMarker">
+        <button v-if="allowRemoveMarker" type="button" class="btn-danger-ghost" @click="onRemoveMarker">
           Снять маркер без действия
         </button>
         <button type="button" class="btn-secondary" @click="emit('close')">Отмена</button>
