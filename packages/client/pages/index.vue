@@ -742,7 +742,6 @@ onUnmounted(() => {
             ·
             <NuxtLink to="/legal/privacy">Конфиденциальность</NuxtLink>
           </p>
-          <p class="landing-support">Поддержка: galaxy-andromeda@example.com</p>
         </footer>
 
         <p class="landing-meta">
