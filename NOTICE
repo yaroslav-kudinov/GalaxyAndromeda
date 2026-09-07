@@ -3,4 +3,3 @@ Third-party assets used in Galaxy Andromeda:
 - Kenney sound effects (CC0) — packages/client/public/sounds/LICENSE.txt
 - NASA public domain imagery — packages/client/components/GalaxyBackdrop.vue
 
-Replace galaxy-andromeda@example.com with your contact before public launch.
