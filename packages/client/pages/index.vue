@@ -39,7 +39,7 @@ const termsAccepted = ref(false)
 const termsDraft = ref(false)
 const tutorialBusy = ref(false)
 const tutorialSetupOpen = ref(false)
-const tutorialInDevelopment = true
+const tutorialInDevelopment = false
 const menuError = ref<string | null>(null)
 
 interface MapOption {

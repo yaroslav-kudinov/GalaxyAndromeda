@@ -2,13 +2,13 @@ import type { GameObservation, LegalAction } from './types.js'
 import type { BotPolicy, ScenarioStep } from './scenario.js'
 
 const SKIP_PREFERENCE = [
+  'update-combat-prep',
+  'confirm-combat-destruction',
+  'continue-combat',
+  'stop-combat',
   'advance-phase',
   'remove-marker',
   'remove-action-marker',
-  'stop-combat',
-  'update-combat-prep',
-  'continue-combat',
-  'confirm-combat-destruction',
   'execute-marker-movement',
   'execute-marker-bombardment',
 ]
@@ -18,10 +18,11 @@ function isInfoAction(action: LegalAction): boolean {
 }
 
 export function pickTutorialBotAction(
-  _observation: GameObservation,
+  observation: GameObservation,
   legalActions: LegalAction[],
   policy: BotPolicy,
-  _scenarioStep?: ScenarioStep,
+  scenarioStep?: ScenarioStep,
+  botId?: string,
 ): { actionId: string; params?: Record<string, unknown> } | null {
   const playable = legalActions.filter((a) => a.id !== 'surrender' && !isInfoAction(a))
   if (!playable.length) return null
@@ -31,7 +32,18 @@ export function pickTutorialBotAction(
       const match = playable.find((a) => a.id === preferred)
       if (!match) continue
       if (match.id === 'update-combat-prep') {
-        return { actionId: match.id, params: { ready: true } }
+        const pending = (observation.mechanics as unknown as {
+          pendingCombat?: { prep?: { phase?: string; readyBy?: Record<string, boolean> } } | null
+        }).pendingCombat
+        if (!botId || pending?.prep?.phase !== 'prep' || pending.prep.readyBy?.[botId]) continue
+        const supportSide = scenarioStep?.botSupportSide?.[botId]
+        return {
+          actionId: match.id,
+          params: {
+            ready: true,
+            ...(supportSide ? { supportSide } : {}),
+          },
+        }
       }
       if (match.id === 'remove-marker') {
         return { actionId: match.id, params: {} }

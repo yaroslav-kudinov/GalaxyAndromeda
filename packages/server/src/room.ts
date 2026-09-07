@@ -52,6 +52,9 @@ import {
 
   beginMatchForParticipants,
   isPristineMatchSnapshot,
+  filterScenarioLegalActions,
+  getCurrentStep,
+  scenarioActionError,
   type GalaxySaveFile,
 
 } from '@galaxy/rules'
@@ -65,7 +68,7 @@ import {
 } from './room-persistence.js'
 
 import { insertGameLog } from './db/index.js'
-import { getPublishedMapDefinition } from './db/index.js'
+import { getMapDefinition, getPublishedMapDefinition } from './db/index.js'
 import { sanitizePlayerName } from './admin.js'
 import {
   advanceTutorialScenario,
@@ -74,6 +77,8 @@ import {
   manualAdvanceScenarioStep,
   runBotTicksForRoom,
   scenarioObservationExtras,
+  tutorialBotIds,
+  tutorialShouldHoldActionTurnForCombatResult,
 } from './bot-tick.js'
 import { clientIp } from './catalog.js'
 import { canCreateRoom, trackRoomCreate } from './security.js'
@@ -100,7 +105,7 @@ export interface Room {
   /** Первый вошедший; только он стартует матч. */
   hostPlayerId: string | null
 
-  /** Последний результат боя — в observation до следующего действия (кроме update-combat-prep) */
+  /** Последний результат боя — в observation до следующего боя или «Далее» в обучении */
   lastCombatResult?: import('@galaxy/rules').CombatResolutionResult
 
   /** Монотонный счётчик изменений состояния для клиентской синхронизации */
@@ -120,6 +125,9 @@ export interface Room {
 
   /** Слот бота в tutorial-режиме */
   botPlayerId?: string
+
+  /** Все управляемые сценарием слоты; botPlayerId оставлен для старых комнат. */
+  botPlayerIds?: string[]
 
   /** Время создания комнаты (ISO) */
   createdAt?: string
@@ -426,9 +434,18 @@ function roomObservation(
   playerId: string,
   includeGeometry: boolean,
 ): GameObservation {
-  const legal = room.status === 'playing'
+  let legal = room.status === 'playing'
     ? getLegalActionsForSnapshot(room.state, room.map.id, playerId)
     : []
+  if (room.mode === 'tutorial' && !tutorialBotIds(room).includes(playerId) && room.scenarioId) {
+    const script = loadScenarioScriptById(room.scenarioId)
+    if (script) {
+      legal = filterScenarioLegalActions(
+        getCurrentStep(script, room.state.scenarioProgress),
+        legal,
+      )
+    }
+  }
   const s = room.state
 
   const state: Record<string, unknown> = {
@@ -523,25 +540,29 @@ export function createTutorialRoom(
 ): { ok: true; room: Room; playerId: string } | { ok: false; error: string } {
   const script = loadScenarioScriptById(scenarioId)
   if (!script) return { ok: false, error: 'Сценарий не найден' }
-  const map = getPublishedMapDefinition(script.mapId)
+  const map = getMapDefinition(script.mapId)
   if (!map) return { ok: false, error: 'Карта сценария не найдена в каталоге' }
+  const bots = script.bots?.length
+    ? script.bots
+    : [{ playerId: script.botPlayerId, name: script.botName, policy: script.botPolicy }]
 
-  const room = createRoom(map, 2)
+  const room = createRoom(map, Math.min(6, bots.length + 1))
   room.createdAt = new Date().toISOString()
   room.creatorIp = creatorIp
-  initTutorialRoomState(room, scenarioId)
+  initTutorialRoomState(room, scenarioId, script)
 
   const joinHuman = joinRoom(room.id, playerName, 'player-1')
   if (!joinHuman.ok) return { ok: false, error: joinHuman.error }
 
-  const botId = script.botPlayerId
-  const botPlayer = room.state.players.find((p) => p.id === botId)
-  if (botPlayer) {
-    botPlayer.name = script.botName
+  for (const bot of bots) {
+    const botPlayer = room.state.players.find((p) => p.id === bot.playerId)
+    if (!botPlayer) continue
+    botPlayer.name = bot.name
     botPlayer.isAi = true
-    if (!room.playerIds.includes(botId)) room.playerIds.push(botId)
-    syncParticipatingPlayerIds(room.state, room.playerIds)
+    if (!room.playerIds.includes(bot.playerId)) room.playerIds.push(bot.playerId)
   }
+  syncParticipatingPlayerIds(room.state, room.playerIds)
+  if (script.eventDeck?.length) room.state.eventDeck = [...script.eventDeck]
 
   const start = startRoom(room.id, joinHuman.playerId)
   if (!start.ok) return { ok: false, error: start.error }
@@ -617,7 +638,7 @@ function assignPlayerToSlot(room: Room, playerId: string, playerName: string): b
 
   const name = sanitizePlayerName(playerName, existing.name)
   existing.name = name
-  existing.isAi = playerId === room.botPlayerId
+  existing.isAi = tutorialBotIds(room).includes(playerId)
 
   if (!room.playerIds.includes(playerId)) {
     room.playerIds.push(playerId)
@@ -807,6 +828,14 @@ export function getObservation(
 
   const advanced = maybeAdvanceCombatPrep(room)
   if (advanced.changed) bumpObservationRevision(room, 'combat-countdown')
+  if (room.mode === 'tutorial') {
+    // Сначала шаг сценария (например, на ручной «что произошло»), потом автопередача хода —
+    // иначе ход уйдёт до того, как игрок увидит итог обстрела/боя.
+    const scenarioAdvanced = advanceTutorialScenario(room)
+    maybeAutoAdvanceTutorialActionTurn(room)
+    runBotTicksForRoom(room, applyBotActionInternal)
+    if (scenarioAdvanced) bumpObservationRevision(room, 'tutorial:state')
+  }
   maybeScheduleVictoryRoomClose(room)
   return roomObservation(room, playerId, includeGeometry)
 
@@ -835,6 +864,22 @@ export function submitAction(
 
   if (room.state.gameOver) {
     throw new Error('Игра завершена')
+  }
+
+  if (
+    room.mode === 'tutorial'
+    && room.scenarioId
+    && !tutorialBotIds(room).includes(playerId)
+  ) {
+    const script = loadScenarioScriptById(room.scenarioId)
+    const tutorialError = script
+      ? scenarioActionError(
+          getCurrentStep(script, room.state.scenarioProgress),
+          action.actionId,
+          action.params,
+        )
+      : null
+    if (tutorialError) throw new Error(tutorialError)
   }
 
   // Бой, не проходящий инвариант, блокирует всю комнату: снимаем его до того,
@@ -891,13 +936,33 @@ export function submitAction(
 
   maybeScheduleVictoryRoomClose(room)
 
-  if (room.mode === 'tutorial' && playerId !== room.botPlayerId) {
-    advanceTutorialScenario(room, action)
+  if (room.mode === 'tutorial' && !tutorialBotIds(room).includes(playerId)) {
+    advanceTutorialScenario(room, action, playerId)
+    maybeAutoAdvanceTutorialActionTurn(room)
     runBotTicksForRoom(room, applyBotActionInternal)
   }
 
   return roomObservation(room, playerId, includeGeometry)
 
+}
+
+function maybeAutoAdvanceTutorialActionTurn(room: Room): boolean {
+  const activePlayerId = room.state.activePlayerId
+  if (
+    room.mode !== 'tutorial'
+    || room.state.phase !== 'actions'
+    || room.state.pendingCombat
+    || !room.state.actionMarkerResolvedThisTurn
+    || !activePlayerId
+    || tutorialBotIds(room).includes(activePlayerId)
+    || tutorialShouldHoldActionTurnForCombatResult(room)
+  ) return false
+  try {
+    applyBotActionInternal(room, activePlayerId, 'advance-phase')
+    return true
+  } catch {
+    return false
+  }
 }
 
 function applyBotActionInternal(
@@ -909,9 +974,7 @@ function applyBotActionInternal(
   if (room.state.gameOver) return
   const violations = releaseInvalidPendingCombat(room.state)
   if (violations.length) bumpObservationRevision(room, 'combat:invariant-released')
-  if (actionId !== 'update-combat-prep' && !room.state.pendingCombat) {
-    room.lastCombatResult = undefined
-  }
+  const pendingPhaseBefore = room.state.pendingCombat?.phase
   const { errors, combatResult } = applyGameActionOnSnapshot(
     room.state,
     room.map,
@@ -920,6 +983,14 @@ function applyBotActionInternal(
     params,
   )
   if (errors.length) throw new Error(errors[0]!)
+  // Как в submitAction: не стираем итог боя при advance-phase / тиках бота —
+  // иначе клиент не успевает показать броски после обстрела.
+  if (
+    room.state.pendingCombat?.phase === 'prep'
+    && pendingPhaseBefore !== 'prep'
+  ) {
+    room.lastCombatResult = undefined
+  }
   if (combatResult) room.lastCombatResult = combatResult
   const advanced = maybeAdvanceCombatPrep(room)
   if (combatResult) room.lastCombatResult = combatResult
@@ -1192,7 +1263,7 @@ export function registerHttpRoutes(app: FastifyInstance): void {
 
       if (room.status !== 'playing') return []
 
-      return getLegalActionsForSnapshot(room.state, room.map.id, req.query.playerId)
+      return roomObservation(room, req.query.playerId, false).legalActions
 
     },
 
@@ -1209,6 +1280,9 @@ export function registerHttpRoutes(app: FastifyInstance): void {
       if (!manualAdvanceScenarioStep(room)) {
         return reply.status(400).send({ error: 'Шаг нельзя пропустить вручную' })
       }
+      // После «Далее» на шаге с итогом боя снимаем удержание и передаём ход / тикаем ботов.
+      maybeAutoAdvanceTutorialActionTurn(room)
+      runBotTicksForRoom(room, applyBotActionInternal)
       bumpObservationRevision(room, 'scenario:manual-next')
       scheduleRoomPersist(room)
       return roomObservation(room, req.body.playerId, wantsFullGeometry(req.query.geometry))

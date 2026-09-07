@@ -1,0 +1,248 @@
+{
+  "id": "tutorial-corridor",
+  "name": "Учебный коридор",
+  "playerCount": 3,
+  "cells": [
+    {
+      "q": -6,
+      "r": 0,
+      "isPowerCenter": true,
+      "startPlayer": 1
+    },
+    {
+      "q": -5,
+      "r": 0,
+      "startPlayer": 1,
+      "startingShips": [
+        {
+          "type": "cruiser",
+          "player": 1
+        },
+        {
+          "type": "cruiser",
+          "player": 1
+        }
+      ]
+    },
+    {
+      "q": -4,
+      "r": 0,
+      "startPlayer": 1,
+      "startingShips": [
+        {
+          "type": "destroyer",
+          "player": 1
+        },
+        {
+          "type": "destroyer",
+          "player": 1
+        }
+      ]
+    },
+    {
+      "q": -3,
+      "r": 0,
+      "resourceToken": {
+        "type": "credits",
+        "value": 2,
+        "faceUp": true
+      }
+    },
+    {
+      "q": -2,
+      "r": 0,
+      "resourceToken": {
+        "type": "production",
+        "value": 2,
+        "faceUp": true
+      }
+    },
+    {
+      "q": -1,
+      "r": 0,
+      "startPlayer": 2,
+      "startingShips": [
+        {
+          "type": "destroyer",
+          "player": 2
+        }
+      ]
+    },
+    {
+      "q": 0,
+      "r": 0,
+      "startPlayer": 2
+    },
+    {
+      "q": 1,
+      "r": 0,
+      "isPowerCenter": true,
+      "startPlayer": 2
+    },
+    {
+      "q": 2,
+      "r": 0,
+      "startPlayer": 2
+    },
+    {
+      "q": 3,
+      "r": 0,
+      "startPlayer": 2
+    },
+    {
+      "q": 4,
+      "r": 0,
+      "startPlayer": 2,
+      "startingShips": [
+        {
+          "type": "shield",
+          "player": 2
+        }
+      ]
+    },
+    {
+      "q": 5,
+      "r": 0,
+      "startPlayer": 2,
+      "resourceToken": {
+        "type": "credits",
+        "value": 5,
+        "faceUp": true
+      },
+      "startingShips": [
+        {
+          "type": "cruiser",
+          "player": 2
+        }
+      ]
+    },
+    {
+      "q": 6,
+      "r": 0,
+      "startPlayer": 2,
+      "resourceToken": {
+        "type": "production",
+        "value": 3,
+        "faceUp": true
+      }
+    },
+    {
+      "q": -6,
+      "r": 1,
+      "startPlayer": 1,
+      "startingShips": [
+        {
+          "type": "shield",
+          "player": 1
+        },
+        {
+          "type": "carrier",
+          "player": 1
+        }
+      ]
+    },
+    {
+      "q": -5,
+      "r": 1,
+      "startPlayer": 1,
+      "resourceToken": {
+        "type": "credits",
+        "value": 5,
+        "faceUp": true
+      },
+      "startingShips": [
+        {
+          "type": "battleship",
+          "player": 1
+        },
+        {
+          "type": "hyper",
+          "player": 1
+        }
+      ]
+    },
+    {
+      "q": -4,
+      "r": 1,
+      "startPlayer": 1,
+      "resourceToken": {
+        "type": "production",
+        "value": 3,
+        "faceUp": true
+      }
+    },
+    {
+      "q": -2,
+      "r": -1,
+      "startPlayer": 2,
+      "startingShips": [
+        {
+          "type": "destroyer",
+          "player": 2
+        }
+      ]
+    },
+    {
+      "q": -1,
+      "r": -1,
+      "startPlayer": 3,
+      "startingShips": [
+        {
+          "type": "cruiser",
+          "player": 3
+        }
+      ]
+    },
+    {
+      "q": 0,
+      "r": -1,
+      "startPlayer": 3
+    },
+    {
+      "q": 0,
+      "r": -2,
+      "isPowerCenter": true,
+      "startPlayer": 3,
+      "startingShips": [
+        {
+          "type": "hyper",
+          "player": 3
+        }
+      ]
+    },
+    {
+      "q": 4,
+      "r": -1,
+      "startPlayer": 2,
+      "startingShips": [
+        {
+          "type": "carrier",
+          "player": 2
+        }
+      ]
+    },
+    {
+      "q": 5,
+      "r": -1,
+      "startPlayer": 2,
+      "startingShips": [
+        {
+          "type": "battleship",
+          "player": 2
+        }
+      ]
+    },
+    {
+      "q": 6,
+      "r": -1,
+      "isPowerCenter": true,
+      "startPlayer": 2,
+      "startingShips": [
+        {
+          "type": "hyper",
+          "player": 2
+        }
+      ]
+    }
+  ]
+}

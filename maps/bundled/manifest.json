@@ -29,6 +29,13 @@
       "name": "Шестиконечный путь",
       "playerCount": 6,
       "sortOrder": 5
+    },
+    {
+      "id": "tutorial-corridor",
+      "name": "Учебный коридор",
+      "playerCount": 3,
+      "sortOrder": 100,
+      "published": false
     }
   ]
 }

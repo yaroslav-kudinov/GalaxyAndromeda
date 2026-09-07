@@ -24,7 +24,7 @@ export function getDb(): DatabaseSync {
      ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
   ).run(String(SCHEMA_VERSION))
   seedBundledMaps()
-  seedBundledScenariosIfEmpty()
+  seedBundledScenarios()
   return db
 }
 
@@ -94,6 +94,12 @@ export function getPublishedMapDefinition(id: string): MapDefinition | null {
   return JSON.parse(row.json) as MapDefinition
 }
 
+/** Карта для внутренних серверных сценариев; может быть скрыта из публичного каталога. */
+export function getMapDefinition(id: string): MapDefinition | null {
+  const row = getMapById(id)
+  return row ? (JSON.parse(row.json) as MapDefinition) : null
+}
+
 export function upsertMap(
   map: MapDefinition,
   opts: { source: string; published?: boolean; sortOrder?: number },
@@ -140,7 +146,7 @@ function seedBundledMaps(): void {
   const manifestPath = join(repoRoot(), 'maps/bundled/manifest.json')
   if (!existsSync(manifestPath)) return
   const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as {
-    maps: { id: string; sortOrder: number }[]
+    maps: { id: string; sortOrder: number; published?: boolean }[]
   }
   let added = 0
   for (const entry of manifest.maps) {
@@ -149,7 +155,11 @@ function seedBundledMaps(): void {
     const mapPath = join(repoRoot(), 'maps/bundled', `${entry.id}.json`)
     if (!existsSync(mapPath)) continue
     const map = normalizeMapDefinition(JSON.parse(readFileSync(mapPath, 'utf8')) as MapDefinition)
-    upsertMap(map, { source: 'bundled', published: true, sortOrder: entry.sortOrder })
+    upsertMap(map, {
+      source: 'bundled',
+      published: entry.published !== false,
+      sortOrder: entry.sortOrder,
+    })
     added += 1
   }
   if (added) {
@@ -217,23 +227,32 @@ export function upsertScenario(row: {
     )
 }
 
-function seedBundledScenariosIfEmpty(): void {
-  const count = (getDb().prepare(`SELECT COUNT(*) AS c FROM scenarios`).get() as { c: number }).c
-  if (count > 0) return
-  const scenarioPath = join(repoRoot(), 'scenarios/tutorial-basics.json')
-  if (!existsSync(scenarioPath)) return
-  const script = readFileSync(scenarioPath, 'utf8')
-  const parsed = JSON.parse(script) as { id: string; name: string; mapId: string }
-  upsertScenario({
-    id: parsed.id,
-    name: parsed.name,
-    description: 'Обучающий сценарий для новых игроков',
-    scriptJson: script,
-    mapId: parsed.mapId,
-    published: true,
-    sortOrder: 1,
-  })
-  console.log('@galaxy/server db: seeded tutorial-basics scenario')
+function seedBundledScenarios(): void {
+  const bundled = [
+    {
+      path: 'scenarios/tutorial-basics.json',
+      description: 'Пошаговое обучение на отдельной коридорной карте',
+      sortOrder: 1,
+    },
+  ]
+  let seeded = 0
+  for (const entry of bundled) {
+    const scenarioPath = join(repoRoot(), entry.path)
+    if (!existsSync(scenarioPath)) continue
+    const script = readFileSync(scenarioPath, 'utf8')
+    const parsed = JSON.parse(script) as { id: string; name: string; mapId: string }
+    upsertScenario({
+      id: parsed.id,
+      name: parsed.name,
+      description: entry.description,
+      scriptJson: script,
+      mapId: parsed.mapId,
+      published: true,
+      sortOrder: entry.sortOrder,
+    })
+    seeded += 1
+  }
+  if (seeded) console.log(`@galaxy/server db: seeded ${seeded} bundled scenario(s)`)
 }
 
 export interface MapSubmissionRow {

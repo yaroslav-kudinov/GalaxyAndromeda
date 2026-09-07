@@ -52,6 +52,11 @@ interface PersistedRoomFile {
   lastCombatResult?: Room['lastCombatResult']
   /** epoch ms; момент победы для автозакрытия после рестарта сервера */
   gameOverAt?: number | null
+  mode?: Room['mode']
+  scenarioId?: string
+  botPlayerId?: string
+  botPlayerIds?: string[]
+  scenarioProgress?: Room['state']['scenarioProgress']
   /** Карта + снимок партии в формате обычного сохранения — переиспользуем миграции `@galaxy/rules`. */
   save: GalaxySaveFile
 }
@@ -112,6 +117,11 @@ function serializeRoom(room: Room): string {
     lastActivityAt: room.lastActivityAt,
     lastCombatResult: room.lastCombatResult,
     gameOverAt: room.gameOverAt ?? null,
+    mode: room.mode,
+    scenarioId: room.scenarioId,
+    botPlayerId: room.botPlayerId,
+    botPlayerIds: room.botPlayerIds ? [...room.botPlayerIds] : undefined,
+    scenarioProgress: room.state.scenarioProgress,
     save: {
       format: GALAXY_SAVE_FORMAT,
       version: GALAXY_SAVE_VERSION,
@@ -265,6 +275,15 @@ function readPersistedRoom(path: string): Room | null {
     gameOverAt: typeof record.gameOverAt === 'number' && Number.isFinite(record.gameOverAt)
       ? record.gameOverAt
       : null,
+    mode: record.mode === 'tutorial' ? 'tutorial' : 'normal',
+    scenarioId: typeof record.scenarioId === 'string' ? record.scenarioId : undefined,
+    botPlayerId: typeof record.botPlayerId === 'string' ? record.botPlayerId : undefined,
+    botPlayerIds: Array.isArray(record.botPlayerIds)
+      ? record.botPlayerIds.filter((id): id is string => typeof id === 'string')
+      : undefined,
+  }
+  if (record.scenarioProgress && typeof record.scenarioProgress.scenarioId === 'string') {
+    room.state.scenarioProgress = { ...record.scenarioProgress }
   }
 
   debugLog('rooms.restore.room', {

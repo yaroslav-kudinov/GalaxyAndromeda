@@ -40,6 +40,13 @@ const BUNDLED = [
     outName: 'Шестиконечный путь',
     sortOrder: 5,
   },
+  {
+    source: 'maps/bundled/tutorial-corridor.source.galaxy.json',
+    outId: 'tutorial-corridor',
+    outName: 'Учебный коридор',
+    sortOrder: 100,
+    published: false,
+  },
 ]
 
 const outDirs = [join(root, 'maps/bundled'), join(root, 'packages/client/public/maps')]
@@ -62,7 +69,13 @@ for (const entry of BUNDLED) {
   for (const dir of outDirs) {
     writeFileSync(join(dir, `${entry.outId}.json`), json, 'utf8')
   }
-  manifest.push({ id: entry.outId, name: entry.outName, playerCount, sortOrder: entry.sortOrder })
+  manifest.push({
+    id: entry.outId,
+    name: entry.outName,
+    playerCount,
+    sortOrder: entry.sortOrder,
+    ...('published' in entry ? { published: entry.published } : {}),
+  })
   console.log(`OK ${entry.outId} (${playerCount} players, ${map.cells.length} cells)`)
 }
 

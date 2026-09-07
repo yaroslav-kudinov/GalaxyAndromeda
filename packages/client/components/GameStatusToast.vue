@@ -26,7 +26,7 @@ defineProps<{
 <style scoped>
 .toast-stack {
   position: absolute;
-  top: 3.25rem;
+  top: calc(var(--hud-header-height, 3.25rem) + 0.65rem);
   left: 50%;
   transform: translateX(-50%);
   z-index: 40;
