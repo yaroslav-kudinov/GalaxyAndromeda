@@ -14,7 +14,7 @@
 ## Код
 
 - SQLite-каталог карт и сценариев на сервере (`packages/server/src/db/`).
-- Официальные карты: `duel`, `trio-start`, `maltese-cross-4`, `five-point-path` в `maps/bundled/` и `packages/client/public/maps/`.
+- Официальные карты: `duel`, `trio-start`, `maltese-cross-4`, `five-point-path`, `six-point-path` в `maps/bundled/` и `packages/client/public/maps/`.
 - Карта «Пятиконечный путь» (`five-point-path`, пять игроков) в том же каталоге.
 - Движок сценариев и бот: `packages/rules/src/scenario.ts`, `scenario-runner.ts`, `tutorial-bot.ts`.
 - Сценарий `scenarios/tutorial-basics.json`.

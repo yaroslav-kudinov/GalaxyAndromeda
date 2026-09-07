@@ -7,6 +7,7 @@ const BUNDLED_MANIFEST: CatalogMapEntry[] = [
   { id: 'trio-start', name: 'Карта на троих (Старт)', playerCount: 3 },
   { id: 'maltese-cross-4', name: 'Мальтийский крест (4)', playerCount: 4 },
   { id: 'five-point-path', name: 'Пятиконечный путь', playerCount: 5 },
+  { id: 'six-point-path', name: 'Шестиконечный путь', playerCount: 6 },
 ]
 
 export function useCatalogMaps() {

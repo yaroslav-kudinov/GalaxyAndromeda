@@ -39,9 +39,11 @@ const termsAccepted = ref(false)
 const termsDraft = ref(false)
 const tutorialBusy = ref(false)
 const tutorialSetupOpen = ref(false)
+const tutorialInDevelopment = true
 const menuError = ref<string | null>(null)
 
 interface MapOption {
+  optionId: string
   id: string
   name: string
   map: MapDefinition
@@ -75,7 +77,7 @@ const joinPreviewLoading = ref(false)
 const joinPreviewError = ref<string | null>(null)
 const selectedJoinSlot = ref<string | null>(null)
 
-const selectedMapId = ref('duel')
+const selectedMapId = ref('official:duel')
 const serverOnline = ref<boolean | null>(null)
 const busy = ref(false)
 const error = ref<string | null>(null)
@@ -86,28 +88,51 @@ const mapOptions = ref<MapOption[]>([])
 
 let joinPreviewTimer: ReturnType<typeof setTimeout> | null = null
 
+function loadEditorMapsFromStorage(): MapDefinition[] {
+  if (!import.meta.client) return []
+  try {
+    const raw = JSON.parse(localStorage.getItem(MAPS_STORAGE_KEY) ?? '[]') as unknown[]
+    if (!Array.isArray(raw)) return []
+    return raw.map((entry) => {
+      try {
+        return normalizeMapDefinition(parseGalaxySave(entry).map)
+      } catch {
+        return normalizeMapDefinition(entry as MapDefinition)
+      }
+    })
+  } catch {
+    return []
+  }
+}
+
 async function refreshMapList() {
   await refreshOfficialMaps()
   const options: MapOption[] = []
-  const seen = new Set<string>()
+  const localSeen = new Set<string>()
 
   for (const entry of officialMaps.value) {
     const map = await loadOfficialMap(entry.id)
     if (!map) continue
-    seen.add(entry.id)
-    options.push({ id: entry.id, name: entry.name, map, official: true })
+    options.push({
+      optionId: `official:${entry.id}`,
+      id: entry.id,
+      name: entry.name,
+      map,
+      official: true,
+    })
   }
 
   if (import.meta.client) {
     try {
       for (const save of loadLobbySaves()) {
-        if (seen.has(save.map.id)) continue
-        seen.add(save.map.id)
+        const mapId = save.map.id
+        localSeen.add(mapId)
         const label = save.game
-          ? `${save.map.name || save.map.id} (продолжить)`
-          : (save.map.name || save.map.id)
+          ? `${save.map.name || mapId} (продолжить)`
+          : (save.map.name || mapId)
         options.push({
-          id: save.map.id,
+          optionId: `local:${mapId}`,
+          id: mapId,
           name: label,
           map: normalizeMapDefinition(save.map),
           fullSave: save,
@@ -116,16 +141,34 @@ async function refreshMapList() {
     } catch {
       /* ignore */
     }
+
+    for (const map of loadEditorMapsFromStorage()) {
+      if (localSeen.has(map.id)) continue
+      localSeen.add(map.id)
+      options.push({
+        optionId: `local:${map.id}`,
+        id: map.id,
+        name: map.name || map.id,
+        map,
+      })
+    }
   }
 
   mapOptions.value = options
-  if (!options.some((o) => o.id === selectedMapId.value)) {
-    selectedMapId.value = options.find((o) => o.id === 'duel')?.id ?? options[0]?.id ?? 'duel'
+  if (!options.some((o) => o.optionId === selectedMapId.value)) {
+    selectedMapId.value =
+      options.find((o) => o.optionId === 'official:duel')?.optionId
+      ?? options.find((o) => o.official)?.optionId
+      ?? options[0]?.optionId
+      ?? 'official:duel'
   }
 }
 
+const officialMapOptions = computed(() => mapOptions.value.filter((o) => o.official))
+const localMapOptions = computed(() => mapOptions.value.filter((o) => !o.official))
+
 const selectedMap = computed(
-  () => mapOptions.value.find((o) => o.id === selectedMapId.value) ?? null,
+  () => mapOptions.value.find((o) => o.optionId === selectedMapId.value) ?? null,
 )
 
 const selectedMapDefinition = computed(
@@ -285,7 +328,7 @@ function importSaveFile(event: Event) {
       const save = parseGalaxySave(JSON.parse(String(reader.result)))
       upsertLobbySave(save)
       refreshMapList()
-      selectedMapId.value = save.map.id
+      selectedMapId.value = `local:${save.map.id}`
       importError.value = null
     } catch (e) {
       importError.value = e instanceof Error ? e.message : 'Не удалось прочитать файл сохранения'
@@ -525,6 +568,7 @@ watch(
 )
 
 async function onTutorialClick() {
+  if (tutorialInDevelopment) return
   menuError.value = null
   await refreshServerHealth()
   if (!serverOnline.value) {
@@ -649,12 +693,15 @@ onUnmounted(() => {
           <button
             type="button"
             class="landing-link"
-            :disabled="tutorialBusy"
+            :class="{ 'landing-link--wip': tutorialInDevelopment }"
+            :disabled="tutorialInDevelopment || tutorialBusy"
+            :title="tutorialInDevelopment ? 'В разработке' : undefined"
             @click="onTutorialClick"
           >
-            {{ tutorialBusy ? 'Запуск…' : 'Обучение' }}
+            <span>{{ tutorialBusy && !tutorialInDevelopment ? 'Запуск…' : 'Обучение' }}</span>
+            <span v-if="tutorialInDevelopment" class="landing-link-sub">В разработке</span>
           </button>
-          <section v-if="tutorialSetupOpen" class="card tutorial-gate">
+          <section v-if="!tutorialInDevelopment && tutorialSetupOpen" class="card tutorial-gate">
             <p class="gate-lead">Для обучения нужны никнейм и согласие с условиями.</p>
             <label class="field">
               Никнейм
@@ -771,7 +818,12 @@ onUnmounted(() => {
         <label class="field">
           Карта
           <select v-model="selectedMapId">
-            <option v-for="m in mapOptions" :key="m.id" :value="m.id">{{ m.name }}</option>
+            <optgroup v-if="officialMapOptions.length" label="Предустановленные на сервере">
+              <option v-for="m in officialMapOptions" :key="m.optionId" :value="m.optionId">{{ m.name }}</option>
+            </optgroup>
+            <optgroup v-if="localMapOptions.length" label="Сохранённые локально">
+              <option v-for="m in localMapOptions" :key="m.optionId" :value="m.optionId">{{ m.name }}</option>
+            </optgroup>
           </select>
         </label>
 
@@ -1140,6 +1192,21 @@ onUnmounted(() => {
   cursor: not-allowed;
 }
 
+.landing-link--wip {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.2rem;
+  line-height: 1.25;
+}
+
+.landing-link-sub {
+  font-size: 0.78rem;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  color: #94a3b8;
+}
+
 .landing-menu-err {
   margin: 0;
   text-align: center;
@@ -1302,14 +1369,13 @@ onUnmounted(() => {
   font-size: 0.8rem;
   color: #94a3b8;
 }
-.field input,
-.field select {
-  padding: 0.45rem 0.55rem;
-  border-radius: 6px;
-  border: 1px solid #475569;
+.field select optgroup {
+  color: #94a3b8;
+  font-weight: 600;
   background: #0f172a;
+}
+.field select option {
   color: #f8fafc;
-  font-size: 0.9rem;
 }
 .primary {
   width: 100%;

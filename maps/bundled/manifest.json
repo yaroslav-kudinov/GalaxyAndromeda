@@ -23,6 +23,12 @@
       "name": "Пятиконечный путь",
       "playerCount": 5,
       "sortOrder": 4
+    },
+    {
+      "id": "six-point-path",
+      "name": "Шестиконечный путь",
+      "playerCount": 6,
+      "sortOrder": 5
     }
   ]
 }

@@ -144,7 +144,8 @@ function seedBundledMaps(): void {
   }
   let added = 0
   for (const entry of manifest.maps) {
-    if (getMapById(entry.id)) continue
+    const existing = getMapById(entry.id)
+    if (existing && existing.source !== 'bundled') continue
     const mapPath = join(repoRoot(), 'maps/bundled', `${entry.id}.json`)
     if (!existsSync(mapPath)) continue
     const map = normalizeMapDefinition(JSON.parse(readFileSync(mapPath, 'utf8')) as MapDefinition)
