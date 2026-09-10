@@ -261,6 +261,41 @@ export async function closeRoom(roomId: string, playerId: string): Promise<{ ok:
   })
 }
 
+export interface RoomChatMessage {
+  id: string
+  at: number
+  fromPlayerId: string
+  fromName: string
+  toPlayerId: string | null
+  text: string
+}
+
+export async function fetchRoomChat(
+  roomId: string,
+  playerId: string,
+  after?: string | null,
+): Promise<{ messages: RoomChatMessage[] }> {
+  const qs = new URLSearchParams({ playerId })
+  if (after) qs.set('after', after)
+  return apiFetch(`/rooms/${roomId}/chat?${qs}`)
+}
+
+export async function postRoomChat(
+  roomId: string,
+  playerId: string,
+  text: string,
+  toPlayerId?: string | null,
+): Promise<{ message: RoomChatMessage }> {
+  return apiFetch(`/rooms/${roomId}/chat`, {
+    method: 'POST',
+    body: JSON.stringify({
+      playerId,
+      text,
+      ...(toPlayerId ? { toPlayerId } : {}),
+    }),
+  })
+}
+
 /** Human UI: skip heavy ASCII/spatial geometry (agents use full observation via MCP). */
 export async function fetchObservation(roomId: string, playerId: string): Promise<GameObservation> {
   const qs = new URLSearchParams({ playerId, geometry: '0' })

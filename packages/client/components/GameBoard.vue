@@ -10,6 +10,7 @@ const props = withDefaults(
     cells: BoardCellView[]
     ghosts?: { q: number; r: number }[]
     selectedKey?: string | null
+    selectedKeys?: string[]
     symmetryOrbitKeys?: string[]
     reachableKeys?: string[]
     destinationKeys?: string[]
@@ -60,6 +61,7 @@ const props = withDefaults(
   {
     ghosts: () => [],
     selectedKey: null,
+    selectedKeys: () => [],
     symmetryOrbitKeys: () => [],
     reachableKeys: () => [],
     destinationKeys: () => [],
@@ -92,7 +94,7 @@ const props = withDefaults(
 )
 
 const emit = defineEmits<{
-  select: [q: number, r: number]
+  select: [q: number, r: number, mods?: { additive?: boolean }]
   addGhost: [q: number, r: number]
   'update:orientation': [orientation: HexOrientation]
 }>()
@@ -105,6 +107,7 @@ const markerKeys = computed(() => boardMarkerKeys(props.cells))
     :cells="cells"
     :ghosts="ghosts"
     :selected-key="selectedKey"
+    :selected-keys="selectedKeys"
     :symmetry-orbit-keys="symmetryOrbitKeys"
     :action-marker-keys="markerKeys"
     :reachable-keys="reachableKeys"
@@ -138,7 +141,7 @@ const markerKeys = computed(() => boardMarkerKeys(props.cells))
     :observation-revision="observationRevision"
     :snapshot="snapshot"
     :map-id="mapId"
-    @select="(q, r) => emit('select', q, r)"
+    @select="(q, r, mods) => emit('select', q, r, mods)"
     @add-ghost="(q, r) => emit('addGhost', q, r)"
     @update:orientation="(value) => emit('update:orientation', value)"
   />

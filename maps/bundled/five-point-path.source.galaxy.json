@@ -1,7 +1,7 @@
 {
   "format": "galaxy-save",
   "version": 1,
-  "savedAt": "2026-09-06T17:48:23.325Z",
+  "savedAt": "2026-09-10T09:37:13.411Z",
   "map": {
     "id": "draft",
     "name": "Пятиконечный путь",
@@ -278,7 +278,17 @@
         "q": 5,
         "r": -1,
         "startPlayer": 2,
-        "isPowerCenter": true
+        "isPowerCenter": true,
+        "startingShips": [
+          {
+            "type": "destroyer",
+            "player": 2
+          },
+          {
+            "type": "destroyer",
+            "player": 2
+          }
+        ]
       },
       {
         "q": 1,
@@ -301,7 +311,17 @@
         "q": 3,
         "r": -5,
         "startPlayer": 4,
-        "isPowerCenter": true
+        "isPowerCenter": true,
+        "startingShips": [
+          {
+            "type": "destroyer",
+            "player": 4
+          },
+          {
+            "type": "destroyer",
+            "player": 4
+          }
+        ]
       },
       {
         "q": 5,
@@ -325,7 +345,17 @@
         "q": -3,
         "r": -2,
         "startPlayer": 1,
-        "isPowerCenter": true
+        "isPowerCenter": true,
+        "startingShips": [
+          {
+            "type": "destroyer",
+            "player": 1
+          },
+          {
+            "type": "destroyer",
+            "player": 1
+          }
+        ]
       },
       {
         "q": 2,
@@ -371,7 +401,17 @@
         "q": -5,
         "r": 4,
         "startPlayer": 3,
-        "isPowerCenter": true
+        "isPowerCenter": true,
+        "startingShips": [
+          {
+            "type": "destroyer",
+            "player": 3
+          },
+          {
+            "type": "destroyer",
+            "player": 3
+          }
+        ]
       },
       {
         "q": -1,
@@ -385,13 +425,33 @@
         "q": -1,
         "r": 6,
         "startPlayer": 5,
-        "isPowerCenter": true
+        "isPowerCenter": true,
+        "startingShips": [
+          {
+            "type": "destroyer",
+            "player": 5
+          },
+          {
+            "type": "destroyer",
+            "player": 5
+          }
+        ]
       },
       {
         "q": 1,
         "r": 5,
         "startPlayer": 5,
-        "isPowerCenter": true
+        "isPowerCenter": true,
+        "startingShips": [
+          {
+            "type": "destroyer",
+            "player": 5
+          },
+          {
+            "type": "destroyer",
+            "player": 5
+          }
+        ]
       },
       {
         "q": 0,
@@ -401,7 +461,13 @@
           "type": "production",
           "value": 5,
           "faceUp": true
-        }
+        },
+        "startingShips": [
+          {
+            "type": "cruiser",
+            "player": 5
+          }
+        ]
       },
       {
         "q": 0,
@@ -411,7 +477,13 @@
           "type": "credits",
           "value": 7,
           "faceUp": true
-        }
+        },
+        "startingShips": [
+          {
+            "type": "cruiser",
+            "player": 5
+          }
+        ]
       },
       {
         "q": -6,
@@ -421,7 +493,13 @@
           "type": "credits",
           "value": 7,
           "faceUp": true
-        }
+        },
+        "startingShips": [
+          {
+            "type": "cruiser",
+            "player": 3
+          }
+        ]
       },
       {
         "q": 6,
@@ -431,7 +509,13 @@
           "type": "production",
           "value": 5,
           "faceUp": true
-        }
+        },
+        "startingShips": [
+          {
+            "type": "cruiser",
+            "player": 2
+          }
+        ]
       },
       {
         "q": -4,
@@ -441,7 +525,13 @@
           "type": "credits",
           "value": 7,
           "faceUp": true
-        }
+        },
+        "startingShips": [
+          {
+            "type": "cruiser",
+            "player": 1
+          }
+        ]
       },
       {
         "q": -3,
@@ -451,13 +541,29 @@
           "type": "production",
           "value": 5,
           "faceUp": true
-        }
+        },
+        "startingShips": [
+          {
+            "type": "cruiser",
+            "player": 1
+          }
+        ]
       },
       {
         "q": -4,
         "r": -3,
         "startPlayer": 1,
-        "isPowerCenter": true
+        "isPowerCenter": true,
+        "startingShips": [
+          {
+            "type": "destroyer",
+            "player": 1
+          },
+          {
+            "type": "destroyer",
+            "player": 1
+          }
+        ]
       },
       {
         "q": 3,
@@ -467,7 +573,13 @@
           "type": "credits",
           "value": 7,
           "faceUp": true
-        }
+        },
+        "startingShips": [
+          {
+            "type": "cruiser",
+            "player": 4
+          }
+        ]
       },
       {
         "q": 4,
@@ -477,13 +589,29 @@
           "type": "production",
           "value": 5,
           "faceUp": true
-        }
+        },
+        "startingShips": [
+          {
+            "type": "cruiser",
+            "player": 4
+          }
+        ]
       },
       {
         "q": 4,
         "r": -7,
         "startPlayer": 4,
-        "isPowerCenter": true
+        "isPowerCenter": true,
+        "startingShips": [
+          {
+            "type": "destroyer",
+            "player": 4
+          },
+          {
+            "type": "destroyer",
+            "player": 4
+          }
+        ]
       },
       {
         "q": -6,
@@ -493,19 +621,45 @@
           "type": "production",
           "value": 5,
           "faceUp": true
-        }
+        },
+        "startingShips": [
+          {
+            "type": "cruiser",
+            "player": 3
+          }
+        ]
       },
       {
         "q": -7,
         "r": 5,
         "startPlayer": 3,
-        "isPowerCenter": true
+        "isPowerCenter": true,
+        "startingShips": [
+          {
+            "type": "destroyer",
+            "player": 3
+          },
+          {
+            "type": "destroyer",
+            "player": 3
+          }
+        ]
       },
       {
         "q": 7,
         "r": -2,
         "startPlayer": 2,
-        "isPowerCenter": true
+        "isPowerCenter": true,
+        "startingShips": [
+          {
+            "type": "destroyer",
+            "player": 2
+          },
+          {
+            "type": "destroyer",
+            "player": 2
+          }
+        ]
       },
       {
         "q": -3,
@@ -555,7 +709,13 @@
           "type": "credits",
           "value": 7,
           "faceUp": true
-        }
+        },
+        "startingShips": [
+          {
+            "type": "cruiser",
+            "player": 2
+          }
+        ]
       },
       {
         "q": -7,

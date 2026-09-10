@@ -71,6 +71,11 @@ import { insertGameLog } from './db/index.js'
 import { getMapDefinition, getPublishedMapDefinition } from './db/index.js'
 import { sanitizePlayerName } from './admin.js'
 import {
+  clearRoomChat,
+  listRoomChatVisible,
+  postRoomChat,
+} from './room-chat.js'
+import {
   advanceTutorialScenario,
   initTutorialRoomState,
   loadScenarioScriptById,
@@ -249,6 +254,7 @@ function destroyRoom(roomId: string, reason: string): boolean {
   clearVictoryCloseTimer(roomId)
   rooms.delete(roomId)
   presenceByRoom.delete(roomId)
+  clearRoomChat(roomId)
   deletePersistedRoom(roomId)
   debugLog('room.destroy', {
     roomId,
@@ -1056,6 +1062,51 @@ export function registerHttpRoutes(app: FastifyInstance): void {
       return { ok: true }
     },
   )
+
+  app.get<{
+    Params: { id: string }
+    Querystring: { playerId?: string; after?: string }
+  }>('/rooms/:id/chat', async (req, reply) => {
+    const room = getRoom(req.params.id)
+    if (!room) return reply.status(404).send({ error: 'Room not found' })
+    const playerId = req.query.playerId?.trim()
+    if (!playerId || !room.playerIds.includes(playerId)) {
+      return reply.status(403).send({ error: 'Игрок не в комнате' })
+    }
+    const messages = listRoomChatVisible({
+      roomId: room.id,
+      viewerPlayerId: playerId,
+      afterId: req.query.after?.trim() || null,
+    })
+    return { messages }
+  })
+
+  app.post<{
+    Params: { id: string }
+    Body: { playerId?: string; text?: string; toPlayerId?: string | null }
+  }>('/rooms/:id/chat', async (req, reply) => {
+    const room = getRoom(req.params.id)
+    if (!room) return reply.status(404).send({ error: 'Room not found' })
+    const playerId = req.body.playerId?.trim()
+    if (!playerId || !room.playerIds.includes(playerId)) {
+      return reply.status(403).send({ error: 'Игрок не в комнате' })
+    }
+    const fromName =
+      room.state.players.find((p) => p.id === playerId)?.name?.trim() || playerId
+    const result = postRoomChat({
+      roomId: room.id,
+      fromPlayerId: playerId,
+      fromName,
+      text: req.body.text,
+      toPlayerId: req.body.toPlayerId,
+      memberIds: room.playerIds,
+    })
+    if (!result.ok) {
+      return reply.status(result.status).send({ error: result.error })
+    }
+    touchRoomActivity(room)
+    return { message: result.message }
+  })
 
   app.post<{
     Params: { id: string }

@@ -23,6 +23,8 @@ const props = withDefaults(
     cells: MapCellDefinition[]
     ghosts: { q: number; r: number }[]
     selectedKey: string | null
+    /** Доп. выделение (редактор, Ctrl+клик) */
+    selectedKeys?: string[]
     symmetryOrbitKeys?: string[]
     actionMarkerKeys?: string[]
     availableActionMarkerKeys?: string[]
@@ -85,6 +87,7 @@ const props = withDefaults(
     showOrientationToggle: true,
     showAutoFitToggle: true,
     autoFitOnMapChange: undefined,
+    selectedKeys: () => [],
     symmetryOrbitKeys: () => [],
     actionMarkerKeys: () => [],
     availableActionMarkerKeys: () => [],
@@ -252,23 +255,62 @@ onMounted(() => {
 
 onUnmounted(() => {
   clearHoverTooltipTimer()
+  clearPanCandidateWindowListeners()
+  clearPinchWindowListeners()
   document.removeEventListener('click', onDocumentDismissTooltip)
   document.removeEventListener('keydown', onDocumentDismissTooltip)
 })
 
 const emit = defineEmits<{
-  select: [q: number, r: number]
+  select: [q: number, r: number, mods?: { additive?: boolean }]
   addGhost: [q: number, r: number]
   'update:orientation': [orientation: HexOrientation]
   'update:autoFitOnMapChange': [enabled: boolean]
 }>()
 
+function onCellSelectClick(cell: MapCellDefinition, event: MouseEvent) {
+  if (consumeSuppressClick()) return
+  emit('select', cell.q, cell.r, {
+    additive: event.ctrlKey || event.metaKey,
+  })
+}
+
+function onGhostSelectClick(q: number, r: number) {
+  if (consumeSuppressClick()) return
+  emit('addGhost', q, r)
+}
+
+function isCellSelected(key: string): boolean {
+  if (props.selectedKey === key) return true
+  return (props.selectedKeys?.length ?? 0) > 0 && props.selectedKeys!.includes(key)
+}
+
 const size = 36
 const svgRef = ref<SVGSVGElement | null>(null)
 const zoom = ref(1)
 const pan = ref({ x: 0, y: 0 })
+/** Активный сдвиг карты (после порога или ПКМ/СКМ). */
 const dragging = ref(false)
-const dragStart = ref({ x: 0, y: 0, panX: 0, panY: 0 })
+/** Подавить следующий click после pan/pinch. */
+let suppressNextClick = false
+const PAN_THRESHOLD_PX = 8
+type PanSession = {
+  pointerId: number
+  startX: number
+  startY: number
+  panX: number
+  panY: number
+  /** true = сразу pan (ПКМ/СКМ); false = ждём порог (ЛКМ/touch). */
+  committed: boolean
+}
+const panSession = ref<PanSession | null>(null)
+const activePointers = new Map<number, { x: number; y: number }>()
+type PinchSession = {
+  ids: [number, number]
+  startDist: number
+  startZoom: number
+}
+const pinchSession = ref<PinchSession | null>(null)
 
 const internalOrientation = ref<HexOrientation>('flat')
 const orientation = computed({
@@ -321,7 +363,7 @@ function cellOutlineClass(cell: MapCellDefinition): Record<string, boolean> {
   return {
     hex: true,
     'hex-outline': true,
-    selected: props.selectedKey === key,
+    selected: isCellSelected(key),
     'movement-source': isMovementSource(key),
     reachable: isReachable(key) && !isContested(key),
     contested: isContested(key),
@@ -598,6 +640,193 @@ function zoomBy(factor: number) {
   zoom.value = clampZoom(zoom.value * factor)
 }
 
+function consumeSuppressClick(): boolean {
+  if (!suppressNextClick) return false
+  suppressNextClick = false
+  return true
+}
+
+function clientToViewScale(): { scaleX: number; scaleY: number } {
+  const rect = svgRef.value?.getBoundingClientRect()
+  if (!rect || rect.width <= 0 || rect.height <= 0) {
+    return { scaleX: 1, scaleY: 1 }
+  }
+  const viewParts = displayViewBox.value.split(' ').map(Number)
+  const viewW = viewParts[2] ?? 100
+  const viewH = viewParts[3] ?? 100
+  return { scaleX: viewW / rect.width, scaleY: viewH / rect.height }
+}
+
+function applyPanFromSession(clientX: number, clientY: number, session: PanSession) {
+  const { scaleX, scaleY } = clientToViewScale()
+  pan.value = {
+    x: session.panX - (clientX - session.startX) * scaleX,
+    y: session.panY - (clientY - session.startY) * scaleY,
+  }
+}
+
+function beginCommittedPan(session: PanSession) {
+  session.committed = true
+  dragging.value = true
+  suppressNextClick = true
+  hoveredInteractiveKey.value = null
+  hoveredGhostKey.value = null
+  hideCellTooltip()
+}
+
+function pointerDistance(
+  a: { x: number; y: number },
+  b: { x: number; y: number },
+): number {
+  return Math.hypot(a.x - b.x, a.y - b.y)
+}
+
+function tryStartPinch() {
+  if (!props.zoomable || activePointers.size < 2) return
+  const entries = [...activePointers.entries()]
+  const [idA, a] = entries[0]!
+  const [idB, b] = entries[1]!
+  const dist = pointerDistance(a, b)
+  if (dist < 1) return
+  clearPanCandidateWindowListeners()
+  panSession.value = null
+  dragging.value = false
+  pinchSession.value = {
+    ids: [idA, idB],
+    startDist: dist,
+    startZoom: zoom.value,
+  }
+  suppressNextClick = true
+  hoveredInteractiveKey.value = null
+  hoveredGhostKey.value = null
+  hideCellTooltip()
+  bindPinchWindowListeners()
+}
+
+function updatePinch() {
+  const session = pinchSession.value
+  if (!session) return
+  const a = activePointers.get(session.ids[0])
+  const b = activePointers.get(session.ids[1])
+  if (!a || !b) return
+  const dist = pointerDistance(a, b)
+  if (dist < 1 || session.startDist < 1) return
+  zoom.value = clampZoom(session.startZoom * (dist / session.startDist))
+}
+
+function clearPinchWindowListeners() {
+  if (!import.meta.client) return
+  window.removeEventListener('pointermove', onWindowPinchMove)
+  window.removeEventListener('pointerup', onWindowPinchEnd)
+  window.removeEventListener('pointercancel', onWindowPinchEnd)
+}
+
+function bindPinchWindowListeners() {
+  if (!import.meta.client) return
+  clearPinchWindowListeners()
+  window.addEventListener('pointermove', onWindowPinchMove, { passive: false })
+  window.addEventListener('pointerup', onWindowPinchEnd)
+  window.addEventListener('pointercancel', onWindowPinchEnd)
+}
+
+function onWindowPinchMove(e: PointerEvent) {
+  if (!pinchSession.value) return
+  if (!activePointers.has(e.pointerId)) return
+  e.preventDefault()
+  activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY })
+  updatePinch()
+}
+
+function onWindowPinchEnd(e: PointerEvent) {
+  if (!pinchSession.value) return
+  if (!pinchSession.value.ids.includes(e.pointerId) && !activePointers.has(e.pointerId)) {
+    return
+  }
+  endPointerTracking(e)
+}
+
+function clearPanCandidateWindowListeners() {
+  if (!import.meta.client) return
+  window.removeEventListener('pointermove', onWindowPanCandidateMove)
+  window.removeEventListener('pointerup', onWindowPanCandidateEnd)
+  window.removeEventListener('pointercancel', onWindowPanCandidateEnd)
+}
+
+function bindPanCandidateWindowListeners() {
+  if (!import.meta.client) return
+  clearPanCandidateWindowListeners()
+  window.addEventListener('pointermove', onWindowPanCandidateMove)
+  window.addEventListener('pointerup', onWindowPanCandidateEnd)
+  window.addEventListener('pointercancel', onWindowPanCandidateEnd)
+}
+
+function onWindowPanCandidateMove(e: PointerEvent) {
+  const session = panSession.value
+  if (!session || session.committed || session.pointerId !== e.pointerId) return
+  activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY })
+  const dist = Math.hypot(e.clientX - session.startX, e.clientY - session.startY)
+  if (dist < PAN_THRESHOLD_PX) return
+  beginCommittedPan(session)
+  clearPanCandidateWindowListeners()
+  if (svgRef.value) {
+    try {
+      svgRef.value.setPointerCapture(e.pointerId)
+    } catch {
+      /* ignore */
+    }
+  }
+  applyPanFromSession(e.clientX, e.clientY, session)
+}
+
+function onWindowPanCandidateEnd(e: PointerEvent) {
+  const session = panSession.value
+  if (!session || session.pointerId !== e.pointerId) return
+  if (!session.committed) {
+    clearPanCandidateWindowListeners()
+    activePointers.delete(e.pointerId)
+    panSession.value = null
+  }
+}
+
+function endPointerTracking(e: PointerEvent) {
+  activePointers.delete(e.pointerId)
+  const targets: Array<Element | null> = [e.currentTarget as Element | null, svgRef.value]
+  for (const target of targets) {
+    if (target?.hasPointerCapture?.(e.pointerId)) {
+      try {
+        target.releasePointerCapture(e.pointerId)
+      } catch {
+        /* already released */
+      }
+    }
+  }
+  if (panSession.value?.pointerId === e.pointerId) {
+    if (!panSession.value.committed) {
+      clearPanCandidateWindowListeners()
+    }
+    panSession.value = null
+    dragging.value = false
+  }
+  const pinch = pinchSession.value
+  if (pinch && (pinch.ids.includes(e.pointerId) || activePointers.size < 2)) {
+    pinchSession.value = null
+    clearPinchWindowListeners()
+  }
+  if (activePointers.size === 1 && props.zoomable && !pinchSession.value) {
+    const [pointerId, pt] = [...activePointers.entries()][0]!
+    panSession.value = {
+      pointerId,
+      startX: pt.x,
+      startY: pt.y,
+      panX: pan.value.x,
+      panY: pan.value.y,
+      committed: true,
+    }
+    dragging.value = true
+    suppressNextClick = true
+  }
+}
+
 function onWheel(e: WheelEvent) {
   if (!props.zoomable) return
   e.preventDefault()
@@ -605,33 +834,84 @@ function onWheel(e: WheelEvent) {
 }
 
 function onPointerDown(e: PointerEvent) {
-  if (!props.zoomable || e.button !== 2) return
-  e.preventDefault()
-  dragging.value = true
-  hoveredInteractiveKey.value = null
-  hoveredGhostKey.value = null
-  dragStart.value = { x: e.clientX, y: e.clientY, panX: pan.value.x, panY: pan.value.y }
-  ;(e.currentTarget as Element).setPointerCapture(e.pointerId)
-}
+  if (!props.zoomable) return
+  // Игнор лишних кнопок мыши (назад/вперёд).
+  if (e.pointerType === 'mouse' && e.button > 2) return
 
-function onPointerMove(e: PointerEvent) {
-  if (!dragging.value || !svgRef.value) return
-  const rect = svgRef.value.getBoundingClientRect()
-  const viewParts = displayViewBox.value.split(' ').map(Number)
-  const viewW = viewParts[2] ?? 100
-  const viewH = viewParts[3] ?? 100
-  const scaleX = viewW / rect.width
-  const scaleY = viewH / rect.height
-  pan.value = {
-    x: dragStart.value.panX - (e.clientX - dragStart.value.x) * scaleX,
-    y: dragStart.value.panY - (e.clientY - dragStart.value.y) * scaleY,
+  activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY })
+
+  if (activePointers.size >= 2) {
+    e.preventDefault()
+    clearPanCandidateWindowListeners()
+    ;(e.currentTarget as Element).setPointerCapture(e.pointerId)
+    for (const id of activePointers.keys()) {
+      try {
+        ;(e.currentTarget as Element).setPointerCapture(id)
+      } catch {
+        /* ignore */
+      }
+    }
+    tryStartPinch()
+    return
+  }
+
+  // ПКМ / СКМ — сразу pan (как раньше для ПКМ).
+  if (e.pointerType === 'mouse' && (e.button === 1 || e.button === 2)) {
+    e.preventDefault()
+    ;(e.currentTarget as Element).setPointerCapture(e.pointerId)
+    const session: PanSession = {
+      pointerId: e.pointerId,
+      startX: e.clientX,
+      startY: e.clientY,
+      panX: pan.value.x,
+      panY: pan.value.y,
+      committed: true,
+    }
+    panSession.value = session
+    beginCommittedPan(session)
+    return
+  }
+
+  // ЛКМ / touch / pen — кандидат на pan; клик по клетке, если не превысили порог.
+  if (e.button === 0 || e.pointerType !== 'mouse') {
+    panSession.value = {
+      pointerId: e.pointerId,
+      startX: e.clientX,
+      startY: e.clientY,
+      panX: pan.value.x,
+      panY: pan.value.y,
+      committed: false,
+    }
+    bindPanCandidateWindowListeners()
   }
 }
 
+function onPointerMove(e: PointerEvent) {
+  if (!props.zoomable) return
+  if (activePointers.has(e.pointerId)) {
+    activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY })
+  }
+
+  if (pinchSession.value && activePointers.size >= 2) {
+    e.preventDefault()
+    updatePinch()
+    return
+  }
+
+  const session = panSession.value
+  if (!session || session.pointerId !== e.pointerId || !session.committed) return
+
+  e.preventDefault()
+  applyPanFromSession(e.clientX, e.clientY, session)
+}
+
 function onPointerUp(e: PointerEvent) {
-  if (!dragging.value) return
-  dragging.value = false
-  ;(e.currentTarget as Element).releasePointerCapture(e.pointerId)
+  endPointerTracking(e)
+}
+
+function onPointerCancel(e: PointerEvent) {
+  endPointerTracking(e)
+  suppressNextClick = true
 }
 </script>
 
@@ -642,6 +922,7 @@ function onPointerUp(e: PointerEvent) {
       'fill-viewport': fillViewport,
       overlay: toolbarPlacement === 'overlay',
       'hex-board-wrap--translucent': translucentCells,
+      'hex-board-wrap--game': mode === 'game',
     }"
   >
     <div
@@ -698,7 +979,7 @@ function onPointerUp(e: PointerEvent) {
       @pointerdown="onPointerDown"
       @pointermove="onPointerMove"
       @pointerup="onPointerUp"
-      @pointercancel="onPointerUp"
+      @pointercancel="onPointerCancel"
       @contextmenu="onSvgContextMenu"
     >
       <defs>
@@ -765,7 +1046,7 @@ function onPointerUp(e: PointerEvent) {
           :points="points(g.q, g.r)"
           class="ghost"
           :class="{ 'ghost--hover': hoveredGhostKey === hexKey(g.q, g.r) && !dragging }"
-          @click="emit('addGhost', g.q, g.r)"
+          @click="onGhostSelectClick(g.q, g.r)"
           @mouseenter="onGhostMouseEnter(g.q, g.r)"
           @mouseleave="onGhostMouseLeave"
         />
@@ -782,7 +1063,7 @@ function onPointerUp(e: PointerEvent) {
           }"
           :fill="NEUTRAL_CELL_FILL"
           :fill-opacity="cellFillOpacity"
-          @click="emit('select', cell.q, cell.r)"
+          @click="onCellSelectClick(cell, $event)"
           @mouseenter="onCellMouseEnter(cell, $event)"
           @mouseleave="onCellMouseLeave"
           @mousemove="onCellMouseMove(cell, $event)"
@@ -996,6 +1277,7 @@ function onPointerUp(e: PointerEvent) {
   position: absolute;
   left: 10px;
   bottom: 10px;
+  top: auto;
   z-index: 12;
   margin: 0;
   padding: 0.3rem;
@@ -1007,6 +1289,17 @@ function onPointerUp(e: PointerEvent) {
   align-items: stretch;
   gap: 0.25rem;
   max-width: none;
+  height: auto;
+  width: max-content;
+}
+/* Игровая комната на узком экране: зум только щипком, без колонки контролов */
+@media (max-width: 900px) {
+  .hex-board-wrap--game.overlay .zoom-bar--overlay {
+    display: none !important;
+  }
+  .hex-board-wrap.fill-viewport {
+    touch-action: none;
+  }
 }
 .zoom-bar {
   display: flex;

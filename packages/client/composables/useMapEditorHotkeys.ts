@@ -61,11 +61,13 @@ function findTargetInDirection(
 
 export function useMapEditorHotkeys(options: {
   selectedKey: Ref<string | null>
+  selectedCount: ComputedRef<number>
   ghosts: ComputedRef<{ q: number; r: number }[]>
   map: Ref<MapDefinition>
   shipsFull: ComputedRef<boolean>
   hasCellClipboard: ComputedRef<boolean>
-  selectCell: (q: number, r: number) => void
+  selectCell: (q: number, r: number, mods?: { additive?: boolean }) => void
+  selectAllCells: () => void
   addCell: (q: number, r: number) => void
   removeSelected: () => void
   togglePowerCenter: () => void
@@ -74,6 +76,7 @@ export function useMapEditorHotkeys(options: {
   saveLocal: () => void
   copySelectedCell: () => void
   pasteToSelectedCell: () => void
+  cutSelectedCell: () => void
   undo: () => void
   redo: () => void
   canUndo: ComputedRef<boolean>
@@ -98,15 +101,26 @@ export function useMapEditorHotkeys(options: {
         return
       }
       if (!event.shiftKey && event.code === 'KeyC') {
-        if (!options.selectedKey.value) return
+        if (!options.selectedKey.value && options.selectedCount.value === 0) return
         event.preventDefault()
         options.copySelectedCell()
+        return
+      }
+      if (!event.shiftKey && event.code === 'KeyX') {
+        if (!options.selectedKey.value && options.selectedCount.value === 0) return
+        event.preventDefault()
+        options.cutSelectedCell()
         return
       }
       if (!event.shiftKey && event.code === 'KeyV') {
         if (!options.selectedKey.value || !options.hasCellClipboard.value) return
         event.preventDefault()
         options.pasteToSelectedCell()
+        return
+      }
+      if (!event.shiftKey && event.code === 'KeyA') {
+        event.preventDefault()
+        options.selectAllCells()
         return
       }
       return
@@ -119,7 +133,7 @@ export function useMapEditorHotkeys(options: {
       : null
 
     if (event.key === 'Delete' || event.key === 'Backspace') {
-      if (!selected || options.map.value.cells.length <= 1) return
+      if ((!selected && options.selectedCount.value === 0) || options.map.value.cells.length <= 1) return
       event.preventDefault()
       options.removeSelected()
       return
@@ -141,7 +155,7 @@ export function useMapEditorHotkeys(options: {
       return
     }
 
-    if (!selected) return
+    if (!selected && options.selectedCount.value === 0) return
 
     if (event.code === 'KeyP') {
       event.preventDefault()
@@ -173,15 +187,18 @@ export function useMapEditorHotkeys(options: {
 }
 
 export const MAP_EDITOR_HOTKEYS = [
-  { keys: 'Ctrl+Z', action: 'Отменить последнее действие' },
-  { keys: 'Ctrl+Shift+Z', action: 'Повторить отменённое' },
-  { keys: 'Ctrl+C', action: 'Скопировать состояние клетки' },
-  { keys: 'Ctrl+V', action: 'Вставить в выбранную клетку' },
-  { keys: 'Del / Backspace', action: 'Удалить выбранную клетку' },
-  { keys: '← ↑ → ↓', action: 'Перейти к соседней клетке' },
-  { keys: 'Shift + стрелки', action: 'Добавить клетку в этом направлении' },
-  { keys: 'P', action: 'Центр Власти вкл/выкл' },
-  { keys: '0–6', action: 'Стартовый игрок (0 — нейтральная)' },
-  { keys: 'A', action: 'Добавить корабль на клетку' },
-  { keys: 'Ctrl+S', action: 'Сохранить в браузере' },
+  { keys: 'Ctrl+Z', action: 'Отменить' },
+  { keys: 'Ctrl+Shift+Z', action: 'Повторить' },
+  { keys: 'Ctrl+C', action: 'Копировать клетки' },
+  { keys: 'Ctrl+X', action: 'Вырезать клетки' },
+  { keys: 'Ctrl+V', action: 'Вставить' },
+  { keys: 'Ctrl+A', action: 'Выделить все' },
+  { keys: 'Del', action: 'Удалить клетки' },
+  { keys: 'Ctrl+клик', action: 'Мультивыделение' },
+  { keys: '←↑→↓', action: 'Соседняя клетка' },
+  { keys: 'Shift+стрелки', action: 'Добавить клетку' },
+  { keys: 'P', action: 'Центр власти' },
+  { keys: '0–6', action: 'Контроль (0 — нет)' },
+  { keys: 'A', action: 'Добавить корабль' },
+  { keys: 'Ctrl+S', action: 'Сохранить' },
 ] as const
