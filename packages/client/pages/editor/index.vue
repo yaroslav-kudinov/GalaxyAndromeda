@@ -42,6 +42,7 @@ import {
 import { submitMapForModeration } from '~/composables/useGameApi'
 import { usePlayerProfile } from '~/composables/usePlayerProfile'
 import { loadStoredOrientation, storeOrientation, type HexOrientation } from '~/utils/hex-layout'
+import { useUiStrings } from '~/i18n/ui-strings'
 
 definePageMeta({ layout: 'immersive' })
 
@@ -52,7 +53,15 @@ const SYMMETRY_STORAGE_KEY = 'galaxy-editor-symmetry'
 
 const map = ref<MapDefinition>(normalizeMapDefinition(createEmptyMap('draft', 'Черновик')))
 const importedGame = ref<GameSnapshot | null>(null)
-const selectedKey = ref<string | null>(hexKey(0, 0))
+/** Порядок: последний — «якорная» клетка для панели */
+const selectedKeys = ref<string[]>([hexKey(0, 0)])
+const selectedKey = computed({
+  get: () => selectedKeys.value[selectedKeys.value.length - 1] ?? null,
+  set: (key: string | null) => {
+    selectedKeys.value = key ? [key] : []
+  },
+})
+const selectedCount = computed(() => selectedKeys.value.length)
 const storageKey = 'galaxy-maps'
 const savedMaps = ref<MapDefinition[]>([])
 const loadMapId = ref('')
@@ -64,9 +73,14 @@ const boardCells = computed(() => map.value.cells)
 
 const newShipType = ref<ShipType>('destroyer')
 const newShipPlayer = ref(1)
-const cellClipboard = ref<MapCellContent | null>(null)
+type ClipboardPayload = {
+  anchor: { q: number; r: number }
+  entries: { dq: number; dr: number; content: MapCellContent }[]
+}
+const cellClipboard = ref<ClipboardPayload | null>(null)
 const hasCellClipboard = computed(() => cellClipboard.value != null)
 const boardFocusRef = ref<HTMLElement | null>(null)
+const editorUi = useUiStrings().editor
 
 function loadSymmetrySettings(): SymmetrySettings {
   if (!import.meta.client) return { ...DEFAULT_SYMMETRY_SETTINGS }
@@ -118,36 +132,45 @@ const tokenPreview = computed((): ResourceTokenDef | null => {
 const tokenKind = computed({
   get: () => selectedToken.value?.type ?? 'none',
   set: (kind: 'none' | 'credits' | 'production') => {
-    if (!selectedCell.value) return
+    const cells = selectedCellsList()
+    if (!cells.length) return
     pushHistory()
-    if (kind === 'none') {
-      setCellResourceToken(selectedCell.value, undefined)
-    } else {
-      const value = selectedToken.value?.value ?? 3
-      setCellResourceToken(selectedCell.value, { type: kind, value, faceUp: true })
+    for (const cell of cells) {
+      if (kind === 'none') {
+        setCellResourceToken(cell, undefined)
+      } else {
+        const value = getCellResourceToken(cell)?.value ?? 3
+        setCellResourceToken(cell, { type: kind, value, faceUp: true })
+      }
+      syncSymmetryOrbitFor(cell.q, cell.r)
     }
-    syncSymmetryOrbit()
   },
 })
 
 const tokenValue = computed({
   get: () => selectedToken.value?.value ?? 3,
   set: (value: number) => {
-    if (!selectedCell.value || tokenKind.value === 'none') return
+    const cells = selectedCellsList()
+    if (!cells.length || tokenKind.value === 'none') return
+    const clamped = Math.min(9, Math.max(1, Math.round(value))) as ResourceTokenValue
     pushHistory()
-    setCellResourceToken(selectedCell.value, {
-      type: tokenKind.value as 'credits' | 'production',
-      value: Math.min(9, Math.max(1, value)) as ResourceTokenValue,
-      faceUp: true,
-    })
-    syncSymmetryOrbit()
+    for (const cell of cells) {
+      setCellResourceToken(cell, {
+        type: tokenKind.value as 'credits' | 'production',
+        value: clamped,
+        faceUp: true,
+      })
+      syncSymmetryOrbitFor(cell.q, cell.r)
+    }
   },
 })
 
 const shipCount = computed(() => selectedCell.value?.startingShips?.length ?? 0)
-const shipsFull = computed(
-  () => !selectedCell.value || !canAddShipToCell(selectedCell.value, newShipPlayer.value),
-)
+const shipsFull = computed(() => {
+  const cells = selectedCellsList()
+  if (!cells.length) return true
+  return cells.every((cell) => !canAddShipToCell(cell, newShipPlayer.value))
+})
 
 const playerShipCount = computed(() =>
   selectedCell.value ? countCellShipsForPlayer(selectedCell.value, newShipPlayer.value) : 0,
@@ -225,9 +248,20 @@ function focusBoard() {
 }
 
 function syncSymmetryOrbit() {
-  if (!symmetry.value.enabled || !selectedKey.value) return
+  if (!selectedKey.value) return
   const { q, r } = parseHexKey(selectedKey.value)
+  syncSymmetryOrbitFor(q, r)
+}
+
+function syncSymmetryOrbitFor(q: number, r: number) {
+  if (!symmetry.value.enabled) return
   syncCellOrbitContent(map.value, { q, r }, symmetry.value)
+}
+
+function selectedCellsList() {
+  return selectedKeys.value
+    .map((key) => cellMap.value.get(key))
+    .filter((c): c is NonNullable<typeof c> => !!c)
 }
 
 function expandSymmetryStructure() {
@@ -268,54 +302,85 @@ const { persistNow: persistEditorDraftNow } = useEditorDraft(map, selectedKey, i
   }
 })
 
-function selectCell(q: number, r: number) {
-  selectedKey.value = hexKey(q, r)
+function selectCell(q: number, r: number, mods?: { additive?: boolean }) {
+  const key = hexKey(q, r)
+  if (mods?.additive) {
+    const idx = selectedKeys.value.indexOf(key)
+    if (idx >= 0) {
+      if (selectedKeys.value.length === 1) return
+      selectedKeys.value = selectedKeys.value.filter((k) => k !== key)
+    } else {
+      selectedKeys.value = [...selectedKeys.value, key]
+    }
+  } else {
+    selectedKeys.value = [key]
+  }
+  focusBoard()
+}
+
+function selectAllCells() {
+  selectedKeys.value = map.value.cells.map((c) => hexKey(c.q, c.r))
   focusBoard()
 }
 
 function addCell(q: number, r: number) {
   pushHistory()
   addCellOrbit(map.value, { q, r }, symmetry.value)
-  selectedKey.value = hexKey(q, r)
+  selectedKeys.value = [hexKey(q, r)]
   focusBoard()
 }
 
 function removeSelected() {
-  if (!selectedKey.value) return
-  if (!symmetry.value.enabled && map.value.cells.length <= 1) return
-  const { q, r } = parseHexKey(selectedKey.value)
-  const before = map.value.cells.length
+  const keys = [...selectedKeys.value]
+  if (!keys.length) return
+  if (!symmetry.value.enabled && map.value.cells.length <= keys.length) return
   pushHistory()
-  removeCellOrbit(map.value, { q, r }, symmetry.value)
-  if (map.value.cells.length === before) return
-  selectedKey.value = hexKey(map.value.cells[0].q, map.value.cells[0].r)
+  for (const key of keys) {
+    const { q, r } = parseHexKey(key)
+    removeCellOrbit(map.value, { q, r }, symmetry.value)
+  }
+  if (!map.value.cells.length) {
+    map.value = normalizeMapDefinition(createEmptyMap(map.value.id, map.value.name))
+  }
+  selectedKeys.value = [hexKey(map.value.cells[0].q, map.value.cells[0].r)]
   focusBoard()
 }
 
 function togglePowerCenter() {
-  if (!selectedCell.value) return
+  const cells = selectedCellsList()
+  if (!cells.length) return
+  const next = !cells[0]!.isPowerCenter
   pushHistory()
-  selectedCell.value.isPowerCenter = !selectedCell.value.isPowerCenter
-  syncSymmetryOrbit()
+  for (const cell of cells) {
+    cell.isPowerCenter = next
+    syncSymmetryOrbitFor(cell.q, cell.r)
+  }
 }
 
 function setStartPlayer(player: number | null) {
-  if (!selectedCell.value) return
+  const cells = selectedCellsList()
+  if (!cells.length) return
   pushHistory()
-  selectedCell.value.startPlayer = player
-  syncSymmetryOrbit()
+  for (const cell of cells) {
+    cell.startPlayer = player
+    syncSymmetryOrbitFor(cell.q, cell.r)
+  }
 }
 
 function addShip() {
-  if (!selectedCell.value || shipsFull.value) return
+  const cells = selectedCellsList()
+  if (!cells.length) return
   pushHistory()
-  if (!selectedCell.value.startingShips) selectedCell.value.startingShips = []
-  selectedCell.value.startingShips.push({
-    type: newShipType.value,
-    player: newShipPlayer.value,
-  })
-  syncCellControlWithShips(selectedCell.value)
-  syncSymmetryOrbit()
+  for (const cell of cells) {
+    if (!canAddShipToCell(cell, newShipPlayer.value)) continue
+    if (!cell.startingShips) cell.startingShips = []
+    cell.startingShips.push({
+      type: newShipType.value,
+      player: newShipPlayer.value,
+    })
+    syncCellControlWithShips(cell)
+    syncSymmetryOrbitFor(cell.q, cell.r)
+  }
 }
 
 function removeShip(index: number) {
@@ -331,20 +396,45 @@ function removeShip(index: number) {
 }
 
 function copySelectedCell() {
-  if (!selectedCell.value) return
-  cellClipboard.value = extractCellContent(selectedCell.value)
+  const cells = selectedCellsList()
+  if (!cells.length) return
+  const anchor = cells[0]!
+  cellClipboard.value = {
+    anchor: { q: anchor.q, r: anchor.r },
+    entries: cells.map((c) => ({
+      dq: c.q - anchor.q,
+      dr: c.r - anchor.r,
+      content: extractCellContent(c),
+    })),
+  }
 }
 
 function pasteToSelectedCell() {
   if (!selectedKey.value || !cellClipboard.value) return
-  const idx = map.value.cells.findIndex((c) => hexKey(c.q, c.r) === selectedKey.value)
-  if (idx < 0) return
+  const anchor = parseHexKey(selectedKey.value)
   pushHistory()
-  const { q, r } = map.value.cells[idx]
-  const cell = { q, r }
-  applyCellContent(cell, cellClipboard.value)
-  map.value.cells.splice(idx, 1, cell)
-  syncSymmetryOrbit()
+  const pastedKeys: string[] = []
+  for (const entry of cellClipboard.value.entries) {
+    const q = anchor.q + entry.dq
+    const r = anchor.r + entry.dr
+    let idx = map.value.cells.findIndex((c) => c.q === q && c.r === r)
+    if (idx < 0) {
+      map.value.cells.push({ q, r })
+      idx = map.value.cells.length - 1
+    }
+    if (idx < 0) continue
+    const cell = { q, r }
+    applyCellContent(cell, entry.content)
+    map.value.cells.splice(idx, 1, cell)
+    syncSymmetryOrbitFor(q, r)
+    pastedKeys.push(hexKey(q, r))
+  }
+  if (pastedKeys.length) selectedKeys.value = pastedKeys
+}
+
+function cutSelectedCell() {
+  copySelectedCell()
+  removeSelected()
 }
 
 function saveLocal() {
@@ -449,10 +539,12 @@ function importJson(event: Event) {
 useMapEditorHotkeys({
   map,
   selectedKey,
+  selectedCount,
   ghosts,
   shipsFull,
   hasCellClipboard,
   selectCell,
+  selectAllCells,
   addCell,
   removeSelected,
   togglePowerCenter,
@@ -461,6 +553,7 @@ useMapEditorHotkeys({
   saveLocal,
   copySelectedCell,
   pasteToSelectedCell,
+  cutSelectedCell,
   undo,
   redo,
   canUndo,
@@ -480,6 +573,7 @@ useMapEditorHotkeys({
         :cells="boardCells"
         :ghosts="ghosts"
         :selected-key="selectedKey"
+        :selected-keys="selectedKeys"
         :symmetry-orbit-keys="symmetryOrbitKeys"
         :orientation="boardOrientation"
         mode="editor"
@@ -489,8 +583,20 @@ useMapEditorHotkeys({
       />
     </section>
 
+    <footer class="hotkeys-bar" aria-label="Горячие клавиши">
+      <span class="hotkeys-bar-title">{{ editorUi.hotkeysBarTitle }}</span>
+      <span
+        v-for="row in MAP_EDITOR_HOTKEYS"
+        :key="row.keys"
+        class="hotkeys-bar-item"
+      >
+        <kbd>{{ row.keys }}</kbd>
+        <span>{{ row.action }}</span>
+      </span>
+    </footer>
+
     <header class="hud-top">
-      <NuxtLink to="/" class="back-link">← Lobby</NuxtLink>
+      <NuxtLink to="/" class="back-link">← На главную</NuxtLink>
       <label class="inline-field name-field">
         <input v-model="map.name" type="text" placeholder="Название карты" />
       </label>
@@ -515,7 +621,8 @@ useMapEditorHotkeys({
         <div v-show="panelTab === 'cell'" class="panel-body">
           <template v-if="selectedCell">
             <h2>
-              ({{ selectedKey }})
+              <template v-if="selectedCount > 1">{{ editorUi.multiSelected(selectedCount) }}</template>
+              <template v-else>({{ selectedKey }})</template>
               <span v-if="hasCellClipboard" class="clipboard-badge" title="Ctrl+V">буфер</span>
             </h2>
 
@@ -528,6 +635,17 @@ useMapEditorHotkeys({
             </div>
             <div v-if="tokenKind !== 'none'" class="value-row">
               <input v-model.number="tokenValue" type="range" min="1" max="9" step="1" />
+              <label class="token-number">
+                <span class="sr-only">{{ editorUi.tokenValue }}</span>
+                <input
+                  v-model.number="tokenValue"
+                  type="number"
+                  min="1"
+                  max="9"
+                  step="1"
+                  inputmode="numeric"
+                />
+              </label>
               <svg v-if="tokenPreview" viewBox="-16 -16 32 32" class="token-preview" aria-hidden="true">
                 <ResourceTokenGlyph :token="tokenPreview" />
               </svg>
@@ -755,6 +873,7 @@ useMapEditorHotkeys({
 .board-layer {
   position: absolute;
   inset: 0;
+  bottom: 2.4rem;
   outline: none;
   overflow: hidden;
 }
@@ -931,6 +1050,27 @@ useMapEditorHotkeys({
 }
 .value-row input[type='range'] {
   flex: 1;
+}
+.token-number input {
+  width: 3.2rem;
+  padding: 0.25rem 0.35rem;
+  border-radius: 6px;
+  border: 1px solid #475569;
+  background: #0f172a;
+  color: #f8fafc;
+  font-size: 0.9rem;
+  text-align: center;
+}
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 .token-preview {
   width: 40px;
@@ -1155,5 +1295,42 @@ button.danger {
 }
 .err {
   color: #f87171;
+}
+.hotkeys-bar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 25;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem 0.65rem;
+  padding: 0.35rem 0.6rem 0.45rem;
+  background: linear-gradient(to top, rgba(15, 23, 42, 0.96), rgba(15, 23, 42, 0.72));
+  border-top: 1px solid #334155;
+  pointer-events: none;
+  font-size: 0.72rem;
+  color: #94a3b8;
+}
+.hotkeys-bar-title {
+  font-weight: 700;
+  color: #cbd5e1;
+  margin-right: 0.25rem;
+}
+.hotkeys-bar-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  white-space: nowrap;
+}
+.hotkeys-bar kbd {
+  padding: 0.1rem 0.35rem;
+  border-radius: 4px;
+  border: 1px solid #475569;
+  background: #0f172a;
+  color: #e2e8f0;
+  font-family: ui-monospace, monospace;
+  font-size: 0.68rem;
 }
 </style>

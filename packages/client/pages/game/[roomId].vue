@@ -44,10 +44,11 @@ import {
 import { advanceScenarioStep, fetchObservation, fetchRoomBootstrap, GameApiError, joinRoom, rejoinRoom, startRoom, closeRoom, submitGameAction, updateCombatPrepAction } from '~/composables/useGameApi'
 import { loadGameSessionForRoom, saveGameSession, persistLocalGalaxySave, clearLocalGalaxySave, loadLocalGalaxySaveRaw, pruneOnlineGalaxySaveCache } from '~/composables/useGameSession'
 import { loadPlayerClaim, savePlayerClaim } from '~/composables/usePlayerClaim'
-import { bootstrapToLobbySlots, defaultSlotForRoom, joinAsLabel, roomHasFreeSlot } from '~/utils/lobby-slot'
+import { bootstrapToLobbySlots, defaultSlotForRoom, roomHasFreeSlot } from '~/utils/lobby-slot'
 import { useGamePresence } from '~/composables/useGamePresence'
 import { usePlayerProfile } from '~/composables/usePlayerProfile'
 import { useObservationSync } from '~/composables/useObservationSync'
+import { useRoomChat } from '~/composables/useRoomChat'
 import {
   combatUiMatchesExpectation,
   combatUiMismatchMessage,
@@ -114,6 +115,20 @@ function bumpObservationEpoch(): void {
 const saveFile = ref<GalaxySaveFile | null>(null)
 const selectedKey = ref<string | null>(null)
 const panelCollapsed = ref(false)
+const hudToolsOpen = ref(false)
+const NARROW_UI_MQ = '(max-width: 900px)'
+const isNarrowUi = ref(false)
+let narrowUiMql: MediaQueryList | null = null
+function syncNarrowUi() {
+  if (!import.meta.client) return
+  const narrow = window.matchMedia(NARROW_UI_MQ).matches
+  const wasNarrow = isNarrowUi.value
+  isNarrowUi.value = narrow
+  if (narrow && !wasNarrow) {
+    panelCollapsed.value = true
+    hudToolsOpen.value = false
+  }
+}
 const legalActions = ref<LegalAction[]>([])
 const tutorialMode = ref(false)
 const serverStatus = ref<'idle' | 'loading' | 'online' | 'offline'>('idle')
@@ -395,6 +410,45 @@ const showLobbyOverlay = computed(() => needsJoin.value || isWaitingLobby.value)
 const isLobbyHost = computed(
   () => !!playerId.value && lobbyHostPlayerId.value === playerId.value,
 )
+
+const chatEnabled = computed(
+  () =>
+    !roomId.value.startsWith('local-')
+    && !needsJoin.value
+    && !!playerId.value
+    && (roomMatchStatus.value === 'lobby' || roomMatchStatus.value === 'playing'),
+)
+
+const {
+  messages: chatMessages,
+  sending: chatSending,
+  error: chatError,
+  open: chatOpen,
+  send: sendChat,
+} = useRoomChat({
+  roomId,
+  playerId,
+  enabled: chatEnabled,
+})
+
+const chatPeers = computed(() => {
+  const self = playerId.value
+  if (!self) return []
+  if (snapshot.value?.players?.length) {
+    return snapshot.value.players
+      .filter((p) => p.id !== self)
+      .map((p) => ({ id: p.id, name: p.name }))
+  }
+  const bootstrap = roomBootstrap.value
+  if (!bootstrap) return []
+  return bootstrap.players
+    .filter((p) => p.id !== self && p.joined)
+    .map((p) => ({ id: p.id, name: p.name }))
+})
+
+function onChatSend(payload: { text: string; toPlayerId: string | null }) {
+  void sendChat(payload.text, payload.toPlayerId)
+}
 
 function applyBootstrapMeta(bootstrap: Awaited<ReturnType<typeof fetchRoomBootstrap>>) {
   if (bootstrap.status === 'lobby' || bootstrap.status === 'playing') {
@@ -2671,6 +2725,11 @@ onMounted(async () => {
   window.addEventListener('keydown', onMapPickKeydown)
   window.addEventListener('unhandledrejection', onWindowUnhandledRejection)
   window.addEventListener('error', onWindowError)
+  if (typeof window.matchMedia === 'function') {
+    narrowUiMql = window.matchMedia(NARROW_UI_MQ)
+    syncNarrowUi()
+    narrowUiMql.addEventListener('change', syncNarrowUi)
+  }
   if (typeof ResizeObserver !== 'undefined') {
     hudChromeResizeObserver = new ResizeObserver(() => syncHudChromeHeight())
     nextTick(() => {
@@ -2702,6 +2761,8 @@ onUnmounted(() => {
   window.removeEventListener('keydown', onMapPickKeydown)
   window.removeEventListener('unhandledrejection', onWindowUnhandledRejection)
   window.removeEventListener('error', onWindowError)
+  narrowUiMql?.removeEventListener('change', syncNarrowUi)
+  narrowUiMql = null
   hudChromeResizeObserver?.disconnect()
   hudChromeResizeObserver = null
   lastHudHeaderHeightPx = 0
@@ -2719,99 +2780,39 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
   <div ref="gameViewportRef" class="game-viewport">
     <div v-if="showLobbyOverlay" class="join-overlay">
       <div class="join-card join-card--lobby">
-        <template v-if="needsJoin">
-          <form @submit.prevent="submitJoin">
-            <h2>Вход в комнату</h2>
-            <p v-if="roomBootstrap" class="join-meta">
-              Игроков: {{ roomBootstrap.playerCount }}/{{ roomBootstrap.maxPlayers }}
-              <span v-if="roomBootstrap.code"> · код {{ roomBootstrap.code }}</span>
-              <span v-if="roomBootstrap.status === 'playing'"> · игра уже идёт</span>
-            </p>
-
-            <div v-if="joinLobbySlots.length" class="join-players">
-              <h3 class="join-players-title">Стартовая позиция и цвет</h3>
-              <LobbySlotPicker
-                v-model="selectedJoinSlot"
-                :slots="joinLobbySlots"
-                :disabled="joinBusy || joinRoomFull"
-              />
-            </div>
-
-            <p v-if="joinRoomFull" class="join-error">Все слоты заняты — дождитесь освобождения места.</p>
-
-            <p v-if="hasNickname" class="join-as">
-              Вы войдёте как <strong>{{ nickname }}</strong>
-            </p>
-            <p v-else class="join-error">
-              Никнейм не задан —
-              <NuxtLink to="/">выберите в лобби</NuxtLink>
-            </p>
-
-            <p v-if="joinError" class="join-error">{{ joinError }}</p>
-            <button
-              type="submit"
-              class="join-submit"
-              :disabled="joinBusy || !hasNickname || !selectedJoinSlot || joinRoomFull"
-            >
-              {{ joinBusy ? 'Вход…' : joinAsLabel(nickname || '…', selectedJoinSlot) }}
-            </button>
-            <NuxtLink to="/" class="join-back">← В лобби</NuxtLink>
-            <NuxtLink to="/lobbies" class="join-back">Список лобби</NuxtLink>
-          </form>
-        </template>
-        <template v-else>
-          <h2>Комната подготовки</h2>
-          <p v-if="roomBootstrap" class="join-meta">
-            Игроков: {{ roomBootstrap.playerCount }}/{{ roomBootstrap.maxPlayers }}
-            <span v-if="roomBootstrap.code"> · код {{ roomBootstrap.code }}</span>
-          </p>
-          <p class="join-as">
-            Выберите <strong>где играть</strong> (стартовая позиция на карте) и <strong>цвет</strong>.
-            Игра начнётся, когда создатель комнаты нажмёт «Начать игру».
-          </p>
-          <div v-if="joinLobbySlots.length" class="join-players">
-            <h3 class="join-players-title">Стартовая позиция и цвет</h3>
-            <LobbySlotPicker
-              :model-value="selectedJoinSlot"
-              :slots="joinLobbySlots"
-              :current-player-id="playerId"
-              :disabled="joinBusy"
-              @update:model-value="onLobbySlotPicked"
-            />
-          </div>
-          <p v-if="joinError" class="join-error">{{ joinError }}</p>
-          <button
-            type="button"
-            class="join-submit join-submit--secondary"
-            :disabled="joinBusy"
-            @click="copyInviteLink"
-          >
-            {{ inviteCopied ? 'Ссылка скопирована' : 'Скопировать ссылку-приглашение' }}
-          </button>
-          <button
-            v-if="isLobbyHost"
-            type="button"
-            class="join-submit join-submit--secondary"
-            :disabled="joinBusy"
-            @click="closeLobbyRoom"
-          >
-            {{ joinBusy ? '…' : 'Закрыть комнату' }}
-          </button>
-          <button
-            v-if="isLobbyHost"
-            type="button"
-            class="join-submit"
-            :disabled="joinBusy || !roomBootstrap?.playerCount"
-            @click="startLobbyGame"
-          >
-            {{ joinBusy ? 'Старт…' : 'Начать игру' }}
-          </button>
-          <p v-else class="join-as">Ждём, пока создатель комнаты начнёт игру…</p>
-          <NuxtLink to="/" class="join-back">← Выйти в лобби</NuxtLink>
-        </template>
-        <SoundtrackPanel placement="lobby" />
+        <RoomLobbyPanel
+          :mode="needsJoin ? 'join' : 'prep'"
+          :bootstrap="roomBootstrap"
+          :slots="joinLobbySlots"
+          :selected-slot="selectedJoinSlot"
+          :current-player-id="playerId"
+          :nickname="nickname"
+          :has-nickname="hasNickname"
+          :busy="joinBusy"
+          :room-full="joinRoomFull"
+          :error="joinError"
+          :is-host="isLobbyHost"
+          :invite-copied="inviteCopied"
+          @update:selected-slot="selectedJoinSlot = $event"
+          @join="submitJoin"
+          @start="startLobbyGame"
+          @close="closeLobbyRoom"
+          @copy-invite="copyInviteLink"
+          @slot-pick="onLobbySlotPicked"
+        />
       </div>
     </div>
+
+    <RoomChatPanel
+      v-if="chatEnabled"
+      v-model:open="chatOpen"
+      :messages="chatMessages"
+      :peers="chatPeers"
+      :self-player-id="playerId!"
+      :sending="chatSending"
+      :error="chatError"
+      @send="onChatSend"
+    />
 
     <section class="board-layer">
       <GameBoard
@@ -3102,88 +3103,115 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
       </div>
     </div>
 
-    <div class="hud-chrome">
+    <div class="hud-chrome" :class="{ 'hud-chrome--narrow': isNarrowUi }">
       <header ref="hudTopRef" class="hud-top" :class="{ 'hud-top--tutorial': !!tutorialCoach }">
         <div class="hud-top-left">
           <NuxtLink to="/" class="back-link">← Лобби</NuxtLink>
           <div v-if="saveFile" class="hud-title" :title="`Комната ${roomId}`">
             <strong>{{ saveFile.map.name }}</strong>
           </div>
-          <div class="hud-tools">
+          <div
+            v-if="isNarrowUi"
+            class="you-plaque you-plaque--header"
+            :class="{ 'you-plaque--turn': isMyTurn }"
+            :style="youBadgeStyle"
+            :title="`Вы — ${myPlayerName}`"
+            aria-live="polite"
+          >
+            {{ myPlayerName }}
+          </div>
+          <div class="hud-tools" :class="{ 'hud-tools--open': hudToolsOpen }">
             <button
-              v-if="canSurrender"
+              v-if="isNarrowUi"
               type="button"
-              class="sfx-mute-btn"
-              title="Сдаться"
-              :disabled="!canSurrender"
-              @click="surrenderMatch"
+              class="sfx-mute-btn hud-tools-toggle"
+              :aria-expanded="hudToolsOpen"
+              aria-controls="game-hud-tools-extra"
+              title="Ещё действия"
+              @click="hudToolsOpen = !hudToolsOpen"
             >
-              Сдаться
+              {{ hudToolsOpen ? 'Скрыть' : 'Ещё' }}
             </button>
-            <span class="server-pill" :class="serverStatus">
-              {{ serverStatus === 'online' ? 'Сервер' : serverStatus === 'offline' ? 'Offline' : '…' }}
-            </span>
-            <button
-              type="button"
-              class="sfx-mute-btn"
-              :title="sfxMuted ? 'Включить звуки' : 'Выключить звуки'"
-              :aria-label="sfxMuted ? 'Включить звуки' : 'Выключить звуки'"
-              :aria-pressed="sfxMuted"
-              @click="toggleSfxMute"
+            <div
+              id="game-hud-tools-extra"
+              class="hud-tools-extra"
+              v-show="!isNarrowUi || hudToolsOpen"
             >
-              {{ sfxMuted ? '🔇' : '🔊' }}
-            </button>
-            <SoundtrackPanel placement="hud" />
-            <button
-              type="button"
-              class="bug-report-btn"
-              title="Сообщить о баге"
-              @click="bugReportOpen = true"
-            >
-              Баг
-            </button>
-            <div class="rules-help-wrap">
+              <button
+                v-if="canSurrender"
+                type="button"
+                class="sfx-mute-btn"
+                title="Сдаться"
+                :disabled="!canSurrender"
+                @click="surrenderMatch"
+              >
+                Сдаться
+              </button>
+              <span class="server-pill" :class="serverStatus">
+                {{ serverStatus === 'online' ? 'Сервер' : serverStatus === 'offline' ? 'Offline' : '…' }}
+              </span>
               <button
                 type="button"
-                class="rules-help-btn"
-                title="Справка по правилам"
-                :aria-describedby="showRulesNewbieTip ? 'rules-newbie-tip' : undefined"
-                @click="openRulesHelp"
+                class="sfx-mute-btn"
+                :title="sfxMuted ? 'Включить звуки' : 'Выключить звуки'"
+                :aria-label="sfxMuted ? 'Включить звуки' : 'Выключить звуки'"
+                :aria-pressed="sfxMuted"
+                @click="toggleSfxMute"
               >
-                Правила
+                {{ sfxMuted ? '🔇' : '🔊' }}
               </button>
-              <div
-                v-if="showRulesNewbieTip"
-                id="rules-newbie-tip"
-                class="rules-newbie-tip"
-                role="status"
+              <SoundtrackPanel placement="hud" />
+              <button
+                type="button"
+                class="bug-report-btn"
+                title="Сообщить о баге"
+                @click="bugReportOpen = true"
               >
-                <p class="rules-newbie-tip-text">
-                  Не знаете что делать? Ознакомьтесь с разделом правил!
-                </p>
+                Баг
+              </button>
+              <div class="rules-help-wrap">
                 <button
                   type="button"
-                  class="rules-newbie-tip-dismiss"
-                  title="Скрыть подсказку"
-                  aria-label="Скрыть подсказку"
-                  @click.stop="dismissRulesNewbieTip"
+                  class="rules-help-btn"
+                  title="Справка по правилам"
+                  :aria-describedby="showRulesNewbieTip ? 'rules-newbie-tip' : undefined"
+                  @click="openRulesHelp"
                 >
-                  ×
+                  Правила
                 </button>
+                <div
+                  v-if="showRulesNewbieTip"
+                  id="rules-newbie-tip"
+                  class="rules-newbie-tip"
+                  role="status"
+                >
+                  <p class="rules-newbie-tip-text">
+                    Не знаете что делать? Ознакомьтесь с разделом правил!
+                  </p>
+                  <button
+                    type="button"
+                    class="rules-newbie-tip-dismiss"
+                    title="Скрыть подсказку"
+                    aria-label="Скрыть подсказку"
+                    @click.stop="dismissRulesNewbieTip"
+                  >
+                    ×
+                  </button>
+                </div>
               </div>
+              <button
+                v-if="serverStatus === 'online' && roomBootstrap && roomBootstrap.playerCount < roomBootstrap.maxPlayers"
+                type="button"
+                class="invite-btn"
+                @click="copyInviteLink"
+              >
+                {{ inviteCopied ? 'Ссылка скопирована' : 'Ссылка-приглашение' }}
+              </button>
             </div>
-            <button
-              v-if="serverStatus === 'online' && roomBootstrap && roomBootstrap.playerCount < roomBootstrap.maxPlayers"
-              type="button"
-              class="invite-btn"
-              @click="copyInviteLink"
-            >
-              {{ inviteCopied ? 'Ссылка скопирована' : 'Ссылка-приглашение' }}
-            </button>
           </div>
         </div>
 
-        <div v-if="isMyTurn" class="hud-top-center">
+        <div v-if="isMyTurn && !isNarrowUi" class="hud-top-center">
           <button
             type="button"
             class="phase-advance-btn phase-advance-btn--hero"
@@ -3211,8 +3239,8 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
             :active-player-id="snapshot.activePlayerId"
             :players="snapshot.players"
             :is-my-turn="isMyTurn"
-            :prompt="tutorialCoach ? undefined : phaseGuidance?.prompt"
-            :count-hint="tutorialCoach ? undefined : phaseGuidance?.countHint"
+            :prompt="tutorialCoach || isNarrowUi ? undefined : phaseGuidance?.prompt"
+            :count-hint="tutorialCoach || isNarrowUi ? undefined : phaseGuidance?.countHint"
             :guidance-accent="phaseGuidance?.accent"
           />
         </div>
@@ -3241,7 +3269,7 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
             :step-count="tutorialCoach.stepCount"
             @next="onScenarioCoachNext"
           />
-          <div class="you-plaque-slot" aria-live="polite">
+          <div v-if="!isNarrowUi" class="you-plaque-slot" aria-live="polite">
             <div
               class="you-plaque"
               :class="{ 'you-plaque--turn': isMyTurn }"
@@ -3255,7 +3283,43 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
       </div>
     </div>
 
-    <aside class="hud-right" :class="{ collapsed: panelCollapsed }">
+    <div
+      v-if="isMyTurn && isNarrowUi"
+      class="mobile-phase-dock"
+      role="region"
+      aria-label="Действие фазы"
+    >
+      <p v-if="phaseHint" class="hud-center-hint err">{{ phaseHint }}</p>
+      <p v-else-if="phaseAdvanceBlockedReason" class="hud-center-hint err">
+        {{ phaseAdvanceBlockedReason }}
+      </p>
+      <button
+        type="button"
+        class="phase-advance-btn phase-advance-btn--hero phase-advance-btn--dock"
+        :style="phaseAdvanceBtnStyle"
+        :disabled="advancingPhase || !canAdvancePhase"
+        :title="phaseAdvanceBlockedReason ?? undefined"
+        @click="endPhase"
+      >
+        {{ advancingPhase ? '…' : advancePhaseLabel }}
+      </button>
+    </div>
+
+    <aside
+      class="hud-right"
+      :class="{
+        collapsed: panelCollapsed,
+        'hud-right--sheet': isNarrowUi,
+        'hud-right--fab': isNarrowUi && panelCollapsed,
+      }"
+    >
+      <button
+        v-if="isNarrowUi && !panelCollapsed"
+        type="button"
+        class="panel-sheet-backdrop"
+        aria-label="Закрыть панель"
+        @click="panelCollapsed = true"
+      />
       <button
         type="button"
         class="panel-toggle"
@@ -3264,7 +3328,8 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
         aria-controls="game-side-panel"
         @click="panelCollapsed = !panelCollapsed"
       >
-        {{ panelCollapsed ? '«' : '»' }}
+        <template v-if="isNarrowUi">{{ panelCollapsed ? 'Игра' : 'Закрыть' }}</template>
+        <template v-else>{{ panelCollapsed ? '«' : '»' }}</template>
       </button>
       <div v-if="!panelCollapsed" id="game-side-panel" class="panel-inner">
         <header class="panel-heading-row">
@@ -3656,6 +3721,22 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
   flex: 0 1 auto;
   min-width: 0;
 }
+.hud-tools-extra {
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 0.28rem;
+  min-width: 0;
+}
+.hud-tools-toggle {
+  flex-shrink: 0;
+}
+.mobile-phase-dock {
+  display: none;
+}
+.panel-sheet-backdrop {
+  display: none;
+}
 .hud-below {
   display: flex;
   align-items: flex-start;
@@ -3806,6 +3887,15 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
 .you-plaque--turn {
   outline: 2px solid #fff;
   outline-offset: 2px;
+}
+.you-plaque--header {
+  max-width: min(7.5rem, 28vw);
+  padding: 0.22rem 0.55rem 0.2rem;
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  border-radius: 8px;
+  flex-shrink: 1;
+  min-width: 0;
 }
 .panel-heading-meta {
   display: flex;
@@ -4372,13 +4462,29 @@ button,
   backdrop-filter: blur(4px);
 }
 .join-card {
-  width: min(420px, 92vw);
-  max-height: min(88vh, 720px);
+  width: min(440px, 94vw);
+  max-height: min(90vh, 780px);
   overflow: auto;
-  padding: 1.25rem;
+  padding: 1.15rem 1.2rem 1.25rem;
   border-radius: 12px;
   border: 1px solid #334155;
   background: #1e293b;
+}
+.join-card--lobby {
+  width: min(480px, 96vw);
+}
+@media (max-width: 520px) {
+  .join-card,
+  .join-card--lobby {
+    width: 100%;
+    max-height: 100dvh;
+    border-radius: 0;
+    border-left: none;
+    border-right: none;
+  }
+  .join-overlay {
+    align-items: stretch;
+  }
 }
 .join-submit--secondary {
   border-color: #64748b;
@@ -4573,54 +4679,204 @@ button,
 
 @media (max-width: 900px) {
   .game-viewport {
-    --hud-header-height: 5.75rem;
+    --hud-header-height: 3.35rem;
+    --mobile-dock-offset: 0px;
+  }
+  .game-viewport:has(.mobile-phase-dock) {
+    --mobile-dock-offset: 4.75rem;
   }
   .you-plaque {
-    font-size: 0.98rem;
-    padding: 0.4rem 0.9rem 0.35rem;
+    font-size: 0.92rem;
+    padding: 0.35rem 0.75rem 0.3rem;
   }
-  .hud-top {
-    min-height: 5.75rem;
-    grid-template-columns: 1fr;
-    grid-template-rows: auto auto auto;
-    gap: 0.45rem;
+  .hud-chrome--narrow .hud-top {
+    min-height: 3.1rem;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-rows: auto;
+    gap: 0.35rem 0.5rem;
+    padding: 0.35rem 0.55rem;
   }
-  .hud-top-left,
+  .hud-top-left {
+    grid-column: 1;
+    gap: 0.3rem 0.4rem;
+  }
   .hud-top-center,
-  .hud-top-right {
-    position: static;
-    transform: none;
-    justify-self: stretch;
-    max-width: none;
-    grid-column: auto;
-    width: auto;
-  }
-  .hud-top-center {
-    order: 2;
-  }
   .hud-top-center--idle {
     display: none;
   }
   .hud-top-right {
-    justify-content: flex-start;
-    flex-wrap: wrap;
-    order: 3;
+    grid-column: 2;
+    justify-content: flex-end;
+    max-width: min(52vw, 14rem);
   }
   .hud-top-right :deep(.phase-panel--hero) {
-    justify-content: flex-start;
-    max-width: none;
+    justify-content: flex-end;
+    max-width: 100%;
     flex-wrap: wrap;
+    gap: 0.25rem;
+  }
+  .hud-top-right :deep(.phase-guidance),
+  .hud-top-right :deep(.active-player-badge:not(.active-player-badge--you)) {
+    display: none;
+  }
+  .hud-title {
+    max-width: min(38vw, 9.5rem);
   }
   .hud-tools {
-    justify-content: flex-start;
+    flex-wrap: nowrap;
+    width: auto;
+    position: relative;
+  }
+  .hud-tools-extra {
+    position: absolute;
+    top: calc(100% + 0.35rem);
+    left: 0;
+    z-index: 40;
     flex-wrap: wrap;
+    width: min(92vw, 18rem);
+    padding: 0.45rem;
+    border-radius: 10px;
+    border: 1px solid rgba(71, 85, 105, 0.85);
+    background: rgba(15, 23, 42, 0.96);
+    box-shadow: 0 10px 28px rgba(2, 6, 23, 0.5);
+  }
+  .hud-tools-extra[hidden] {
+    display: none !important;
+  }
+  .sfx-mute-btn,
+  .bug-report-btn,
+  .rules-help-btn,
+  .invite-btn,
+  .hud-tools-toggle {
+    min-height: 2.35rem;
+    padding: 0.35rem 0.65rem;
+    font-size: 0.82rem;
   }
   .hud-below-left {
     max-width: min(24rem, 94vw);
   }
-  .phase-advance-btn--hero {
+  .mobile-phase-dock {
+    display: flex;
+    position: absolute;
+    left: 0.65rem;
+    right: 0.65rem;
+    bottom: max(0.55rem, env(safe-area-inset-bottom, 0px));
+    z-index: 46;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.3rem;
+    pointer-events: none;
+  }
+  .mobile-phase-dock > * {
+    pointer-events: auto;
+  }
+  .phase-advance-btn--dock {
     width: 100%;
-    max-width: 360px;
+    min-height: 3.05rem;
+    font-size: 1.02rem;
+    border-radius: 12px;
+    box-shadow: 0 8px 24px rgba(2, 6, 23, 0.45);
+  }
+  .hud-right--sheet {
+    top: auto;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    width: 100%;
+    max-height: min(72dvh, 34rem);
+    flex-direction: column;
+    border-left: none;
+    border-top: 1px solid rgba(71, 85, 105, 0.85);
+    background: rgba(15, 23, 42, 0.96);
+    z-index: 56;
+    padding-bottom: max(0.25rem, env(safe-area-inset-bottom, 0px));
+    transition: none;
+  }
+  /* Свёрнутая панель = только FAB, без колонки на всю высоту */
+  .hud-right--sheet.collapsed,
+  .hud-right--fab {
+    position: absolute;
+    inset: auto auto calc(var(--mobile-dock-offset) + max(0.55rem, env(safe-area-inset-bottom, 0px))) 0.65rem;
+    top: auto;
+    right: auto;
+    bottom: calc(var(--mobile-dock-offset) + max(0.55rem, env(safe-area-inset-bottom, 0px)));
+    left: 0.65rem;
+    width: max-content;
+    height: max-content;
+    max-width: none;
+    max-height: none;
+    margin: 0;
+    padding: 0;
+    border: none;
+    background: none;
+    box-shadow: none;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    flex-direction: row;
+    align-items: center;
+    z-index: 47;
+    pointer-events: none;
+    transition: none;
+  }
+  .hud-right--fab .panel-toggle,
+  .hud-right--sheet.collapsed .panel-toggle {
+    pointer-events: auto;
+  }
+  .hud-right--sheet .panel-toggle {
+    width: auto;
+    min-height: 2.6rem;
+    min-width: 3.6rem;
+    padding: 0.45rem 0.85rem;
+    border-radius: 999px;
+    border: 1px solid #475569;
+    background: rgba(30, 41, 59, 0.95);
+    color: #e2e8f0;
+    font-size: 0.88rem;
+    font-weight: 700;
+    box-shadow: 0 6px 18px rgba(2, 6, 23, 0.4);
+  }
+  .hud-right--sheet:not(.collapsed) .panel-toggle {
+    width: 100%;
+    border-radius: 0;
+    border: none;
+    border-bottom: 1px solid #334155;
+    min-height: 2.75rem;
+    box-shadow: none;
+    pointer-events: auto;
+  }
+  .hud-right--sheet .panel-inner {
+    max-height: calc(min(72dvh, 34rem) - 2.75rem);
+    padding-bottom: 1rem;
+    pointer-events: auto;
+  }
+  .panel-sheet-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    border: none;
+    margin: 0;
+    padding: 0;
+    background: rgba(2, 6, 23, 0.45);
+    cursor: pointer;
+  }
+  .map-pick-banner {
+    top: calc(var(--hud-header-height) + 0.4rem);
+    max-width: min(96vw, 520px);
+    padding: 0.65rem 0.75rem;
+  }
+  .map-pick-primary,
+  .map-pick-secondary,
+  .map-pick-cancel {
+    min-height: 2.5rem;
+    padding: 0.45rem 0.85rem;
+    font-size: 0.88rem;
+  }
+  .game-viewport:has(.mobile-phase-dock) :deep(.room-chat) {
+    bottom: calc(var(--mobile-dock-offset) + 0.5rem);
+  }
+  .game-viewport :deep(.room-chat) {
+    bottom: calc(var(--mobile-dock-offset) + 0.5rem);
   }
 }
 </style>

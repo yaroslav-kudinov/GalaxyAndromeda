@@ -85,3 +85,12 @@ Combat FSM phases: `prep` → (roll) → `awaiting-destruction` (winner picks lo
 ## WebSocket
 
 `WS /ws` — echo stub; full sync in server-game worktree.
+
+## Room chat
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/rooms/:id/chat?playerId=&after=` | Сообщения, видимые игроку (общий канал + личные с его участием). `after` — id последнего известного сообщения |
+| POST | `/rooms/:id/chat` | Body: `{ playerId, text, toPlayerId? }` → `{ message }`. Без `toPlayerId` — общий чат. Лимиты: 400 символов, 12 сообщ./мин |
+
+См. [ADR 014](./decisions/014-room-chat.md).
