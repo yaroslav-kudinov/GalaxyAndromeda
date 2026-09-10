@@ -3289,8 +3289,8 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
       role="region"
       aria-label="Действие фазы"
     >
-      <p v-if="phaseHint" class="hud-center-hint err">{{ phaseHint }}</p>
-      <p v-else-if="phaseAdvanceBlockedReason" class="hud-center-hint err">
+      <p v-if="phaseHint" class="mobile-phase-dock__hint hud-center-hint err">{{ phaseHint }}</p>
+      <p v-else-if="phaseAdvanceBlockedReason" class="mobile-phase-dock__hint hud-center-hint err">
         {{ phaseAdvanceBlockedReason }}
       </p>
       <button
@@ -4680,10 +4680,8 @@ button,
 @media (max-width: 900px) {
   .game-viewport {
     --hud-header-height: 3.35rem;
-    --mobile-dock-offset: 0px;
-  }
-  .game-viewport:has(.mobile-phase-dock) {
-    --mobile-dock-offset: 4.75rem;
+    /* Один нижний ряд FAB: Игра | фаза | Чат — без второго «этажа» под home indicator */
+    --mobile-fab-bottom: max(0.55rem, env(safe-area-inset-bottom, 0px));
   }
   .you-plaque {
     font-size: 0.92rem;
@@ -4755,27 +4753,41 @@ button,
   .hud-below-left {
     max-width: min(24rem, 94vw);
   }
+  /* Нижний ряд: Чат (слева) | завершение фазы (центр) | Игра (справа) */
   .mobile-phase-dock {
     display: flex;
     position: absolute;
-    left: 0.65rem;
-    right: 0.65rem;
-    bottom: max(0.55rem, env(safe-area-inset-bottom, 0px));
-    z-index: 46;
+    left: 50%;
+    right: auto;
+    bottom: var(--mobile-fab-bottom);
+    z-index: 48;
     flex-direction: column;
-    align-items: stretch;
-    gap: 0.3rem;
+    align-items: center;
+    gap: 0.25rem;
+    width: auto;
+    max-width: min(12.5rem, calc(100vw - 9.25rem));
+    transform: translateX(-50%);
     pointer-events: none;
   }
   .mobile-phase-dock > * {
     pointer-events: auto;
   }
+  .mobile-phase-dock__hint {
+    order: -1;
+    padding: 0.2rem 0.45rem;
+    border-radius: 8px;
+    background: rgba(15, 23, 42, 0.92);
+    box-shadow: 0 4px 14px rgba(2, 6, 23, 0.4);
+  }
   .phase-advance-btn--dock {
-    width: 100%;
-    min-height: 3.05rem;
-    font-size: 1.02rem;
-    border-radius: 12px;
-    box-shadow: 0 8px 24px rgba(2, 6, 23, 0.45);
+    width: auto;
+    min-width: 7.25rem;
+    max-width: 100%;
+    min-height: 2.6rem;
+    padding: 0.45rem 0.85rem;
+    font-size: 0.88rem;
+    border-radius: 999px;
+    box-shadow: 0 6px 18px rgba(2, 6, 23, 0.4);
   }
   .hud-right--sheet {
     top: auto;
@@ -4792,15 +4804,15 @@ button,
     padding-bottom: max(0.25rem, env(safe-area-inset-bottom, 0px));
     transition: none;
   }
-  /* Свёрнутая панель = только FAB, без колонки на всю высоту */
+  /* Свёрнутая панель = только FAB справа в одном ряду с чатом и фазой */
   .hud-right--sheet.collapsed,
   .hud-right--fab {
     position: absolute;
-    inset: auto auto calc(var(--mobile-dock-offset) + max(0.55rem, env(safe-area-inset-bottom, 0px))) 0.65rem;
+    inset: auto 0.65rem var(--mobile-fab-bottom) auto;
     top: auto;
-    right: auto;
-    bottom: calc(var(--mobile-dock-offset) + max(0.55rem, env(safe-area-inset-bottom, 0px)));
-    left: 0.65rem;
+    right: 0.65rem;
+    bottom: var(--mobile-fab-bottom);
+    left: auto;
     width: max-content;
     height: max-content;
     max-width: none;
@@ -4872,11 +4884,14 @@ button,
     padding: 0.45rem 0.85rem;
     font-size: 0.88rem;
   }
-  .game-viewport:has(.mobile-phase-dock) :deep(.room-chat) {
-    bottom: calc(var(--mobile-dock-offset) + 0.5rem);
-  }
   .game-viewport :deep(.room-chat) {
-    bottom: calc(var(--mobile-dock-offset) + 0.5rem);
+    left: 0.65rem;
+    right: auto;
+    bottom: var(--mobile-fab-bottom);
+    align-items: flex-start;
+  }
+  .game-viewport :deep(.room-chat-toggle) {
+    align-self: flex-start;
   }
 }
 </style>
