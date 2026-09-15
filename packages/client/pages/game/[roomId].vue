@@ -3737,7 +3737,7 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
   gap: 0.2rem;
   justify-self: center;
   grid-column: 2;
-  max-width: min(280px, 22vw);
+  max-width: min(26rem, 32vw);
   z-index: 2;
 }
 .hud-top-center--idle {
@@ -4079,10 +4079,10 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
 }
 .block-label,
 .block h3 {
-  margin: 0 0 0.4rem;
-  font-size: 0.72rem;
+  margin: 0 0 var(--g-s-2);
+  font-size: var(--g-text-xs);
   font-weight: 700;
-  color: #94a3b8;
+  color: var(--g-text-dim);
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
@@ -4453,13 +4453,13 @@ button,
 .phase-advance-btn--hero {
   width: auto;
   min-width: 10rem;
-  max-width: min(100%, 20rem);
+  max-width: 100%;
   margin-top: 0;
   padding: 0.4rem 0.85rem;
   font-size: 0.8rem;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  /* Раньше подпись с именем следующего игрока обрезалась многоточием */
+  white-space: normal;
+  overflow-wrap: anywhere;
   line-height: 1.2;
   text-align: center;
 }
@@ -4612,15 +4612,34 @@ button,
   cursor: pointer;
 }
 
-.sfx-mute-btn {
-  padding: 0.25rem 0.5rem;
-  border-radius: 6px;
-  border: 1px solid #64748b;
-  background: #1e293b;
-  color: #e2e8f0;
-  font-size: 0.85rem;
+/* Служебные кнопки шапки партии: одна высота, одна форма, один вес */
+.sfx-mute-btn,
+.bug-report-btn,
+.rules-help-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 1.7rem;
+  padding: 0 var(--g-s-3);
+  border-radius: var(--g-r-md);
+  border: 1px solid var(--g-border-strong);
+  background: var(--g-surface-1);
+  color: var(--g-text);
+  font-size: var(--g-text-xs);
+  font-weight: 600;
   line-height: 1;
   cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.sfx-mute-btn:hover,
+.bug-report-btn:hover,
+.rules-help-btn:hover {
+  border-color: var(--g-text-dim);
+  background: var(--g-surface-2);
+}
+
+.sfx-mute-btn {
+  font-size: var(--g-text-sm);
 }
 
 .sfx-mute-btn:hover {
@@ -4628,15 +4647,9 @@ button,
   background: #334155;
 }
 
+/* Кнопка отчёта о баге раньше была самой яркой в шапке, хотя нужна реже всего */
 .bug-report-btn {
-  padding: 0.25rem 0.55rem;
-  border-radius: 6px;
-  border: 1px solid #b45309;
-  background: #7c2d12;
-  color: #ffedd5;
-  font-size: 0.75rem;
-  font-weight: 600;
-  cursor: pointer;
+  color: #fed7aa;
 }
 
 .bug-report-btn:hover {
@@ -4648,17 +4661,6 @@ button,
   position: relative;
   display: inline-flex;
   align-items: center;
-}
-
-.rules-help-btn {
-  padding: 0.25rem 0.55rem;
-  border-radius: 6px;
-  border: 1px solid #64748b;
-  background: #1e293b;
-  color: #e2e8f0;
-  font-size: 0.75rem;
-  font-weight: 600;
-  cursor: pointer;
 }
 
 .rules-help-btn:hover {

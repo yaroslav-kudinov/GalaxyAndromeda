@@ -7,10 +7,13 @@ useHead({ title: 'Патчноуты — Galaxy Andromeda' })
 </script>
 
 <template>
-  <div class="page">
-    <p class="crumb"><NuxtLink to="/">← Lobby</NuxtLink></p>
-    <h1>Патчноуты</h1>
-    <p class="lead">История изменений для игроков и агентов. Источник — файлы в docs/patch-notes.</p>
+  <div class="g-page">
+    <header class="g-page-head">
+      <h1 class="g-page-title">Патчноуты</h1>
+      <p class="g-page-sub">
+        История изменений: что поменялось в правилах, интерфейсе и картах, начиная со свежего.
+      </p>
+    </header>
 
     <ul v-if="notes.length" class="list">
       <li v-for="note in notes" :key="note.slug">
@@ -26,32 +29,9 @@ useHead({ title: 'Патчноуты — Galaxy Andromeda' })
 </template>
 
 <style scoped>
-.page {
-  max-width: 40rem;
-  margin: 0 auto;
-  font-family: Manrope, system-ui, sans-serif;
-}
-
-.crumb {
-  margin: 0 0 0.75rem;
-}
-
-.crumb a,
 .list a {
   color: #93c5fd;
   text-decoration: none;
-}
-
-h1 {
-  margin: 0 0 0.4rem;
-  font-size: 1.5rem;
-}
-
-.lead {
-  margin: 0 0 1.25rem;
-  color: #94a3b8;
-  font-size: 0.9rem;
-  line-height: 1.45;
 }
 
 .list {

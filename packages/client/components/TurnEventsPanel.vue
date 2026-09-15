@@ -91,10 +91,14 @@ function historyAppliedLabel(entry: TurnEventHistoryEntry): string {
   margin-bottom: 0;
 }
 
+/* Один уровень раздела в боковой панели — одно оформление заголовка */
 .turn-events-heading {
-  margin: 0 0 0.5rem;
-  font-size: 0.85rem;
-  color: #94a3b8;
+  margin: 0 0 var(--g-s-2);
+  font-size: var(--g-text-xs);
+  font-weight: 700;
+  color: var(--g-text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 
 .turn-events-recharge {

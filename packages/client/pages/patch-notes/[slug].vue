@@ -23,7 +23,7 @@ useHead({
 </script>
 
 <template>
-  <div class="page">
+  <div class="g-page">
     <p class="crumb">
       <NuxtLink to="/patch-notes">← Все патчноуты</NuxtLink>
     </p>
@@ -36,12 +36,6 @@ useHead({
 </template>
 
 <style scoped>
-.page {
-  max-width: 42rem;
-  margin: 0 auto;
-  font-family: Manrope, system-ui, sans-serif;
-}
-
 .crumb {
   margin: 0 0 1rem;
 }

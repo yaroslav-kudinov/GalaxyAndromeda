@@ -1,9 +1,16 @@
 <template>
   <div class="app" :class="{ 'app-immersive': isImmersive, 'app-landing': isLanding }">
-    <header v-if="!isImmersive && !isLanding" class="header">
-      <NuxtLink to="/">Lobby</NuxtLink>
-      <NuxtLink to="/editor">Творческий режим</NuxtLink>
-      <NuxtLink to="/patch-notes">Патчноуты</NuxtLink>
+    <header v-if="!isImmersive && !isLanding" class="site-header">
+      <NuxtLink class="site-brand" to="/">
+        <span class="site-brand-mark" aria-hidden="true">✦</span>
+        Галактика Андромеда
+      </NuxtLink>
+      <nav class="site-nav" aria-label="Разделы сайта">
+        <NuxtLink to="/">Главная</NuxtLink>
+        <NuxtLink to="/editor">Редактор карт</NuxtLink>
+        <NuxtLink to="/patch-notes">Патчноуты</NuxtLink>
+        <NuxtLink to="/faq">Вопросы и ответы</NuxtLink>
+      </nav>
     </header>
     <main :class="{ 'main-immersive': isImmersive, 'main-landing': isLanding }">
       <NuxtLayout>
@@ -96,10 +103,10 @@ html.galaxy-immersive #__nuxt {
 }
 
 .app {
-  font-family: system-ui, sans-serif;
+  font-family: var(--g-font-ui);
   min-height: 100vh;
-  background: #1a1a2e;
-  color: #eee;
+  background: var(--g-bg);
+  color: var(--g-text);
 }
 
 .app-immersive {
@@ -120,20 +127,67 @@ html.galaxy-immersive #__nuxt {
   background: #050814;
 }
 
-.header {
+.site-header {
+  position: sticky;
+  top: 0;
+  z-index: 30;
   display: flex;
-  gap: 1rem;
-  padding: 1rem;
-  border-bottom: 1px solid #333;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--g-s-3) var(--g-s-5);
+  padding: var(--g-s-3) var(--g-s-4);
+  border-bottom: 1px solid var(--g-border);
+  background: var(--g-surface-glass);
+  backdrop-filter: blur(8px);
 }
 
-.header a {
-  color: #93c5fd;
+.site-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--g-s-2);
+  font-family: var(--g-font-display);
+  font-size: var(--g-text-sm);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--g-text-strong);
   text-decoration: none;
 }
 
+.site-brand-mark {
+  color: var(--g-accent);
+}
+
+.site-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--g-s-1);
+  margin-left: auto;
+}
+
+.site-nav a {
+  padding: var(--g-s-1) var(--g-s-3);
+  border-radius: var(--g-r-pill);
+  font-size: var(--g-text-sm);
+  color: var(--g-text-dim);
+  text-decoration: none;
+  transition: background 0.15s, color 0.15s;
+}
+
+.site-nav a:hover {
+  background: var(--g-surface-1);
+  color: var(--g-text-strong);
+}
+
+/* Текущий раздел: у «Главной» точное совпадение, иначе она подсвечена всегда */
+.site-nav a.router-link-active:not([href='/']),
+.site-nav a.router-link-exact-active {
+  background: var(--g-accent-soft);
+  color: var(--g-text-strong);
+}
+
 main {
-  padding: 1rem;
+  padding: 0;
 }
 
 main.main-landing {

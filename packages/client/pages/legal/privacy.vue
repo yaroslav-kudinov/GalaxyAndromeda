@@ -3,22 +3,26 @@ const html = ref('')
 
 onMounted(async () => {
   const res = await fetch('/legal/privacy-policy.html')
-  if (res.ok) html.value = await res.text()
+  html.value = res.ok ? await res.text() : '<p>Документ не найден.</p>'
 })
 </script>
 
 <template>
-  <div class="legal-page">
-    <header>
-      <NuxtLink to="/">← На главную</NuxtLink>
-      <h1>Конфиденциальность</h1>
+  <div class="g-page">
+    <header class="g-page-head">
+      <h1 class="g-page-title">Конфиденциальность</h1>
+      <p class="g-page-sub">
+        Какие данные игра хранит, зачем и как долго.
+      </p>
     </header>
-    <article class="legal-body" v-html="html" />
+    <!-- Документ лежит в public/legal и не содержит пользовательского ввода -->
+    <article class="g-card g-prose legal-body" v-html="html" />
   </div>
 </template>
 
 <style scoped>
-.legal-page { max-width: 48rem; margin: 0 auto; padding: 2rem 1rem; color: #e2e8f0; }
-.legal-body :deep(p) { line-height: 1.6; margin: 0.75rem 0; }
-.legal-body :deep(h2) { margin-top: 1.25rem; }
+.legal-body :deep(h1) {
+  /* Заголовок страницы уже есть в шапке — из документа его не дублируем */
+  display: none;
+}
 </style>

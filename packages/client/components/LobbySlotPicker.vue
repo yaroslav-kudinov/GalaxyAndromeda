@@ -61,7 +61,6 @@ function selectSlot(id: string) {
             {{ slot.joined ? (slot.id === currentPlayerId ? 'вы' : slot.name) : 'свободно' }}
           </span>
         </span>
-        <span class="slot-id">{{ slot.id }}</span>
       </span>
       <span class="slot-badge">
         {{ slot.joined ? (slot.id === currentPlayerId ? 'вы' : 'занят') : modelValue === slot.id ? 'выбран' : 'свободен' }}
@@ -132,10 +131,6 @@ function selectSlot(id: string) {
 .slot-meta {
   font-size: 0.78rem;
   color: #94a3b8;
-}
-.slot-id {
-  font-size: 0.72rem;
-  color: #64748b;
 }
 .slot-badge {
   font-size: 0.72rem;

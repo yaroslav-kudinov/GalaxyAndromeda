@@ -1,36 +1,83 @@
+<script setup lang="ts">
+type FaqItem = { question: string; answer: string }
+
+const items: FaqItem[] = [
+  {
+    question: 'Нужен ли второй игрок для обучения?',
+    answer:
+      'Нет. Нажмите «Обучение» на главной: вы попадёте на отдельную коридорную карту, а учебные флоты будут действовать автоматически.',
+  },
+  {
+    question: 'Потеряю ли партию при перезапуске сервера?',
+    answer:
+      'Да, активные комнаты хранятся в памяти сервера. После перезапуска или деплоя незавершённые партии сбрасываются. Локальные сохранения в браузере помогают продолжить офлайн-игру.',
+  },
+  {
+    question: 'Как добавить свою карту в общий список?',
+    answer:
+      'Создайте карту в редакторе и нажмите «Отправить на модерацию». После одобрения администратором карта появится в каталоге.',
+  },
+  {
+    question: 'Можно ли играть без сервера?',
+    answer: 'Да, в локальном режиме на одном устройстве, но без мультиплеера по сети.',
+  },
+]
+</script>
+
 <template>
-  <div class="faq-page">
-    <header>
-      <NuxtLink to="/">← На главную</NuxtLink>
-      <h1>Вопросы и ответы</h1>
+  <div class="g-page">
+    <header class="g-page-head">
+      <h1 class="g-page-title">Вопросы и ответы</h1>
+      <p class="g-page-sub">
+        Короткие ответы на то, что чаще всего спрашивают новые игроки.
+      </p>
     </header>
 
-    <section>
-      <h2>Нужен ли второй игрок для обучения?</h2>
-      <p>Нет. Нажмите «Обучение» на главной: вы попадёте на отдельную коридорную карту, а учебные флоты будут действовать автоматически.</p>
-    </section>
+    <ul class="faq-list">
+      <li v-for="item in items" :key="item.question" class="g-card faq-item">
+        <h2 class="faq-question">{{ item.question }}</h2>
+        <p class="faq-answer">{{ item.answer }}</p>
+      </li>
+    </ul>
 
-    <section>
-      <h2>Потеряю ли партию при перезапуске сервера?</h2>
-      <p>Да, активные комнаты хранятся в памяти сервера. После перезапуска или деплоя незавершённые партии сбрасываются. Локальные сохранения в браузере помогают продолжить офлайн-игру.</p>
-    </section>
-
-    <section>
-      <h2>Как добавить свою карту в общий список?</h2>
-      <p>Создайте карту в редакторе и нажмите «Отправить на модерацию». После одобления администратором карта появится в каталоге.</p>
-    </section>
-
-    <section>
-      <h2>Можно ли играть без сервера?</h2>
-      <p>Да, в локальном режиме на одном устройстве, но без мультиплеера по сети.</p>
-    </section>
-
-    <p><NuxtLink to="/patch-notes">Патчноуты и изменения правил</NuxtLink></p>
+    <p class="faq-more">
+      <NuxtLink to="/patch-notes">Патчноуты и изменения правил</NuxtLink>
+    </p>
   </div>
 </template>
 
 <style scoped>
-.faq-page { max-width: 40rem; margin: 0 auto; padding: 2rem 1rem; color: #e2e8f0; line-height: 1.6; }
-section { margin: 1.5rem 0; }
-h2 { font-size: 1.1rem; margin-bottom: 0.5rem; }
+.faq-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--g-s-3);
+}
+.faq-item {
+  display: flex;
+  flex-direction: column;
+  gap: var(--g-s-2);
+}
+.faq-question {
+  margin: 0;
+  font-size: var(--g-text-md);
+  font-weight: 650;
+  color: var(--g-text-strong);
+}
+.faq-answer {
+  margin: 0;
+  font-size: var(--g-text-sm);
+  line-height: 1.6;
+  color: var(--g-text-dim);
+}
+.faq-more {
+  margin: var(--g-s-5) 0 0;
+  font-size: var(--g-text-sm);
+}
+.faq-more a {
+  color: #93c5fd;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
 </style>

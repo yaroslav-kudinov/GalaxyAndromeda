@@ -365,10 +365,11 @@ onUnmounted(() => {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 2rem;
-  height: 2rem;
+  /* Одна высота со служебными кнопками шапки партии */
+  width: 1.7rem;
+  height: 1.7rem;
   padding: 0;
-  border-radius: 6px;
+  border-radius: var(--g-r-md);
   border: 1px solid #64748b;
   background: #1e293b;
   color: #e2e8f0;
