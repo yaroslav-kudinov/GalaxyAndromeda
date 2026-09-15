@@ -81,6 +81,8 @@ const cellClipboard = ref<ClipboardPayload | null>(null)
 const hasCellClipboard = computed(() => cellClipboard.value != null)
 const boardFocusRef = ref<HTMLElement | null>(null)
 const editorUi = useUiStrings().editor
+/** Полоса горячих клавиш свёрнута или развёрнута */
+const hotkeysOpen = ref(true)
 
 function loadSymmetrySettings(): SymmetrySettings {
   if (!import.meta.client) return { ...DEFAULT_SYMMETRY_SETTINGS }
@@ -583,16 +585,31 @@ useMapEditorHotkeys({
       />
     </section>
 
-    <footer class="hotkeys-bar" aria-label="Горячие клавиши">
-      <span class="hotkeys-bar-title">{{ editorUi.hotkeysBarTitle }}</span>
-      <span
-        v-for="row in MAP_EDITOR_HOTKEYS"
-        :key="row.keys"
-        class="hotkeys-bar-item"
+    <footer
+      class="hotkeys-bar"
+      :class="{ 'hotkeys-bar--collapsed': !hotkeysOpen }"
+      aria-label="Горячие клавиши"
+    >
+      <button
+        type="button"
+        class="hotkeys-bar-title"
+        :aria-expanded="hotkeysOpen"
+        aria-controls="editor-hotkeys-list"
+        @click="hotkeysOpen = !hotkeysOpen"
       >
-        <kbd>{{ row.keys }}</kbd>
-        <span>{{ row.action }}</span>
-      </span>
+        <span class="hotkeys-bar-caret" aria-hidden="true">{{ hotkeysOpen ? '▾' : '▸' }}</span>
+        {{ editorUi.hotkeysBarTitle }}
+      </button>
+      <div v-show="hotkeysOpen" id="editor-hotkeys-list" class="hotkeys-bar-list">
+        <span
+          v-for="row in MAP_EDITOR_HOTKEYS"
+          :key="row.keys"
+          class="hotkeys-bar-item"
+        >
+          <kbd>{{ row.keys }}</kbd>
+          <span>{{ row.action }}</span>
+        </span>
+      </div>
     </footer>
 
     <header class="hud-top">
@@ -1304,32 +1321,59 @@ button.danger {
   z-index: 25;
   display: flex;
   flex-wrap: wrap;
-  align-items: center;
-  gap: 0.35rem 0.65rem;
-  padding: 0.35rem 0.6rem 0.45rem;
+  align-items: baseline;
+  gap: var(--g-s-2) var(--g-s-4);
+  padding: var(--g-s-2) var(--g-s-3);
   background: linear-gradient(to top, rgba(15, 23, 42, 0.96), rgba(15, 23, 42, 0.72));
-  border-top: 1px solid #334155;
+  border-top: 1px solid var(--g-border);
   pointer-events: none;
-  font-size: 0.72rem;
-  color: #94a3b8;
+  font-size: var(--g-text-xs);
+  color: var(--g-text-dim);
+}
+/* Свёрнутая полоса не отъедает две строки у карты */
+.hotkeys-bar--collapsed {
+  background: none;
+  border-top: none;
 }
 .hotkeys-bar-title {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--g-s-1);
+  pointer-events: auto;
+  padding: 0.15rem var(--g-s-2);
+  border: 1px solid var(--g-border);
+  border-radius: var(--g-r-pill);
+  background: var(--g-surface-glass);
+  color: var(--g-text);
+  font: inherit;
   font-weight: 700;
-  color: #cbd5e1;
-  margin-right: 0.25rem;
+  cursor: pointer;
+}
+.hotkeys-bar-title:hover {
+  border-color: var(--g-border-strong);
+}
+.hotkeys-bar-caret {
+  color: var(--g-text-mute);
+}
+.hotkeys-bar-list {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--g-s-2) var(--g-s-4);
+  min-width: 0;
 }
 .hotkeys-bar-item {
   display: inline-flex;
   align-items: center;
-  gap: 0.25rem;
+  gap: var(--g-s-1);
   white-space: nowrap;
 }
 .hotkeys-bar kbd {
   padding: 0.1rem 0.35rem;
-  border-radius: 4px;
-  border: 1px solid #475569;
-  background: #0f172a;
-  color: #e2e8f0;
+  border-radius: var(--g-r-sm);
+  border: 1px solid var(--g-border-strong);
+  background: var(--g-surface-0);
+  color: var(--g-text);
   font-family: ui-monospace, monospace;
   font-size: 0.68rem;
 }

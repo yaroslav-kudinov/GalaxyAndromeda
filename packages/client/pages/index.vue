@@ -759,7 +759,19 @@ onUnmounted(() => {
       </nav>
 
       <div v-else class="landing-play">
-        <button type="button" class="landing-back" @click="backToMenu">К меню</button>
+        <div class="lobby-topbar">
+          <button type="button" class="landing-back" @click="backToMenu">← К меню</button>
+          <template v-if="lobbyReady">
+            <span class="you-badge">Вы: <strong>{{ nickname }}</strong></span>
+            <button type="button" class="linkish" @click="changeNickname">Сменить никнейм</button>
+          </template>
+          <span
+            class="server"
+            :class="{ online: serverOnline, offline: serverOnline === false }"
+          >
+            {{ serverOnline === null ? 'Проверяем сервер…' : serverOnline ? 'Сервер доступен' : 'Сервер недоступен — игра на одном устройстве' }}
+          </span>
+        </div>
 
         <div class="lobby-page">
     <section v-if="!lobbyReady" class="nickname-gate card">
@@ -791,26 +803,9 @@ onUnmounted(() => {
         Войти в лобби
       </button>
 
-      <p class="gate-foot">
-        <span class="server" :class="{ online: serverOnline, offline: serverOnline === false }">
-          {{ serverOnline === null ? '…' : serverOnline ? 'Сервер доступен' : 'Сервер недоступен' }}
-        </span>
-      </p>
     </section>
 
     <div v-else class="lobby">
-      <header class="lobby-header">
-        <p class="you-line">
-          <span class="you-badge">Вы: <strong>{{ nickname }}</strong></span>
-          <button type="button" class="linkish" @click="changeNickname">Сменить никнейм</button>
-        </p>
-        <p>
-          <span class="server" :class="{ online: serverOnline, offline: serverOnline === false }">
-            {{ serverOnline === null ? '…' : serverOnline ? 'Сервер доступен' : 'Сервер недоступен — локальная игра' }}
-          </span>
-        </p>
-      </header>
-
       <section class="card">
         <h2>Новая игра</h2>
 
@@ -830,19 +825,19 @@ onUnmounted(() => {
           Играть за
           <select v-model="continuePlayerId">
             <option v-for="p in continuePlayerOptions" :key="p.id" :value="p.id">
-              {{ p.name }} ({{ p.id }})
+              {{ p.name }}
             </option>
           </select>
         </label>
 
         <p v-if="isContinueSave && serverOnline" class="hint">
-          Online: выберите слот, за который войдёте в созданную комнату (до {{ MAX_LOBBY_PLAYERS }} игроков).
+          Игра по сети: выберите слот, за который войдёте в созданную комнату (до {{ MAX_LOBBY_PLAYERS }} игроков).
           <span v-if="savePlayerCount > MAX_LOBBY_PLAYERS">
-            В сохранении {{ savePlayerCount }} игроков — в online участвуют первые {{ MAX_LOBBY_PLAYERS }}.
+            В сохранении {{ savePlayerCount }} игроков — по сети участвуют первые {{ MAX_LOBBY_PLAYERS }}.
           </span>
         </p>
         <p v-else-if="isContinueSave" class="hint">
-          Offline: можно выбрать любого участника сохранения.
+          Игра на одном устройстве: можно выбрать любого участника сохранения.
         </p>
 
         <label class="field import-field">
@@ -1263,15 +1258,21 @@ onUnmounted(() => {
 .landing-back {
   position: relative;
   z-index: 4;
-  display: inline-block;
-  margin: 0 0 0.85rem;
-  padding: 0.2rem 0;
-  border: none;
-  background: none;
-  color: #93c5fd;
-  font-size: 0.88rem;
+  display: inline-flex;
+  align-items: center;
+  padding: 0.25rem 0.6rem;
+  border: 1px solid var(--g-border-strong);
+  border-radius: var(--g-r-pill);
+  background: var(--g-surface-1);
+  color: var(--g-text);
+  font-size: var(--g-text-sm);
+  font-weight: 600;
   cursor: pointer;
-  text-decoration: underline;
+  transition: border-color 0.15s, background 0.15s;
+}
+.landing-back:hover {
+  border-color: var(--g-accent);
+  background: var(--g-surface-2);
 }
 
 .landing .card {
@@ -1318,8 +1319,8 @@ onUnmounted(() => {
   margin: 0 0 0.35rem;
 }
 .you-badge {
-  font-size: 0.88rem;
-  color: #cbd5e1;
+  font-size: var(--g-text-sm);
+  color: var(--g-text-dim);
 }
 .you-badge strong {
   color: #f8fafc;
@@ -1329,9 +1330,10 @@ onUnmounted(() => {
   border: none;
   background: none;
   color: #93c5fd;
-  font-size: 0.82rem;
+  font-size: var(--g-text-xs);
   cursor: pointer;
   text-decoration: underline;
+  text-underline-offset: 2px;
 }
 .lobby-header p {
   margin: 0 0 1.25rem;
@@ -1360,21 +1362,67 @@ onUnmounted(() => {
   margin: 0 0 0.75rem;
   font-size: 1rem;
 }
+.lobby-topbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--g-s-2) var(--g-s-3);
+  width: min(100%, 44rem);
+  margin: 0 auto var(--g-s-4);
+  padding: var(--g-s-2) var(--g-s-3);
+  border: 1px solid var(--g-border);
+  border-radius: var(--g-r-pill);
+  background: var(--g-surface-glass);
+  box-shadow: var(--g-shadow-1);
+}
+.lobby-topbar .server {
+  margin-left: auto;
+}
+
 .field {
   display: flex;
   flex-direction: column;
-  gap: 0.25rem;
-  margin-bottom: 0.75rem;
-  font-size: 0.8rem;
-  color: #94a3b8;
+  gap: var(--g-s-1);
+  margin-bottom: var(--g-s-3);
+  font-size: var(--g-text-xs);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--g-text-dim);
+}
+/* Системный вид выпадающего списка выбивался из тёмного оформления */
+.field select {
+  appearance: none;
+  width: 100%;
+  padding: 0.5rem 2rem 0.5rem 0.6rem;
+  border: 1px solid var(--g-border-strong);
+  border-radius: var(--g-r-md);
+  background-color: var(--g-surface-0);
+  background-image: linear-gradient(45deg, transparent 50%, var(--g-text-dim) 50%),
+    linear-gradient(135deg, var(--g-text-dim) 50%, transparent 50%);
+  background-position: calc(100% - 1rem) 55%, calc(100% - 0.7rem) 55%;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+  color: var(--g-text-strong);
+  font: inherit;
+  font-size: var(--g-text-sm);
+  font-weight: 500;
+  cursor: pointer;
+}
+.field select:hover {
+  border-color: var(--g-accent);
+}
+.field select:focus-visible {
+  outline: 2px solid var(--g-accent);
+  outline-offset: 1px;
 }
 .field select optgroup {
-  color: #94a3b8;
+  color: var(--g-text-dim);
   font-weight: 600;
-  background: #0f172a;
+  background: var(--g-surface-0);
 }
 .field select option {
-  color: #f8fafc;
+  color: var(--g-text-strong);
+  background: var(--g-surface-0);
 }
 .primary {
   width: 100%;
@@ -1411,8 +1459,25 @@ onUnmounted(() => {
   line-height: 1.4;
 }
 .import-field input[type='file'] {
-  font-size: 0.82rem;
-  color: #cbd5e1;
+  font-size: var(--g-text-sm);
+  color: var(--g-text-dim);
+}
+.import-field input[type='file']::file-selector-button {
+  margin-right: var(--g-s-3);
+  padding: 0.4rem 0.7rem;
+  border: 1px solid var(--g-border-strong);
+  border-radius: var(--g-r-md);
+  background: var(--g-surface-1);
+  color: var(--g-text);
+  font: inherit;
+  font-size: var(--g-text-sm);
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.import-field input[type='file']::file-selector-button:hover {
+  border-color: var(--g-accent);
+  background: var(--g-surface-2);
 }
 .card--join {
   margin-top: 1rem;

@@ -1,0 +1,164 @@
+/**
+ * Единые токены оформления.
+ *
+ * Значения взяты из того, что уже использовалось в компонентах, — облик игры
+ * не меняется, но одна роль теперь описана одним токеном. Новые экраны должны
+ * брать цвета, отступы и радиусы отсюда, а не подставлять шестнадцатеричные коды.
+ */
+
+:root {
+  /* Шрифты */
+  --g-font-ui: 'Manrope', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --g-font-display: 'Orbitron', var(--g-font-ui);
+
+  /* Поверхности: от самой глубокой к самой светлой */
+  --g-bg: #0b1220;
+  --g-surface-0: #0f172a;
+  --g-surface-1: #1e293b;
+  --g-surface-2: #334155;
+  --g-surface-glass: rgba(15, 23, 42, 0.94);
+  --g-surface-glass-soft: rgba(30, 41, 59, 0.6);
+  --g-backdrop: rgba(2, 6, 23, 0.72);
+  --g-backdrop-soft: rgba(2, 6, 23, 0.2);
+
+  /* Границы */
+  --g-border: #334155;
+  --g-border-strong: #475569;
+  --g-border-soft: rgba(100, 116, 139, 0.35);
+
+  /* Текст */
+  --g-text: #e2e8f0;
+  --g-text-strong: #f8fafc;
+  --g-text-dim: #94a3b8;
+  --g-text-mute: #64748b;
+
+  /* Акценты: одно значение — один смысл */
+  --g-accent: #3b82f6; /* основное действие, ваш ход */
+  --g-accent-strong: #1d4ed8;
+  --g-accent-soft: rgba(59, 130, 246, 0.18);
+  --g-pick: #f472b6; /* выбор игрока: заявка, отмеченные фишки */
+  --g-pick-strong: #be185d;
+  --g-pick-soft: rgba(244, 114, 182, 0.18);
+  --g-warn: #fbbf24; /* внимание: счётчики, подсказки-предупреждения */
+  --g-warn-soft: rgba(251, 191, 36, 0.14);
+  --g-danger: #f87171; /* ошибка, потеря, необратимое действие */
+  --g-danger-strong: #b91c1c;
+  --g-danger-soft: rgba(248, 113, 113, 0.14);
+  --g-ok: #4ade80; /* успех, доступность, подтверждение */
+  --g-ok-soft: rgba(74, 222, 128, 0.14);
+
+  /* Ресурсы игры */
+  --g-credits: #fde047;
+  --g-production: #fb923c;
+
+  /* Радиусы */
+  --g-r-sm: 6px;
+  --g-r-md: 8px;
+  --g-r-lg: 12px;
+  --g-r-xl: 16px;
+  --g-r-pill: 999px;
+
+  /* Шаг отступов */
+  --g-s-1: 0.25rem;
+  --g-s-2: 0.4rem;
+  --g-s-3: 0.6rem;
+  --g-s-4: 0.85rem;
+  --g-s-5: 1.2rem;
+  --g-s-6: 1.75rem;
+
+  /* Тени */
+  --g-shadow-1: 0 6px 18px rgba(2, 6, 23, 0.35);
+  --g-shadow-2: 0 12px 32px rgba(2, 6, 23, 0.45);
+  --g-shadow-3: 0 18px 48px rgba(2, 6, 23, 0.55);
+
+  /* Размер текста */
+  --g-text-xs: 0.72rem;
+  --g-text-sm: 0.82rem;
+  --g-text-md: 0.95rem;
+  --g-text-lg: 1.15rem;
+  --g-text-xl: 1.5rem;
+}
+
+/* --------------------------------------------------------------------------
+ * Общие классы оболочки страниц: справка, правовые документы, патчноуты.
+ * Раньше каждая такая страница выглядела по-своему и набиралась системным
+ * шрифтом, пока лендинг и партия использовали Manrope.
+ * ------------------------------------------------------------------------ */
+
+.g-page {
+  width: min(100%, 60rem);
+  margin: 0 auto;
+  padding: var(--g-s-6) var(--g-s-4) var(--g-s-6);
+}
+
+@media (max-width: 640px) {
+  .g-page {
+    padding: var(--g-s-5) var(--g-s-4);
+  }
+}
+
+.g-page-head {
+  margin-bottom: var(--g-s-5);
+}
+
+.g-page-title {
+  margin: 0 0 var(--g-s-2);
+  font-family: var(--g-font-display);
+  font-size: clamp(1.5rem, 1.1rem + 1.6vw, 2.1rem);
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  color: var(--g-text-strong);
+}
+
+.g-page-sub {
+  margin: 0;
+  max-width: 46rem;
+  font-size: var(--g-text-sm);
+  line-height: 1.55;
+  color: var(--g-text-dim);
+}
+
+.g-card {
+  padding: var(--g-s-4);
+  border: 1px solid var(--g-border);
+  border-radius: var(--g-r-lg);
+  background: var(--g-surface-glass);
+  box-shadow: var(--g-shadow-1);
+}
+
+/** Текстовые блоки документов: справка, условия, конфиденциальность */
+.g-prose {
+  color: var(--g-text);
+  line-height: 1.65;
+}
+
+.g-prose h2 {
+  margin: var(--g-s-5) 0 var(--g-s-2);
+  font-family: var(--g-font-display);
+  font-size: var(--g-text-lg);
+  font-weight: 700;
+  color: var(--g-text-strong);
+}
+
+.g-prose h3 {
+  margin: var(--g-s-4) 0 var(--g-s-1);
+  font-size: var(--g-text-md);
+  font-weight: 650;
+  color: var(--g-text-strong);
+}
+
+.g-prose p {
+  margin: 0 0 var(--g-s-3);
+  max-width: 46rem;
+  font-size: var(--g-text-sm);
+}
+
+.g-prose a {
+  color: #93c5fd;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.g-prose a:hover {
+  color: #bfdbfe;
+}

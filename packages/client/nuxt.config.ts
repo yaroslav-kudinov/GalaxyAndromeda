@@ -8,6 +8,7 @@ export default defineNuxtConfig({
   ssr: false,
   devtools: { enabled: true },
   modules: ['@pinia/nuxt'],
+  css: ['~/assets/css/tokens.css'],
   app: {
     head: {
       title: 'Galaxy Andromeda — настольная игра',
