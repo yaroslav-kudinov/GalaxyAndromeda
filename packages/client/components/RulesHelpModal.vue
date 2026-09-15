@@ -9,6 +9,20 @@ const emit = defineEmits<{
   close: []
 }>()
 
+const {
+  panelRef,
+  panelStyle,
+  isDragging,
+  onDragHandlePointerDown,
+  consumeDragClick,
+} = useDraggablePanel()
+
+/** Клик по фону закрывает окно, но не после перетаскивания за шапку */
+function onBackdropClick() {
+  if (consumeDragClick()) return
+  emit('close')
+}
+
 const activeId = ref(RULES_HELP_SECTIONS[0]?.id ?? 'victory')
 const contentEl = ref<HTMLElement | null>(null)
 
@@ -54,15 +68,18 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
       v-if="open"
       class="rules-help-backdrop"
       role="presentation"
-      @click.self="emit('close')"
+      @click.self="onBackdropClick"
     >
       <div
+        ref="panelRef"
         class="rules-help-modal"
+        :class="{ 'is-dragging': isDragging }"
+        :style="panelStyle"
         role="dialog"
         aria-modal="true"
         aria-labelledby="rules-help-title"
       >
-        <header class="rules-help-header">
+        <header class="rules-help-header drag-handle" @pointerdown="onDragHandlePointerDown">
           <div class="rules-help-heading">
             <h2 id="rules-help-title">Справка по правилам</h2>
             <p class="rules-help-sub">
@@ -136,6 +153,14 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
   backdrop-filter: blur(3px);
 }
 
+.drag-handle {
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+.is-dragging .drag-handle {
+  cursor: grabbing;
+}
 .rules-help-modal {
   --rules-font: 'Manrope', 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
   display: flex;

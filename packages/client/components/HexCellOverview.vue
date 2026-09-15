@@ -2,6 +2,7 @@
 import type { MapCellDefinition } from '@galaxy/rules'
 import { getCellResourceToken } from '@galaxy/rules'
 import { resourceTokenGlyphScale } from '~/utils/board-glyphs'
+import { TOKEN_CHIP_RADIUS } from '~/utils/resource-token-pips'
 import { cellOverviewLines } from '~/utils/cell-display'
 
 const props = defineProps<{
@@ -14,6 +15,10 @@ const props = defineProps<{
   showPowerCenter: boolean
   showActionMarker: boolean
   actionMarkerAvailable?: boolean
+  /** Фишку на этой клетке можно выбрать для оплаты постройки */
+  tokenPickable?: boolean
+  /** Фишка выбрана для оплаты постройки */
+  tokenPicked?: boolean
 }>()
 
 const lines = computed(() => cellOverviewLines(props.cell))
@@ -24,6 +29,8 @@ const labelSize = computed(() => s.value * 0.24)
 const badgeR = computed(() => s.value * 0.11)
 const tokenScale = computed(() => resourceTokenGlyphScale(s.value))
 const tokenLocalScale = computed(() => tokenScale.value / Math.max(0.01, props.contentScale))
+
+const tokenPickRingR = computed(() => (TOKEN_CHIP_RADIUS + 3.4) * tokenLocalScale.value)
 
 const contentTopY = computed(() => {
   if (props.showPowerCenter && lines.value.isPowerCenter) return -s.value * 0.34
@@ -44,6 +51,13 @@ const contentTopY = computed(() => {
       :class="{ 'chip-group--spent': token.faceUp === false }"
       :transform="`translate(0, ${showPowerCenter && lines.isPowerCenter ? -s * 0.02 : -s * 0.14})`"
     >
+      <circle
+        v-if="tokenPickable || tokenPicked"
+        class="token-pick-ring"
+        :class="{ 'token-pick-ring--picked': tokenPicked }"
+        :r="tokenPickRingR"
+        fill="none"
+      />
       <ResourceTokenGlyph
         :token="token"
         :scale="tokenLocalScale"
@@ -71,6 +85,31 @@ const contentTopY = computed(() => {
 </template>
 
 <style scoped>
+.token-pick-ring {
+  stroke: #facc15;
+  stroke-width: 1.6;
+  stroke-dasharray: 3.2 2.4;
+  opacity: 0.9;
+  animation: token-pick-pulse 1.6s ease-in-out infinite;
+}
+.token-pick-ring--picked {
+  stroke: #f472b6;
+  stroke-width: 2.4;
+  stroke-dasharray: none;
+  opacity: 1;
+  animation: none;
+  filter: drop-shadow(0 0 3px rgba(244, 114, 182, 0.8));
+}
+@keyframes token-pick-pulse {
+  0%, 100% { opacity: 0.55; }
+  50% { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .token-pick-ring {
+    animation: none;
+    opacity: 0.9;
+  }
+}
 .power-halo {
   fill: #0f172a;
   stroke: #facc15;

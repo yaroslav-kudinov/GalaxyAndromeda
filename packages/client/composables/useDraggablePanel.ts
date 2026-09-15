@@ -1,12 +1,20 @@
+import { clampPanelOffset, DEFAULT_MIN_VISIBLE } from '~/utils/drag-panel-bounds'
+
 export type UseDraggablePanelOptions = {
-  /** Удерживать панель в пределах окна браузера */
+  /** Не давать панели полностью уйти за край окна браузера */
   constrainToViewport?: boolean
-  /** Отступ от краёв viewport при ограничении */
-  viewportMargin?: number
+  /** Сколько пикселей панели обязано остаться на экране */
+  minVisible?: number
+  /** Отступ сверху: ниже него шапка панели всегда доступна для захвата */
+  topMargin?: number
 }
 
 export function useDraggablePanel(options: UseDraggablePanelOptions = {}) {
-  const { constrainToViewport = true, viewportMargin = 8 } = options
+  const {
+    constrainToViewport = true,
+    minVisible = DEFAULT_MIN_VISIBLE,
+    topMargin = 0,
+  } = options
 
   const panelRef = ref<HTMLElement | null>(null)
   const offsetX = ref(0)
@@ -28,27 +36,14 @@ export function useDraggablePanel(options: UseDraggablePanelOptions = {}) {
     if (!el || !constrainToViewport) return { x, y }
 
     const rect = el.getBoundingClientRect()
-    const deltaX = x - offsetX.value
-    const deltaY = y - offsetY.value
-
-    let adjustX = 0
-    let adjustY = 0
-
-    const left = rect.left + deltaX
-    const top = rect.top + deltaY
-    const right = rect.right + deltaX
-    const bottom = rect.bottom + deltaY
-
-    if (left < viewportMargin) adjustX = viewportMargin - left
-    if (top < viewportMargin) adjustY = viewportMargin - top
-    if (right > window.innerWidth - viewportMargin) {
-      adjustX = window.innerWidth - viewportMargin - right
-    }
-    if (bottom > window.innerHeight - viewportMargin) {
-      adjustY = window.innerHeight - viewportMargin - bottom
-    }
-
-    return { x: x + adjustX, y: y + adjustY }
+    return clampPanelOffset({
+      rect: { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom },
+      current: { x: offsetX.value, y: offsetY.value },
+      next: { x, y },
+      viewport: { width: window.innerWidth, height: window.innerHeight },
+      minVisible,
+      topMargin,
+    })
   }
 
   function stopDragging() {
@@ -78,7 +73,9 @@ export function useDraggablePanel(options: UseDraggablePanelOptions = {}) {
 
   function onDragHandlePointerDown(e: PointerEvent) {
     if (e.button !== 0) return
-    if ((e.target as HTMLElement).closest('button')) return
+    const target = e.target as HTMLElement
+    // Кнопки, поля и ссылки в шапке остаются кликабельными
+    if (target.closest('button, a, input, select, textarea, label')) return
 
     isDragging.value = true
     movedDuringDrag = false

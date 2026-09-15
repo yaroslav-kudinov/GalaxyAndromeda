@@ -5,3 +5,6 @@ turn.ogg  — Audio/confirmation_002.ogg
 combat.ogg — Audio/error_008.ogg
 
 Credit “Kenney.nl” is appreciated but not required.
+
+chat.wav — собственный звук проекта, синтезирован скриптом
+harness/scripts/make-chat-sfx.mjs (сторонних прав нет).

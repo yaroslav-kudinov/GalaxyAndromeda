@@ -89,6 +89,16 @@ const countdownDisplay = ref<number | null>(null)
 const lastAnimatedResolutionKey = ref<string | null>(null)
 let countdownTimer: ReturnType<typeof setInterval> | null = null
 let countdownCompleteEmitted = false
+/**
+ * Таймеры и флаги показа бросков объявлены здесь, а не рядом с функциями ниже:
+ * watch с immediate: true может запустить анимацию ещё во время setup — например,
+ * у наблюдателя окно боя открывается сразу с готовым итогом. Объявление ниже по
+ * файлу попадало бы во временную мёртвую зону и падало с ReferenceError, а вместе
+ * с ним падало и всё окно боя.
+ */
+let revealTimer: ReturnType<typeof setInterval> | null = null
+const destructionReviewReady = ref(false)
+let destructionReviewTimer: ReturnType<typeof setTimeout> | null = null
 
 const isOnlinePrep = computed(() => props.prepPhase != null)
 const isBombardment = computed(() => props.preview.trigger === 'bombardment')
@@ -369,8 +379,6 @@ const finalDefenderTotal = computed(() =>
   roundResult.value ? sumCombatSideDiceTotal(allRolls.value, 'defender') : 0,
 )
 
-let revealTimer: ReturnType<typeof setInterval> | null = null
-
 function startRevealAnimation() {
   revealedCount.value = 0
   animationDone.value = false
@@ -393,9 +401,6 @@ function startRevealAnimation() {
     revealedCount.value++
   }, 650)
 }
-
-const destructionReviewReady = ref(false)
-let destructionReviewTimer: ReturnType<typeof setTimeout> | null = null
 
 function goToPostPhase() {
   destructionReviewReady.value = false

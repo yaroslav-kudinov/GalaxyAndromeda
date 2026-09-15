@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { GalaxySaveFile, GameSnapshot, HexCoord, LegalAction, MapDefinition, ScenarioHighlight, ScenarioStep, ShipMovePlan, BombardmentPlan, CombatOptions, CombatResolutionResult } from '@galaxy/rules'
+import type { GalaxySaveFile, GameSnapshot, HexCoord, LegalAction, MapDefinition, ScenarioHighlight, ScenarioStep, ShipMovePlan, BombardmentPlan, CombatOptions, CombatResolutionResult, TokenSpendRef } from '@galaxy/rules'
 import {
   createEmptyMap,
   executeMarkerBombardment,
@@ -1425,6 +1425,13 @@ const boardInteractiveKeys = computed(() => {
   return filterTutorialMarkerKeys(keys)
 })
 
+const boardTokenPickKeys = computed(() =>
+  buildTokenPick.value.active ? buildTokenPick.value.pickKeys : [],
+)
+const boardTokenPickedKeys = computed(() =>
+  buildTokenPick.value.active ? buildTokenPick.value.pickedKeys : [],
+)
+
 const boardReachableKeys = computed(() => {
   if (markerMapPickActive.value) return markerMapPick.reachableKeys.value
   if (showCombatContinueDecision.value) return retreatDestinationKeys.value
@@ -1531,6 +1538,29 @@ async function surrenderMatch() {
   }
 }
 
+/** Подсветка фишек оплаты на карте, пока открыта вкладка «Постройка» с ручным выбором */
+const buildTokenPick = ref<{ active: boolean; pickKeys: string[]; pickedKeys: string[] }>({
+  active: false,
+  pickKeys: [],
+  pickedKeys: [],
+})
+/** Клик по клетке с фишкой: seq растёт, чтобы окно заметило повторный клик по той же клетке */
+const buildTokenClick = ref<{ q: number; r: number; seq: number } | null>(null)
+let buildTokenClickSeq = 0
+
+function onBuildTokenPickState(payload: {
+  active: boolean
+  pickKeys: string[]
+  pickedKeys: string[]
+}) {
+  buildTokenPick.value = payload
+}
+
+function resetBuildTokenPick() {
+  buildTokenPick.value = { active: false, pickKeys: [], pickedKeys: [] }
+  buildTokenClick.value = null
+}
+
 function openMarkerActionModal(q: number, r: number) {
   if (hasActivePendingCombat.value) {
     markerHint.value = 'Сначала завершите текущий бой (продолжить или отступить)'
@@ -1542,6 +1572,7 @@ function openMarkerActionModal(q: number, r: number) {
 }
 
 function closeMarkerActionModal() {
+  resetBuildTokenPick()
   markerActionOpen.value = false
   markerActionSource.value = null
 }
@@ -1923,7 +1954,10 @@ async function confirmMarkerBombardment(
   }
 }
 
-async function confirmMarkerBuild(orders: ShipBuildOrder[]) {
+async function confirmMarkerBuild(
+  orders: ShipBuildOrder[],
+  spentTokens: TokenSpendRef[] | null = null,
+) {
   const from = markerActionSource.value
   if (!saveFile.value?.game || !from || markerActionBusy.value || orders.length === 0) return
 
@@ -1940,6 +1974,10 @@ async function confirmMarkerBuild(orders: ShipBuildOrder[]) {
     type: order.type,
     coord: { q: from.q, r: from.r },
   }))
+  // Без явного выбора правила распределяют фишки сами
+  const productionParams = spentTokens?.length
+    ? { markerId, ships, spentTokens }
+    : { markerId, ships }
 
   markerActionBusy.value = true
   markerActionHint.value = null
@@ -1947,10 +1985,12 @@ async function confirmMarkerBuild(orders: ShipBuildOrder[]) {
   try {
     if (serverStatus.value === 'online' && !roomId.value.startsWith('local-')) {
       bumpObservationEpoch()
-      const obs = await submitGameAction(roomId.value, playerId.value, 'execute-production', {
-        markerId,
-        ships,
-      })
+      const obs = await submitGameAction(
+        roomId.value,
+        playerId.value,
+        'execute-production',
+        productionParams,
+      )
       applyObservation(obs)
       persistLocal()
       markerActionOpen.value = false
@@ -1964,7 +2004,7 @@ async function confirmMarkerBuild(orders: ShipBuildOrder[]) {
       saveFile.value.map,
       playerId.value,
       'execute-production',
-      { markerId, ships },
+      productionParams,
     )
     if (result.errors.length) {
       markerActionHint.value = result.errors[0] ?? null
@@ -2494,6 +2534,12 @@ async function selectCell(q: number, r: number) {
   selectedKey.value = hexKey(q, r)
   markerHint.value = null
 
+  if (buildTokenPick.value.active) {
+    buildTokenClickSeq += 1
+    buildTokenClick.value = { q, r, seq: buildTokenClickSeq }
+    return
+  }
+
   if (markerMapPickActive.value) {
     markerMapPick.handleMapSelect(q, r)
     return
@@ -2838,6 +2884,8 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
         :available-action-marker-keys="availableActionMarkerKeys"
         :interactive-keys="boardInteractiveKeys"
         :supply-chain-keys="supplyChainHighlightKeys"
+        :token-pick-keys="boardTokenPickKeys"
+        :token-picked-keys="boardTokenPickedKeys"
         :players="snapshot?.players ?? []"
         :snapshot="snapshot"
         :map-id="mapDefinition?.id ?? null"
@@ -3019,9 +3067,11 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
       :source="markerActionSource"
       :allowed-modes="tutorialMarkerActionModes"
       :allow-remove-marker="!tutorialMode || tutorialAllowsAction('remove-marker')"
+      :map-token-click="buildTokenClick"
+      @token-pick-state="onBuildTokenPickState"
       @close="closeMarkerActionModal"
       @start-pick="startMarkerMapPick"
-      @execute-build="confirmMarkerBuild($event.orders)"
+      @execute-build="confirmMarkerBuild($event.orders, $event.spentTokens)"
       @execute-sacrifice="confirmMarkerSacrifice"
       @remove-marker="removeMarkerAtSourceFromModal"
     />

@@ -16,6 +16,8 @@ const props = withDefaults(
     destinationKeys?: string[]
     contestedKeys?: string[]
     supplyChainKeys?: string[]
+    tokenPickKeys?: string[]
+    tokenPickedKeys?: string[]
     myTerritoryKeys?: string[]
     hideTerritoryPlayers?: number[]
     movementSourceKey?: string | null
@@ -67,6 +69,8 @@ const props = withDefaults(
     destinationKeys: () => [],
     contestedKeys: () => [],
     supplyChainKeys: () => [],
+    tokenPickKeys: () => [],
+    tokenPickedKeys: () => [],
     myTerritoryKeys: () => [],
     hideTerritoryPlayers: () => [],
     movementSourceKey: null,
@@ -114,6 +118,8 @@ const markerKeys = computed(() => boardMarkerKeys(props.cells))
     :destination-keys="destinationKeys"
     :contested-keys="contestedKeys"
     :supply-chain-keys="supplyChainKeys"
+    :token-pick-keys="tokenPickKeys"
+    :token-picked-keys="tokenPickedKeys"
     :my-territory-keys="myTerritoryKeys"
     :hide-territory-players="hideTerritoryPlayers"
     :movement-source-key="movementSourceKey"

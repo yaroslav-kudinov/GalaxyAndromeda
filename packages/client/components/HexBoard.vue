@@ -34,6 +34,10 @@ const props = withDefaults(
     destinationKeys?: string[]
     contestedKeys?: string[]
     supplyChainKeys?: string[]
+    /** Клетки, чью фишку ресурса сейчас можно выбрать для оплаты постройки */
+    tokenPickKeys?: string[]
+    /** Клетки, чья фишка уже выбрана для оплаты */
+    tokenPickedKeys?: string[]
     myTerritoryKeys?: string[]
     /** Слоты игроков (1–6), чьи территории не рисуем на карте */
     hideTerritoryPlayers?: number[]
@@ -96,6 +100,8 @@ const props = withDefaults(
     destinationKeys: () => [],
     contestedKeys: () => [],
     supplyChainKeys: () => [],
+    tokenPickKeys: () => [],
+    tokenPickedKeys: () => [],
     myTerritoryKeys: () => [],
     hideTerritoryPlayers: () => [],
     movementSourceKey: null,
@@ -154,6 +160,8 @@ function isInteractiveTarget(key: string): boolean {
   if (props.mode === 'editor') return true
   if (props.interactiveKeys.includes(key)) return true
   return (
+    isTokenPick(key) ||
+    isTokenPicked(key) ||
     isReachable(key) ||
     isContested(key) ||
     isDestination(key) ||
@@ -370,6 +378,8 @@ function cellOutlineClass(cell: MapCellDefinition): Record<string, boolean> {
     'combat-pulse': isCombatPulse(key),
     'tutorial-highlight': isTutorialHighlight(key),
     'supply-chain': isSupplyChain(key),
+    'token-pick': isTokenPick(key) && !isTokenPicked(key),
+    'token-picked': isTokenPicked(key),
     destination: isDestination(key),
     symmetric: isSymmetricMate(key),
   }
@@ -385,6 +395,8 @@ function hasCellOutline(cell: MapCellDefinition): boolean {
     c['combat-pulse'] ||
     c['tutorial-highlight'] ||
     c['supply-chain'] ||
+    c['token-pick'] ||
+    c['token-picked'] ||
     c.destination ||
     c.symmetric
   )
@@ -477,6 +489,14 @@ function isTutorialHighlight(key: string): boolean {
 
 function isSupplyChain(key: string): boolean {
   return props.supplyChainKeys.includes(key)
+}
+
+function isTokenPick(key: string): boolean {
+  return props.tokenPickKeys.includes(key)
+}
+
+function isTokenPicked(key: string): boolean {
+  return props.tokenPickedKeys.includes(key)
 }
 
 function isMovementSource(key: string): boolean {
@@ -1149,6 +1169,8 @@ function onPointerCancel(e: PointerEvent) {
           :show-power-center="!!cell.isPowerCenter"
           :show-action-marker="hasActionMarker(hexKey(cell.q, cell.r))"
           :action-marker-available="isAvailableActionMarker(hexKey(cell.q, cell.r))"
+          :token-pickable="isTokenPick(hexKey(cell.q, cell.r))"
+          :token-picked="isTokenPicked(hexKey(cell.q, cell.r))"
         />
       </g>
 
@@ -1476,6 +1498,17 @@ function onPointerCancel(e: PointerEvent) {
   stroke-width: 3.2;
   filter: drop-shadow(0 0 7px rgba(56, 189, 248, 0.85));
   animation: tutorial-outline-pulse 1.15s ease-in-out infinite;
+}
+.hex.token-pick {
+  stroke: #facc15;
+  stroke-width: 2.4;
+  stroke-dasharray: 5 3;
+  opacity: 0.95;
+}
+.hex.token-picked {
+  stroke: #f472b6;
+  stroke-width: 3.2;
+  filter: drop-shadow(0 0 5px rgba(244, 114, 182, 0.65));
 }
 .hex.supply-chain {
   stroke: rgba(52, 211, 153, 0.75);

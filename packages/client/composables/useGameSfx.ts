@@ -1,10 +1,17 @@
-export type GameSfxId = 'turn' | 'combat'
+export type GameSfxId = 'turn' | 'combat' | 'chat'
 
 const STORAGE_KEY = 'galaxy-sfx-muted'
 
 const SOURCES: Record<GameSfxId, string> = {
   turn: '/sounds/turn.ogg',
   combat: '/sounds/combat.ogg',
+  chat: '/sounds/chat.wav',
+}
+
+const VOLUMES: Record<GameSfxId, number> = {
+  turn: 0.55,
+  combat: 0.62,
+  chat: 0.5,
 }
 
 const muted = ref(false)
@@ -34,7 +41,7 @@ function ensurePlayers() {
   for (const id of Object.keys(SOURCES) as GameSfxId[]) {
     const audio = new Audio(SOURCES[id])
     audio.preload = 'auto'
-    audio.volume = id === 'turn' ? 0.55 : 0.62
+    audio.volume = VOLUMES[id]
     players.set(id, audio)
   }
 }

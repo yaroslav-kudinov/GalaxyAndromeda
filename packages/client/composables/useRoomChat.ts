@@ -3,6 +3,8 @@ import {
   postRoomChat,
   type RoomChatMessage,
 } from '~/composables/useGameApi'
+import { useGameSfx } from '~/composables/useGameSfx'
+import { decideChatNotify } from '~/utils/chat-notify'
 
 const POLL_MS = 1800
 
@@ -15,8 +17,11 @@ export function useRoomChat(options: {
   const sending = ref(false)
   const error = ref<string | null>(null)
   const open = ref(false)
+  const { play: playSfx } = useGameSfx()
   let timer: ReturnType<typeof setInterval> | null = null
   let lastId: string | null = null
+  /** История подгружена: первая порция сообщений звук не даёт */
+  let primed = false
 
   async function poll() {
     const roomId = options.roomId.value
@@ -30,8 +35,11 @@ export function useRoomChat(options: {
         if (fresh.length) {
           messages.value = [...messages.value, ...fresh].slice(-200)
           lastId = messages.value[messages.value.length - 1]?.id ?? lastId
+          const notify = decideChatNotify({ fresh, selfPlayerId: playerId, primed })
+          if (notify.play) playSfx('chat')
         }
       }
+      primed = true
     } catch {
       /* сеть — следующий тик */
     }
@@ -74,6 +82,7 @@ export function useRoomChat(options: {
   function reset() {
     messages.value = []
     lastId = null
+    primed = false
     error.value = null
   }
 

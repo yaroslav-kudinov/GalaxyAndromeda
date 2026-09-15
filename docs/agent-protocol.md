@@ -32,7 +32,7 @@ HTTP base: `http://127.0.0.1:3001` (env `GAME_SERVER_URL` for MCP).
 | `cancel-combat-prep` | — | Attacker cancels prep before battle starts |
 | `abort-combat` | — | Participant aborts a stuck combat; pending movement is finalized |
 | `surrender` | — | Сдаться в любой момент: `eliminated`, контроль и маркеры сняты, корабли остаются |
-| `execute-production` | `{ markerId, ships, spentTokens? }` | Постройка в регионе; `ships` не пустой |
+| `execute-production` | `{ markerId, ships, spentTokens? }` | Постройка в регионе; `ships` не пустой. `spentTokens` — явный выбор фишек оплаты (`{ coord, tokenIndex }[]`, только лицом вверх и в регионе маркера); без него фишки подбираются автоматически от крупных к мелким |
 | `execute-buy-production-marker` | `{ spentTokens }` | Покупка доп. маркера производства (не больше одного за игровой ход): фишки снимаются с карты; не исполняет маркер на карте |
 
 Without `combatOptions`, movement/bombardment into combat enters `pendingCombat` with `phase: 'prep'`. Movement: mutual ready → countdown 3s → auto-resolve. Bombardment: attacker-only ready → countdown; multiple targets queued via `queuedBombardmentPlans`. Sync via `GET /state` polling.

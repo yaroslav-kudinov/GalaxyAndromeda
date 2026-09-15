@@ -19,6 +19,7 @@ const emit = defineEmits<{
 }>()
 
 const t = useUiStrings().chat
+const { panelRef, panelStyle, isDragging, onDragHandlePointerDown } = useDraggablePanel()
 const draft = ref('')
 /** '' = общий канал */
 const toPlayerId = ref('')
@@ -61,7 +62,12 @@ watch(
 </script>
 
 <template>
-  <div class="room-chat" :class="{ 'room-chat--open': open }">
+  <div
+    ref="panelRef"
+    class="room-chat"
+    :class="{ 'room-chat--open': open, 'is-dragging': isDragging }"
+    :style="panelStyle"
+  >
     <button
       type="button"
       class="room-chat-toggle"
@@ -73,7 +79,11 @@ watch(
     </button>
 
     <div v-if="open" class="room-chat-panel" role="log" aria-live="polite">
-      <header class="room-chat-head">
+      <header
+        class="room-chat-head drag-handle"
+        title="Потяните, чтобы переставить окно чата"
+        @pointerdown="onDragHandlePointerDown"
+      >
         <strong>{{ t.title }}</strong>
         <label class="room-chat-peer">
           <span>{{ t.pickPeer }}</span>
@@ -171,6 +181,14 @@ watch(
   background: #1d4ed8;
   font-size: 0.72rem;
   text-align: center;
+}
+.drag-handle {
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+.is-dragging .drag-handle {
+  cursor: grabbing;
 }
 .room-chat-panel {
   width: min(22rem, calc(100vw - 1.5rem));

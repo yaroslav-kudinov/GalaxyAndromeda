@@ -163,6 +163,8 @@ import {
 import { isCombatDestination, ONE_BATTLE_PER_MARKER_MSG } from './combat.js'
 import {
   autoAllocateTokens,
+  tokenSpendKey,
+  parseTokenSpendKey,
   executeBuyProductionMarker,
   executeProductionBatch,
   executeProductionBuild,
@@ -2201,6 +2203,63 @@ describe('production', () => {
     })
     expect(errors).toEqual([])
     expect(game.actionMarkerResolvedThisTurn).toBe(true)
+  })
+
+  it('execute-production spends exactly the tokens the player picked', () => {
+    const map = productionTestMap()
+    const game = gameSnapshotFromMap(map)
+    game.phase = 'actions'
+    game.activePlayerId = 'player-1'
+    placeProductionMarkerForTest(game, 'player-1', { q: 0, r: 0 }, map)
+    const marker = game.actionMarkers[0]!
+
+    // Автоподбор взял бы кредиты 3 с (0,0); игрок платит кредитами 2 с (1,0)
+    const auto = autoAllocateTokens(game, map.id, marker, 2, 2)!
+    expect(auto).toContainEqual({ coord: { q: 0, r: 0 }, tokenIndex: 0 })
+
+    const { errors } = applyGameActionOnSnapshot(game, map, 'player-1', 'execute-production', {
+      markerId: marker.id,
+      ships: [{ type: 'destroyer', coord: { q: 0, r: 0 } }],
+      spentTokens: [
+        { coord: { q: 1, r: 0 }, tokenIndex: 0 },
+        { coord: { q: 0, r: 1 }, tokenIndex: 0 },
+      ],
+    })
+    expect(errors).toEqual([])
+
+    const cellAt = (q: number, r: number) =>
+      game.cells.find((c) => c.coord.q === q && c.coord.r === r)!
+    expect(cellAt(0, 0).resourceTokens[0]?.faceUp).toBe(true)
+    expect(cellAt(1, 0).resourceTokens[0]?.faceUp).toBe(false)
+    expect(cellAt(0, 1).resourceTokens[0]?.faceUp).toBe(false)
+    expect(cellAt(0, 0).ships.some((sh) => sh.type === 'destroyer')).toBe(true)
+  })
+
+  it('execute-production rejects a token pick that does not cover the cost', () => {
+    const map = productionTestMap()
+    const game = gameSnapshotFromMap(map)
+    game.phase = 'actions'
+    game.activePlayerId = 'player-1'
+    placeProductionMarkerForTest(game, 'player-1', { q: 0, r: 0 }, map)
+    const marker = game.actionMarkers[0]!
+
+    const { errors } = applyGameActionOnSnapshot(game, map, 'player-1', 'execute-production', {
+      markerId: marker.id,
+      ships: [{ type: 'destroyer', coord: { q: 0, r: 0 } }],
+      spentTokens: [{ coord: { q: 1, r: 0 }, tokenIndex: 0 }],
+    })
+    expect(errors.length).toBeGreaterThan(0)
+    expect(errors[0]).toContain('производства')
+    expect(game.actionMarkerResolvedThisTurn).toBe(false)
+    expect(game.cells.find((c) => c.coord.q === 1 && c.coord.r === 0)!.resourceTokens[0]?.faceUp)
+      .toBe(true)
+  })
+
+  it('tokenSpendKey round-trips through parseTokenSpendKey', () => {
+    const key = tokenSpendKey({ q: -2, r: 3 }, 1)
+    expect(key).toBe('-2,3:1')
+    expect(parseTokenSpendKey(key)).toEqual({ coord: { q: -2, r: 3 }, tokenIndex: 1 })
+    expect(parseTokenSpendKey('мусор')).toBeNull()
   })
 
   it('gameSnapshotFromObservation keeps ships after production action response', () => {

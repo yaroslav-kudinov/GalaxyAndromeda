@@ -11,14 +11,29 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{ next: [] }>()
+const { panelRef, panelStyle, isDragging, onDragHandlePointerDown } = useDraggablePanel()
 </script>
 
 <template>
-  <aside class="coach-panel" aria-live="polite">
+  <aside
+    ref="panelRef"
+    class="coach-panel"
+    :class="{ 'is-dragging': isDragging }"
+    :style="panelStyle"
+    aria-live="polite"
+  >
     <header class="coach-head">
       <p class="coach-badge">
         Обучение
         <span v-if="stepNumber && stepCount">· {{ stepNumber }}/{{ stepCount }}</span>
+        <!-- Панель пропускает клики к карте, поэтому тянем за отдельную ручку -->
+        <span
+          class="coach-grip drag-handle"
+          role="button"
+          tabindex="-1"
+          title="Потяните, чтобы переставить подсказку"
+          @pointerdown="onDragHandlePointerDown"
+        >⠿</span>
       </p>
       <h2 class="coach-title">{{ title }}</h2>
     </header>
@@ -54,6 +69,31 @@ const emit = defineEmits<{ next: [] }>()
 .coach-panel .coach-next,
 .coach-panel .coach-more {
   pointer-events: auto;
+}
+.drag-handle {
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+.is-dragging .drag-handle {
+  cursor: grabbing;
+}
+.coach-grip {
+  /* Сама панель прозрачна для кликов — ручке захват возвращаем */
+  pointer-events: auto;
+  margin-left: auto;
+  padding: 0 0.15rem;
+  color: #64748b;
+  font-size: 0.85rem;
+  line-height: 1;
+}
+.coach-grip:hover {
+  color: #cbd5e1;
+}
+.coach-badge {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
 }
 .coach-head {
   display: flex;

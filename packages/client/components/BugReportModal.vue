@@ -12,6 +12,21 @@ const emit = defineEmits<{
   close: []
 }>()
 
+const {
+  panelRef,
+  panelStyle,
+  isDragging,
+  onDragHandlePointerDown,
+  consumeDragClick,
+} = useDraggablePanel()
+
+/** Клик по фону закрывает окно, но не после перетаскивания за шапку */
+function onBackdropClick() {
+  if (consumeDragClick()) return
+  if (busy.value) return
+  emit('close')
+}
+
 const description = ref('')
 const screenshotDataUrl = ref<string | null>(null)
 const screenshotName = ref<string | null>(null)
@@ -112,15 +127,18 @@ async function submit() {
       v-if="open"
       class="bug-backdrop"
       role="presentation"
-      @click.self="!busy && emit('close')"
+      @click.self="onBackdropClick"
     >
       <div
+        ref="panelRef"
         class="bug-modal"
+        :class="{ 'is-dragging': isDragging }"
+        :style="panelStyle"
         role="dialog"
         aria-modal="true"
         aria-labelledby="bug-report-title"
       >
-        <header class="bug-header">
+        <header class="bug-header drag-handle" @pointerdown="onDragHandlePointerDown">
           <div>
             <h2 id="bug-report-title">Сообщить о баге</h2>
             <p class="bug-sub">
@@ -216,6 +234,14 @@ async function submit() {
   backdrop-filter: blur(3px);
 }
 
+.drag-handle {
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+.is-dragging .drag-handle {
+  cursor: grabbing;
+}
 .bug-modal {
   --bug-font: 'Manrope', 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
   width: min(520px, 100%);

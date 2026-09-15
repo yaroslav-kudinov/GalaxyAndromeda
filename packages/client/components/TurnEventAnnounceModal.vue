@@ -11,6 +11,20 @@ const emit = defineEmits<{
   close: []
 }>()
 
+const {
+  panelRef,
+  panelStyle,
+  isDragging,
+  onDragHandlePointerDown,
+  consumeDragClick,
+} = useDraggablePanel()
+
+/** Клик по фону закрывает окно, но не после перетаскивания за шапку */
+function onBackdropClick() {
+  if (consumeDragClick()) return
+  emit('close')
+}
+
 const kicker = computed(() =>
   props.event ? `Новый ход ${props.turnNumber}` : 'Начало партии',
 )
@@ -20,11 +34,15 @@ const kicker = computed(() =>
   <div
     class="event-announce-backdrop"
     role="presentation"
-    @click.self="emit('close')"
+    @click.self="onBackdropClick"
   >
     <div
-      class="event-announce"
+      ref="panelRef"
+      class="event-announce drag-handle"
+      :class="{ 'is-dragging': isDragging }"
+      :style="panelStyle"
       role="dialog"
+      @pointerdown="onDragHandlePointerDown"
       aria-modal="true"
       :aria-labelledby="event ? 'event-announce-title' : 'event-announce-recharge'"
     >
@@ -67,6 +85,14 @@ const kicker = computed(() =>
   background: rgba(2, 6, 23, 0.72);
 }
 
+.drag-handle {
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+.drag-handle.is-dragging {
+  cursor: grabbing;
+}
 .event-announce {
   width: min(28rem, calc(100vw - 2rem));
   padding: 1.15rem 1.2rem 1rem;
