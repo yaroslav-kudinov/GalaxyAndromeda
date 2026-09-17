@@ -53,7 +53,7 @@ export const EVENT_CARDS: readonly GameEventCard[] = [
   { id: 'empty-void', name: 'Среди звёзд лишь пустота', description: 'Без эффекта.', effectSummary: 'Без эффекта' },
   { id: 'stand-to-death', name: '«Стоять насмерть!»', description: 'Игроки не могут отступать из боя.', effectSummary: 'Отступление запрещено' },
   { id: 'ammo-detonation', name: 'Детонация склада боеприпасов', description: 'Нельзя строить эсминец, крейсер, линкор в этом ходу.', effectSummary: 'Постройка destroyer/cruiser/battleship запрещена' },
-  { id: 'hyper-gap', name: 'Просвет в гиперпространстве', description: 'Все корабли +1 ход; у гиперпространственного орудия дальность стрельбы становится 2–4 (вместо 2–3).', effectSummary: 'Ход +1; дальность орудия 2–4' },
+  { id: 'hyper-gap', name: 'Просвет в гиперпространстве', description: 'Все корабли +1 ход; у гиперорудия дальность стрельбы становится 2–4 (вместо 2–3).', effectSummary: 'Ход +1; дальность гиперорудия 2–4' },
   { id: 'shadow-economy', name: 'Теневая экономика', description: 'Номинал каждой фишки ресурса +2 (только этот ход).', effectSummary: 'Номинал фишек +2' },
   { id: 'hold-formation', name: '«Держать строй»', description: 'destroyCost +2 для каждого уничтожаемого в бою корабля.', effectSummary: 'destroyCost +2' },
   { id: 'combat-chaos', name: 'Хаос битвы', description: 'Приоритет уничтожения игнорируется.', effectSummary: 'Приоритет уничтожения отключён' },

@@ -26,7 +26,7 @@ function hasColonizer(cell: RuntimeCellState, playerId: string): boolean {
   return cell.ships.some((ship) => ship.ownerId === playerId && COLONIZER_TYPES.has(ship.type))
 }
 
-/** Эсминец захватывает нейтральную клетку жертвой (маркер действия, корабль гибнет). */
+/** Эсминец занимает нейтральную клетку ценой гибели (тратится маркер действия). */
 export function canDestroyerColonizeCell(cell: RuntimeCellState, playerId: string): boolean {
   if (cell.controlOwnerId != null) return false
   if (hasEnemyShipsOnCell(cell, playerId)) return false
@@ -44,7 +44,7 @@ export function applyDestroyerColonization(
   return true
 }
 
-/** Нейтральную клетку не красим сразу — только объявление контроля в конце хода (кроме жертвы эсминца). */
+/** Нейтральную клетку не красим сразу — только объявление контроля в конце хода (кроме захвата эсминцем). */
 
 function canClaimCell(cell: RuntimeCellState, playerId: string): boolean {
   if (!hasOwnShips(cell, playerId) || hasEnemyShips(cell, playerId)) return false

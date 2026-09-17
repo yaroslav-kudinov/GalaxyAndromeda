@@ -181,7 +181,7 @@ import {
   validateShipPlacements,
 } from './production.js'
 import { getShipMoveRange, getShipProductionCost, canBuildShipInRegionSize, getShipProductionRegionMin } from './ships.js'
-import { MAX_FLEET_SIZE_PER_PLAYER } from './constants.js'
+import { MAX_FLEET_SIZE_PER_PLAYER, SHIP_LABELS } from './constants.js'
 import { trimGameEventLog } from './event-log.js'
 import { advanceGamePhase, advanceGameSnapshot, activePlayerOrder } from './turn.js'
 import { isTurnEventResolved } from './events.js'
@@ -2491,7 +2491,7 @@ describe('production', () => {
       MAX_FLEET_SIZE_PER_PLAYER.hyper + 1,
       fleetSpreadCoords,
     )
-    expect(getFleetLimitWarnings(game).some((w) => w.includes('Гиперпространственное орудие'))).toBe(true)
+    expect(getFleetLimitWarnings(game).some((w) => w.includes(SHIP_LABELS.hyper))).toBe(true)
   })
 
   it('removes an action marker for free even with zero tokens', () => {

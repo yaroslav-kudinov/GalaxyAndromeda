@@ -2040,7 +2040,7 @@ async function confirmMarkerSacrifice(payload: { shipId: string }) {
       persistLocal()
       markerActionOpen.value = false
       markerActionSource.value = null
-      markerActionHint.value = 'Эсминец пожертвован — клетка захвачена'
+      markerActionHint.value = 'Клетка занята, эсминец погиб'
       return
     }
 
@@ -2059,9 +2059,9 @@ async function confirmMarkerSacrifice(payload: { shipId: string }) {
     refreshLocalLegalActions()
     markerActionOpen.value = false
     markerActionSource.value = null
-    markerActionHint.value = 'Эсминец пожертвован — клетка захвачена'
+    markerActionHint.value = 'Клетка занята, эсминец погиб'
   } catch (e) {
-    markerActionHint.value = actionErrorMessage(e, 'Не удалось пожертвовать эсминцем')
+    markerActionHint.value = actionErrorMessage(e, 'Не удалось занять клетку')
   } finally {
     markerActionBusy.value = false
   }

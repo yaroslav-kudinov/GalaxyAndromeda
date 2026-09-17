@@ -28,7 +28,7 @@ function sacrificeDisabledReason(
 ): string | undefined {
   if (cell.controlOwnerId === playerId) return 'Клетка уже под вашим контролем'
   if (!canDestroyerColonizeCell(cell, playerId)) {
-    if (cell.controlOwnerId != null) return 'Жертва возможна только на нейтральной клетке'
+    if (cell.controlOwnerId != null) return 'Занять так можно только нейтральную клетку'
     if (cell.ships.some((s) => s.ownerId !== playerId)) return 'На клетке есть вражеские корабли'
     return 'Клетку нельзя захватить'
   }
@@ -66,7 +66,7 @@ export function validateDestroyerSacrifice(
   from: HexCoord,
   shipId: string,
 ): string[] {
-  if (game.phase !== 'actions') return ['Жертва эсминца только в фазе «Действия»']
+  if (game.phase !== 'actions') return ['Занять клетку эсминцем можно только в фазе «Действия»']
   if (game.activePlayerId !== playerId) return ['Сейчас ход другого игрока']
   if (game.actionMarkerResolvedThisTurn) return [ACTION_MARKER_ALREADY_RESOLVED_MSG]
 
@@ -82,7 +82,7 @@ export function validateDestroyerSacrifice(
   const ship = cell.ships.find((s) => s.id === shipId)
   if (!ship) return ['Эсминец не найден на клетке маркера']
   if (ship.ownerId !== playerId) return ['Это не ваш корабль']
-  if (ship.type !== 'destroyer') return ['Жертвовать можно только эсминец']
+  if (ship.type !== 'destroyer') return ['Так занять клетку может только эсминец']
 
   const cellReason = sacrificeDisabledReason(cell, playerId)
   if (cellReason) return [cellReason]

@@ -77,7 +77,7 @@ const SHIP_SHORT: Record<ShipType, string> = {
   battleship: 'Линкор',
   shield: 'Щитоносец',
   carrier: 'Авианосец',
-  hyper: 'Г.О.',
+  hyper: 'Гиперорудие',
 }
 
 const {
@@ -488,7 +488,7 @@ function onExecuteBuild() {
 
 function onExecuteSacrifice() {
   if (!sacrificeShipId.value) {
-    stepError.value = 'Выберите эсминца для жертвы'
+    stepError.value = 'Выберите эсминец, которым займёте клетку'
     return
   }
   const opt = sacrificeDestroyerOptions.value.find(
@@ -500,7 +500,7 @@ function onExecuteSacrifice() {
   }
   if (
     !window.confirm(
-      'Пожертвовать эсминцем ради контроля над этой клеткой?\n\nКорабль будет уничтожен, маркер действия потрачен.',
+      'Занять эту клетку ценой эсминца?\n\nКорабль погибнет, маркер действия будет потрачен. Отменить это нельзя.',
     )
   ) {
     return
@@ -609,7 +609,7 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
           :aria-selected="actionMode === 'sacrifice'"
           @click="actionMode = 'sacrifice'"
         >
-          Жертва эсминца
+          Занять клетку
         </button>
         <button
           v-if="modeAllowed('build')"
@@ -824,8 +824,8 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
 
         <template v-else-if="actionMode === 'sacrifice'">
           <p class="lead">
-            Пожертвуйте эсминцем на этой клетке, чтобы сразу захватить её. Корабль уничтожается,
-            маркер действия тратится. Движение при этом не выполняется.
+            Эсминец на этой клетке погибает, и клетка сразу становится вашей. Тратится маркер
+            действия, перемещение при этом не выполняется.
           </p>
           <ul v-if="sacrificeDestroyerOptions.length" class="ship-list">
             <li v-for="opt in sacrificeDestroyerOptions" :key="opt.ship.id">
@@ -858,7 +858,7 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
               </label>
             </li>
           </ul>
-          <p v-else class="empty">На клетке нет эсминцев для жертвы.</p>
+          <p v-else class="empty">На этой клетке нет ваших эсминцев.</p>
         </template>
 
         <template v-else>
@@ -867,7 +867,7 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
             Красные клетки — бой; за один приказ — только одна клетка боя.
           </p>
           <p v-else class="lead">
-            Выберите корабли с дальним огнём (крейсер, линкор, гиперпространственное орудие).
+            Выберите корабли с дальним огнём: крейсер, линкор или гиперорудие.
             Затем укажите одну цель обстрела на карте — корабли не входят в клетку.
           </p>
           <div v-if="shipOptions.length" class="ship-list-toolbar">
@@ -943,7 +943,7 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
           :disabled="!sacrificeShipId"
           @click="onExecuteSacrifice"
         >
-          Жертвовать эсминцем (Enter)
+          Занять ценой эсминца (Enter)
         </button>
         <button
           v-else
