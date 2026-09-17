@@ -10,7 +10,7 @@
     "generate": "nuxt generate",
     "preview": "nuxt preview",
     "typecheck": "nuxi typecheck",
-    "test": "node ../../node_modules/tsx/dist/cli.mjs --test \"./utils/**/*.test.ts\""
+    "test": "nuxt prepare && node ../../node_modules/tsx/dist/cli.mjs --test \"./utils/**/*.test.ts\""
   },
   "dependencies": {
     "@galaxy/rules": "workspace:*",
