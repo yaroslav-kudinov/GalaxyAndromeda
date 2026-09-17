@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useUiStrings } from '~/i18n/ui-strings'
 import type { ActiveEventObservation } from '@galaxy/rules'
 
 const props = defineProps<{
@@ -25,8 +26,10 @@ function onBackdropClick() {
   emit('close')
 }
 
+const t = useUiStrings().turnAnnounce
+
 const kicker = computed(() =>
-  props.event ? `Новый ход ${props.turnNumber}` : 'Начало партии',
+  props.event ? t.newTurn(props.turnNumber) : t.matchStart,
 )
 </script>
 
@@ -59,15 +62,11 @@ const kicker = computed(() =>
         </h2>
         <p class="event-announce-desc">{{ event.description }}</p>
         <p class="event-announce-effect">{{ event.effectSummary }}</p>
-        <p class="event-announce-hint">
-          Карта уже применена автоматически. Это объявление, не подтверждение.
-        </p>
+        <p class="event-announce-hint">{{ t.eventHint }}</p>
       </template>
-      <p v-else class="event-announce-hint">
-        Перевёрнутые фишки ресурсов снова станут доступны автоматически, когда истечёт этот счётчик.
-      </p>
+      <p v-else class="event-announce-hint">{{ t.rechargeHint }}</p>
       <button type="button" class="event-announce-ok" @click="emit('close')">
-        Понятно
+        {{ t.ok }}
       </button>
     </div>
   </div>

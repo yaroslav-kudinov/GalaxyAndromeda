@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useUiStrings } from '~/i18n/ui-strings'
 import { PLAYER_LABELS } from '@galaxy/rules'
 import type { LobbyPlayerSlot } from '~/components/LobbyPlayerList.vue'
 
@@ -14,6 +15,8 @@ const emit = defineEmits<{
   'update:modelValue': [value: string | null]
 }>()
 
+const t = useUiStrings().slots
+
 function slotNumber(id: string): number {
   const m = /^player-(\d+)$/.exec(id)
   return m ? Number.parseInt(m[1], 10) : 0
@@ -21,7 +24,7 @@ function slotNumber(id: string): number {
 
 function colorLabel(id: string): string {
   const n = slotNumber(id)
-  return PLAYER_LABELS[n] ?? `Слот ${n || '?'}`
+  return PLAYER_LABELS[n] ?? t.slotNumber(n)
 }
 
 function selectSlot(id: string) {
@@ -34,7 +37,7 @@ function selectSlot(id: string) {
 </script>
 
 <template>
-  <div class="slot-picker" role="radiogroup" aria-label="Выбор слота и цвета">
+  <div class="slot-picker" role="radiogroup" :aria-label="t.pickTitle">
     <button
       v-for="slot in slots"
       :key="slot.id"
@@ -47,7 +50,7 @@ function selectSlot(id: string) {
       }"
       :disabled="disabled || (slot.joined && slot.id !== currentPlayerId)"
       :aria-checked="modelValue === slot.id"
-      :aria-label="`${colorLabel(slot.id)}, слот ${slotNumber(slot.id)}`"
+      :aria-label="`${colorLabel(slot.id)}, ${t.slotNumber(slotNumber(slot.id))}`"
       role="radio"
       @click="selectSlot(slot.id)"
     >
@@ -56,14 +59,14 @@ function selectSlot(id: string) {
         <span class="slot-title">
           <strong class="color-name">{{ colorLabel(slot.id) }}</strong>
           <span class="slot-meta">
-            Слот {{ slotNumber(slot.id) }}
+            {{ t.slotWord }} {{ slotNumber(slot.id) }}
             ·
-            {{ slot.joined ? (slot.id === currentPlayerId ? 'вы' : slot.name) : 'свободно' }}
+            {{ slot.joined ? (slot.id === currentPlayerId ? t.you : slot.name) : t.free }}
           </span>
         </span>
       </span>
       <span class="slot-badge">
-        {{ slot.joined ? (slot.id === currentPlayerId ? 'вы' : 'занят') : modelValue === slot.id ? 'выбран' : 'свободен' }}
+        {{ slot.joined ? (slot.id === currentPlayerId ? t.you : t.taken) : modelValue === slot.id ? t.chosen : t.available }}
       </span>
     </button>
   </div>

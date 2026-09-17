@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import { useUiStrings } from '~/i18n/ui-strings'
+
+const t = useUiStrings().lobbyPlayers
 export interface LobbyPlayerSlot {
   id: string
   name: string
@@ -31,14 +34,14 @@ const props = defineProps<{
     >
       <span class="dot" :style="{ background: slot.color }" aria-hidden="true" />
       <span class="label">
-        <strong>{{ slot.joined ? slot.name : 'Свободный слот' }}</strong>
+        <strong>{{ slot.joined ? slot.name : t.freeSlot }}</strong>
         <span class="id">{{ slot.id }}</span>
       </span>
       <span class="status">
-        <template v-if="slot.isYou">ваш слот</template>
-        <template v-else-if="slot.joined && slot.active">на странице игры</template>
-        <template v-else-if="slot.joined">в комнате</template>
-        <template v-else>ожидаем</template>
+        <template v-if="slot.isYou">{{ t.you }}</template>
+        <template v-else-if="slot.joined && slot.active">{{ t.inGame }}</template>
+        <template v-else-if="slot.joined">{{ t.inRoom }}</template>
+        <template v-else>{{ t.awaited }}</template>
       </span>
     </li>
   </ul>

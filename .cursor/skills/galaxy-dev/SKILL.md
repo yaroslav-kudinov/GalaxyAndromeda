@@ -28,6 +28,13 @@ pnpm typecheck
 - Update `docs/changelog.md` when done
 - After project changes write `docs/patch-notes/YYYY-MM-DD-slug.md`. Follow `.cursor/rules/patch-notes.mdc` (human Russian for the player, glossary, no abbreviations in Суть / Правила / UI)
 
+## Player-facing text
+
+- Тексты для игрока живут в `packages/client/i18n/ui-strings.ts` (`useUiStrings()`), а не в разметке. Формулировки — по глоссарию из `.cursor/rules/patch-notes.mdc`: человеческий русский, без аббревиатур и англицизмов.
+- Проверка `utils/ui-strings-guard.test.ts` роняет сборку, если русский текст зашит в `.vue` вне списка `i18n/untranslated-baseline.ts`. Список только сокращается: вычистили файл — уберите запись, иначе проверка тоже упадёт.
+- Комментарии и стили на русском нарушением не считаются — ругается только видимый игроку текст.
+- Крупные экраны (`pages/game/[roomId].vue`, `pages/index.vue`, `components/BattleModal.vue`, `components/MarkerActionModal.vue`) переносятся отдельными заходами, по одному.
+
 ## Floating windows
 
 - Drag support: `useDraggablePanel.ts` + pure bounds in `utils/drag-panel-bounds.ts` (panel may leave the left/right/bottom edge keeping `minVisible` px on screen; its top edge never goes above `topMargin`, so the handle stays grabbable). Wire-up: `ref="panelRef"`, `:style="panelStyle"`, `:class="{ 'is-dragging': isDragging }"` on the panel, `@pointerdown="onDragHandlePointerDown"` on the header, and `consumeDragClick()` in the backdrop click handler. Already draggable: BattleModal, CombatPreviewPanel, MarkerActionModal, RulesHelpModal, BugReportModal, TurnEventAnnounceModal, RoomChatPanel, ScenarioCoachPanel (own grip — the panel is pointer-events: none over the map). SoundtrackPanel stays anchored to its trigger.

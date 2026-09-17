@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import { useUiStrings } from '~/i18n/ui-strings'
+
+const t = useUiStrings().turnEvents
 import type { ActiveEventObservation, Phase, TurnEventHistoryEntry } from '@galaxy/rules'
 
 const props = defineProps<{
@@ -36,15 +39,15 @@ function formatTimestamp(ts?: number, iso?: string): string {
 function historyAppliedLabel(entry: TurnEventHistoryEntry): string {
   if (entry.applied) {
     const when = formatTimestamp(entry.appliedAt)
-    return when ? `Применено ${when}` : 'Применено'
+    return when ? t.appliedAt(when) : t.applied
   }
-  return 'Не применено'
+  return t.notApplied
 }
 </script>
 
 <template>
   <section v-if="showPanel" class="turn-events">
-    <h3 class="turn-events-heading">События хода</h3>
+    <h3 class="turn-events-heading">{{ t.heading }}</h3>
 
     <ResourceRechargeBanner
       v-if="rechargeBanner"
@@ -63,11 +66,11 @@ function historyAppliedLabel(entry: TurnEventHistoryEntry): string {
 
     <details v-if="pastHistory.length" class="turn-events-history" open>
       <summary class="turn-events-history-summary">
-        Прошлые ходы ({{ pastHistory.length }})
+        {{ t.pastTurns(pastHistory.length) }}
       </summary>
       <ul class="turn-events-list">
         <li v-for="entry in pastHistory" :key="entry.turn" class="turn-events-item">
-          <span class="turn-events-item-turn">Ход {{ entry.turn }}</span>
+          <span class="turn-events-item-turn">{{ t.turn(entry.turn) }}</span>
           <span class="turn-events-item-name">{{ entry.name }}</span>
           <span class="turn-events-item-effect">{{ entry.effectSummary }}</span>
           <span
@@ -81,7 +84,7 @@ function historyAppliedLabel(entry: TurnEventHistoryEntry): string {
     </details>
 
     <p v-else-if="!activeEvent && history.length" class="turn-events-empty">
-      События прошлых ходов пока не зафиксированы в журнале.
+      {{ t.empty }}
     </p>
   </section>
 </template>
