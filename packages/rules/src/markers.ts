@@ -233,7 +233,7 @@ export function addActionMarker(
 
 export function removeActionMarker(game: GameSnapshot, markerId: string, ownerId: string): string[] {
   const idx = game.actionMarkers.findIndex((m) => m.id === markerId)
-  if (idx < 0) return ['Маркер не найден']
+  if (idx < 0) return ['Этого маркера уже нет на карте']
   const marker = game.actionMarkers[idx]
   if (marker.ownerId !== ownerId) return ['Нельзя снять чужой маркер']
   if (!canRemoveActionMarkerThisTurn(game, ownerId)) {
@@ -308,7 +308,7 @@ export function addProductionMarker(
 
 export function removeProductionMarker(game: GameSnapshot, markerId: string, ownerId: string): string[] {
   const idx = game.productionMarkers.findIndex((m) => m.id === markerId)
-  if (idx < 0) return ['Маркер не найден']
+  if (idx < 0) return ['Этого маркера уже нет на карте']
   const marker = game.productionMarkers[idx]
   if (marker.ownerId !== ownerId) return ['Нельзя снять чужой маркер']
   if (!canRemoveProductionMarkerThisTurn(game, ownerId)) {
@@ -368,7 +368,7 @@ export function toggleMarkerAtCell(
   kind: MarkerKind,
 ): string[] {
   const cell = cellAt(game, coord)
-  if (!cell) return ['Клетка не найдена']
+  if (!cell) return ['Такой клетки нет на карте']
 
   if (kind === 'action') {
     if (cell.actionMarkerId) {
@@ -397,7 +397,7 @@ export function togglePhaseMarkerAtCell(
   _map: MapDefinition,
 ): string[] {
   const cell = cellAt(game, coord)
-  if (!cell) return ['Клетка не найдена']
+  if (!cell) return ['Такой клетки нет на карте']
 
   if (cell.actionMarkerId) {
     if (game.phase !== 'planning' && game.phase !== 'actions') {

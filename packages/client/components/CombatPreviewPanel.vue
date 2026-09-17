@@ -6,7 +6,7 @@ const props = defineProps<{
   preview: CombatPreview
   playerNames?: Record<string, string>
   roundOneOdds?: RoundOneOutcomeOdds | null
-  /** Показать кнопку «Разрешение боя» (после подтверждения приказа) */
+  /** Показать кнопку «Разрешение боя» (после подтверждения действия) */
   showBattleAction?: boolean
 }>()
 
@@ -16,9 +16,9 @@ const panelTitle = computed(() =>
 
 const leadText = computed(() => {
   if (props.preview.trigger === 'bombardment') {
-    return 'Обстрел по цели добавлен в приказ. Защитник не бросает кубики — очки уничтожения = сумма обстрела.'
+    return 'Обстрел этой цели добавлен в действие. Защитник не бросает кубики: очки уничтожения равны сумме обстрела.'
   }
-  return 'Ход на эту клетку добавлен в приказ. Ниже — черновик первого раунда по rulebook.'
+  return 'Ход на эту клетку добавлен в действие. Ниже — черновик первого раунда по правилам.'
 })
 
 const isBombardment = computed(() => props.preview.trigger === 'bombardment')
