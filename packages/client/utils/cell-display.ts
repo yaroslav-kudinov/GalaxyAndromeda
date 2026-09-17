@@ -104,7 +104,7 @@ const SHIP_LABELS_PLURAL: Record<ShipType, string> = {
   battleship: 'Линкоры',
   shield: 'Щитоносцы',
   carrier: 'Авианосцы',
-  hyper: 'Гиперпространственные орудия',
+  hyper: 'Гиперорудия',
 }
 
 /** Singular for 1; plural name + « × N» for N > 1. */

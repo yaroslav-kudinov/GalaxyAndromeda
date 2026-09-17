@@ -226,7 +226,7 @@ export function hexPathDistance(
   return null
 }
 
-/** @deprecated Жертва эсминца — отдельное действие маркера, не движение. */
+/** @deprecated Захват клетки эсминцем — отдельное действие маркера, не движение. */
 export function canDeclareControlForMove(
   _game: GameSnapshot,
   _ship: ShipUnit,

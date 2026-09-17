@@ -21,12 +21,6 @@ export const PHASE_LABELS: Record<Phase, string> = {
   production: 'Производство',
 }
 
-const PHASE_PASS_VERB: Record<Exclude<Phase, 'events'>, string> = {
-  planning: 'планирование',
-  actions: 'действия',
-  production: 'действия',
-}
-
 export interface TurnOrderContext {
   state?: GameState
   phase?: Phase
@@ -275,12 +269,14 @@ export function phaseAdvanceActionLabel(
       ctx,
     )!
     const name = playerDisplayName(state, nextId)
-    return `Завершить ${PHASE_PASS_VERB[phase]} → ${name}`
+    // Стрелка требовала расшифровки: она значила и «ход уходит игроку»,
+    // и «начинается следующая фаза». Теперь адресат назван прямо.
+    return `Передать ход: ${name}`
   }
 
   switch (phase) {
     case 'planning':
-      return 'Все спланировали → к действиям'
+      return 'Все спланировали — к действиям'
     case 'actions':
       return 'Завершить ход'
     case 'production':
@@ -437,7 +433,7 @@ export function phaseAdvanceActionLabelForSnapshot(game: GameSnapshot, mapId: st
     const order = activePlayerOrder(state.players, participating, ctx)
     const nextId = order[0]
     if (!nextId) return 'Далее'
-    return `Завершить круг → ${playerDisplayName(state, nextId)}`
+    return `Новый круг, ход: ${playerDisplayName(state, nextId)}`
   }
   return phaseAdvanceActionLabel(state, participating, game)
 }
