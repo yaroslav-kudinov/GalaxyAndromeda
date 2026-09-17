@@ -16,9 +16,13 @@ jobs:
           version: 10.13.1
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          # Сервер использует встроенный node:sqlite — он требует Node 22.5+,
+          # как и записано в engines корневого package.json
+          node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # pnpm test сам собирает @galaxy/rules: часть клиентских тестов
+      # импортирует правила как собранный пакет, а dist/ в репозитории нет
       - run: pnpm test
       - run: pnpm typecheck
       - run: pnpm run build:deploy

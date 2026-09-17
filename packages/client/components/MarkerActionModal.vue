@@ -25,7 +25,7 @@ import {
   tokenSpendKey,
   validateTokenPayment,
 } from '@galaxy/rules'
-import type { ShipBuildOrder } from '~/composables/useProductionShipPick'
+import type { ShipBuildOrder } from '~/utils/production-build'
 import type { MarkerActionMode } from '~/composables/useActionOrderDraft'
 import {
   groupTokenViewsByCell,
