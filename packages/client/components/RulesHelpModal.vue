@@ -1,5 +1,8 @@
 <script setup lang="ts">
 import { RULES_HELP_SECTIONS, type RulesHelpSection } from '~/data/player-rules-help'
+import { useUiStrings } from '~/i18n/ui-strings'
+
+const t = useUiStrings().rulesHelp
 
 const props = defineProps<{
   open: boolean
@@ -81,18 +84,16 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
       >
         <header class="rules-help-header drag-handle" @pointerdown="onDragHandlePointerDown">
           <div class="rules-help-heading">
-            <h2 id="rules-help-title">Справка по правилам</h2>
-            <p class="rules-help-sub">
-              Краткая однозначная выжимка на русском. Подсказка текущего хода — в правой панели.
-            </p>
+            <h2 id="rules-help-title">{{ t.title }}</h2>
+            <p class="rules-help-sub">{{ t.sub }}</p>
           </div>
-          <button type="button" class="rules-help-close" title="Закрыть" @click="emit('close')">
+          <button type="button" class="rules-help-close" :title="t.close" @click="emit('close')">
             ×
           </button>
         </header>
 
         <div class="rules-help-body">
-          <nav class="rules-help-nav" aria-label="Разделы правил">
+          <nav class="rules-help-nav" :aria-label="t.sections">
             <button
               v-for="section in RULES_HELP_SECTIONS"
               :key="section.id"

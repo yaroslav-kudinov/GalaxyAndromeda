@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useUiStrings } from '~/i18n/ui-strings'
 import type { ShipType } from '@galaxy/rules'
 import { SHIP_LABELS } from '@galaxy/rules'
 import type { ProductionOrderSlot } from '~/utils/production-order-slots'
@@ -20,13 +21,15 @@ const emit = defineEmits<{
   select: [index: number]
 }>()
 
+const t = useUiStrings().productionOrder
+
 function slotTitle(slot: ProductionOrderSlot): string {
   const name = SHIP_LABELS[slot.type as ShipType]
   if (slot.placed && slot.coord) {
-    return `${name} на клетке (${slot.coord.q}, ${slot.coord.r}). Щелчок — убрать этот и следующие.`
+    return `${name} ${t.placedAt(slot.coord.q, slot.coord.r)}. ${t.removeHint}`
   }
-  if (slot.active) return `${name} — щёлкните клетку региона`
-  return `${name} — ещё не размещён`
+  if (slot.active) return `${name} — ${t.pickCell}`
+  return `${name} — ${t.notPlaced}`
 }
 
 function onSelect(slot: ProductionOrderSlot) {
@@ -36,7 +39,7 @@ function onSelect(slot: ProductionOrderSlot) {
 </script>
 
 <template>
-  <ul class="order-strip" aria-label="Корабли в заявке">
+  <ul class="order-strip" :aria-label="t.fleetLabel">
     <li v-for="slot in slots" :key="slot.index">
       <button
         type="button"

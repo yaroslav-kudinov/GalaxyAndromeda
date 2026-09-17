@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useUiStrings } from '~/i18n/ui-strings'
 const props = defineProps<{
   title: string
   body: string
@@ -11,6 +12,7 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{ next: [] }>()
+const t = useUiStrings().coach
 const { panelRef, panelStyle, isDragging, onDragHandlePointerDown } = useDraggablePanel()
 </script>
 
@@ -24,14 +26,14 @@ const { panelRef, panelStyle, isDragging, onDragHandlePointerDown } = useDraggab
   >
     <header class="coach-head">
       <p class="coach-badge">
-        Обучение
+        {{ t.badge }}
         <span v-if="stepNumber && stepCount">· {{ stepNumber }}/{{ stepCount }}</span>
         <!-- Панель пропускает клики к карте, поэтому тянем за отдельную ручку -->
         <span
           class="coach-grip drag-handle"
           role="button"
           tabindex="-1"
-          title="Потяните, чтобы переставить подсказку"
+          :title="t.grip"
           @pointerdown="onDragHandlePointerDown"
         >⠿</span>
       </p>
@@ -39,16 +41,16 @@ const { panelRef, panelStyle, isDragging, onDragHandlePointerDown } = useDraggab
     </header>
     <p class="coach-body">{{ body }}</p>
     <section v-if="objective" class="coach-objective">
-      <strong>Сейчас</strong>
+      <strong>{{ t.objective }}</strong>
       <p>{{ objective }}</p>
     </section>
     <details v-if="why || hint" class="coach-more">
-      <summary>Подробнее</summary>
-      <p v-if="why"><strong>Зачем:</strong> {{ why }}</p>
-      <p v-if="hint"><strong>Подсказка:</strong> {{ hint }}</p>
+      <summary>{{ t.more }}</summary>
+      <p v-if="why"><strong>{{ t.why }}</strong> {{ why }}</p>
+      <p v-if="hint"><strong>{{ t.hint }}</strong> {{ hint }}</p>
     </details>
     <button v-if="manual" type="button" class="coach-next" @click="emit('next')">
-      {{ stepNumber === stepCount ? 'Завершить обучение' : 'Далее' }}
+      {{ stepNumber === stepCount ? t.finish : t.next }}
     </button>
   </aside>
 </template>

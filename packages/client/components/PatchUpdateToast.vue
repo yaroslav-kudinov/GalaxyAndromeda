@@ -1,15 +1,18 @@
 <script setup lang="ts">
+import { useUiStrings } from '~/i18n/ui-strings'
+
+const t = useUiStrings().patchToast
 const { note, dismiss } = usePatchNoteNotice()
 </script>
 
 <template>
   <aside v-if="note" class="update-toast" role="status">
-    <p class="kicker">Обновление</p>
+    <p class="kicker">{{ t.kicker }}</p>
     <p class="title">{{ note.title }}</p>
     <p class="summary">{{ note.summary }}</p>
     <div class="actions">
-      <NuxtLink class="read" :to="`/patch-notes/${note.slug}`">Читать</NuxtLink>
-      <button type="button" class="dismiss" @click="dismiss">Понятно</button>
+      <NuxtLink class="read" :to="`/patch-notes/${note.slug}`">{{ t.read }}</NuxtLink>
+      <button type="button" class="dismiss" @click="dismiss">{{ t.dismiss }}</button>
     </div>
   </aside>
 </template>

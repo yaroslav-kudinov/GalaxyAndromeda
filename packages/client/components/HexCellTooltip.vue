@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import { useUiStrings } from '~/i18n/ui-strings'
+
+const t = useUiStrings().cell
 import type { MapCellDefinition, PlayerState } from '@galaxy/rules'
 import { PLAYER_COLORS, getCellResourceToken, hexKey } from '@galaxy/rules'
 import {
@@ -44,7 +47,7 @@ const coord = computed(() => hexKey(props.cell.q, props.cell.r))
     <ul v-if="cell.isPowerCenter || token" class="tooltip-tokens">
       <li v-if="cell.isPowerCenter" class="token-row token-row--power">
         <span class="token-icon" aria-hidden="true">♛</span>
-        <span>Центр власти</span>
+        <span>{{ t.powerCenter }}</span>
       </li>
       <li
         v-if="token"
@@ -57,7 +60,7 @@ const coord = computed(() => hexKey(props.cell.q, props.cell.r))
     </ul>
 
     <div v-if="shipGroups.length" class="tooltip-fleet">
-      <p class="fleet-label">Корабли</p>
+      <p class="fleet-label">{{ t.fleet }}</p>
       <ul class="fleet-list">
         <li v-for="group in shipGroups" :key="group.player" class="fleet-group">
           <div class="fleet-group-head">
@@ -88,7 +91,7 @@ const coord = computed(() => hexKey(props.cell.q, props.cell.r))
         </li>
       </ul>
     </div>
-    <p v-else class="fleet-empty">Кораблей нет</p>
+    <p v-else class="fleet-empty">{{ t.fleetEmpty }}</p>
   </div>
 </template>
 
