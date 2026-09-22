@@ -15,6 +15,7 @@ import {
   galaxySaveDownloadFileName,
   toggleMarkerAtCell,
   turnQueueForSnapshot,
+  victoryProgressForSnapshot,
   advanceGameSnapshot,
   canExecuteActionMarkerThisTurn,
   hasResolvedActionMarkerThisTurn,
@@ -1140,6 +1141,14 @@ const turnQueue = computed(() => {
   const queue = turnQueueForSnapshot(save.game, save.map.id)
   // Одинокому игроку очередь не нужна: он в ней единственный
   return queue.length > 1 ? queue : []
+})
+
+/** Сколько центров власти у каждого игрока и сколько осталось до победы */
+const victoryProgress = computed(() => {
+  const save = saveFile.value
+  if (!save?.game) return null
+  const progress = victoryProgressForSnapshot(save.game, save.map)
+  return progress.entries.length ? progress : null
 })
 
 const advancePhaseLabel = computed(() => {
@@ -3436,6 +3445,11 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
             :my-player-id="playerId"
           />
           <p class="hint turn-order-note">{{ ui.turnOrder.note }}</p>
+        </section>
+
+        <section v-if="victoryProgress" class="block victory-block">
+          <h3 class="block-label">{{ ui.victory.heading }}</h3>
+          <VictoryTrackerPanel :progress="victoryProgress" :my-player-id="playerId" />
         </section>
 
         <section v-if="showTurnEventsPanel" class="block event-block">

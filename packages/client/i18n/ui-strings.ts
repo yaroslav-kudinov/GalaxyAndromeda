@@ -2,6 +2,14 @@
  * Строки новых кусков UI (лобби / чат / подсказки редактора).
  * Полный i18n (EN/ZH) отложен: держим ключи в одном модуле, чтобы не плодить хардкод.
  */
+import { pluralRu } from '~/utils/ru-plural'
+
+/** «остался 1 центр власти» / «осталось 2 центра власти» */
+function powerCentersLeft(count: number): string {
+  if (count === 1) return 'остался 1 центр власти'
+  return `осталось ${count} ${pluralRu(count, 'центр', 'центра', 'центров')} власти`
+}
+
 export const uiStringsRu = {
   lobby: {
     titleJoin: 'Вход в комнату',
@@ -128,6 +136,24 @@ export const uiStringsRu = {
     entryTitle: (position: number, name: string, status: string) =>
       `${position}. ${name} — ${status}`,
     note: 'Порядок разыгрывается заново каждый ход.',
+  },
+  victory: {
+    heading: 'Путь к победе',
+    goal: (needed: number, total: number) =>
+      `Побеждает тот, кто возьмёт ${needed} из ${total} центров власти.`,
+    score: (controlled: number, needed: number) => `${controlled} / ${needed}`,
+    left: (count: number) => `ещё ${count}`,
+    reachedShort: 'порог взят',
+    eliminatedShort: 'выбыл',
+    you: 'вы',
+    entryTitle: (name: string, controlled: number, needed: number, remaining: number) =>
+      `${name}: ${controlled} из ${needed} центров власти, ${powerCentersLeft(remaining)}`,
+    entryReachedTitle: (name: string, controlled: number) =>
+      `${name}: ${controlled} ${pluralRu(controlled, 'центр', 'центра', 'центров')} власти`
+      + ' — порог победы взят',
+    entryEliminatedTitle: (name: string) => `${name} выбыл — потеряны все центры власти`,
+    turnsLeft: (count: number) =>
+      `До конца партии ${count} ${pluralRu(count, 'ход', 'хода', 'ходов')}.`,
   },
   editor: {
     hotkeysBarTitle: 'Клавиши',
