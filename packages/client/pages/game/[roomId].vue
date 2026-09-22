@@ -14,6 +14,7 @@ import {
   serializeGalaxySave,
   galaxySaveDownloadFileName,
   toggleMarkerAtCell,
+  turnQueueForSnapshot,
   advanceGameSnapshot,
   canExecuteActionMarkerThisTurn,
   hasResolvedActionMarkerThisTurn,
@@ -68,6 +69,7 @@ import {
 import type { LobbyPlayerSlot } from '~/components/LobbyPlayerList.vue'
 import { useMarkerMapPick, type MarkerOrderConfirmResult } from '~/composables/useMarkerMapPick'
 import { snapshotToBoardCells } from '~/utils/board-adapter'
+import { useUiStrings } from '~/i18n/ui-strings'
 import {
   combatDestroyedGhosts,
   combatIncomingApproachMoves,
@@ -87,6 +89,7 @@ definePageMeta({ layout: 'immersive' })
 
 const route = useRoute()
 const roomId = computed(() => route.params.roomId as string)
+const ui = useUiStrings()
 
 const session = loadGameSessionForRoom(roomId.value)
 const playerId = ref(session?.playerId ?? 'player-1')
@@ -1129,6 +1132,15 @@ async function onScenarioCoachNext() {
     loadError.value = e instanceof Error ? e.message : String(e)
   }
 }
+
+/** Очередь хода текущего круга: цвет, место и состояние каждого игрока */
+const turnQueue = computed(() => {
+  const save = saveFile.value
+  if (!save?.game) return []
+  const queue = turnQueueForSnapshot(save.game, save.map.id)
+  // Одинокому игроку очередь не нужна: он в ней единственный
+  return queue.length > 1 ? queue : []
+})
 
 const advancePhaseLabel = computed(() => {
   if (!saveFile.value?.game) return 'Далее'
@@ -3330,6 +3342,17 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
             </div>
           </div>
         </div>
+        <div
+          v-if="turnQueue.length"
+          class="hud-below-right"
+          :class="{ 'hud-below-right--panel-open': !panelCollapsed && !isNarrowUi }"
+        >
+          <TurnOrderPanel
+            variant="strip"
+            :entries="turnQueue"
+            :my-player-id="playerId"
+          />
+        </div>
       </div>
     </div>
 
@@ -3404,6 +3427,16 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
             </span>
           </div>
         </header>
+
+        <section v-if="turnQueue.length" class="block turn-order-block">
+          <h3 class="block-label">{{ ui.turnOrder.heading }}</h3>
+          <TurnOrderPanel
+            variant="panel"
+            :entries="turnQueue"
+            :my-player-id="playerId"
+          />
+          <p class="hint turn-order-note">{{ ui.turnOrder.note }}</p>
+        </section>
 
         <section v-if="showTurnEventsPanel" class="block event-block">
           <TurnEventsPanel
@@ -3570,6 +3603,8 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
 <style scoped>
 .game-viewport {
   --hud-header-height: 3.75rem;
+  /* Ширина боковой панели: её же занимает развёрнутая .hud-right */
+  --hud-panel-width: 320px;
   position: relative;
   width: 100%;
   height: 100%;
@@ -3804,6 +3839,21 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
   /* Колонка не должна ловить клики по карте; контролы включают захват сами */
   pointer-events: none;
 }
+.hud-below-right {
+  display: flex;
+  justify-content: flex-end;
+  /* Справа стоит боковая панель: свёрнутая — полоска в 2rem, развёрнутая — 320px */
+  margin-right: 2rem;
+  max-width: min(28rem, 45vw);
+  /* Колонка пропускает клики к карте; подсказку ловят сами фишки очереди */
+  pointer-events: none;
+}
+.hud-below-right--panel-open {
+  margin-right: calc(var(--hud-panel-width) + 0.35rem);
+}
+.turn-order-note {
+  margin: 0.35rem 0 0;
+}
 .hud-center-hint {
   margin: 0;
   font-size: 0.78rem;
@@ -4004,7 +4054,7 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
   top: var(--hud-header-height);
   right: 0;
   bottom: 0;
-  width: 320px;
+  width: var(--hud-panel-width);
   z-index: 25;
   display: flex;
   background: rgba(30, 41, 59, 0.92);
@@ -4758,6 +4808,10 @@ button,
     grid-column: 2;
     justify-content: flex-end;
     max-width: min(52vw, 14rem);
+  }
+  .hud-below-right {
+    margin-right: 0;
+    max-width: 60vw;
   }
   .hud-top-right :deep(.phase-panel--hero) {
     justify-content: flex-end;
