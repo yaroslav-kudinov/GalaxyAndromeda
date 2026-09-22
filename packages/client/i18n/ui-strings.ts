@@ -119,6 +119,16 @@ export const uiStringsRu = {
     chosen: 'выбран',
     available: 'свободен',
   },
+  turnOrder: {
+    heading: 'Очередь хода',
+    you: 'вы',
+    active: 'ходит сейчас',
+    moved: 'уже сходил',
+    waiting: 'ждёт своей очереди',
+    entryTitle: (position: number, name: string, status: string) =>
+      `${position}. ${name} — ${status}`,
+    note: 'Порядок разыгрывается заново каждый ход.',
+  },
   editor: {
     hotkeysBarTitle: 'Клавиши',
     multiSelected: (n: number) => `Выбрано клеток: ${n}`,

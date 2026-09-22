@@ -440,3 +440,37 @@ export function phaseAdvanceActionLabelForSnapshot(game: GameSnapshot, mapId: st
   }
   return phaseAdvanceActionLabel(state, participating, game)
 }
+
+/** Место игрока в очереди текущего круга — для показа очерёдности в интерфейсе. */
+export interface TurnQueueEntry {
+  playerId: string
+  name: string
+  color: string
+  /** Место в очереди, счёт с единицы */
+  position: number
+  /** Сейчас ходит этот игрок */
+  isActive: boolean
+  /** Свой ход в текущем круге игрок уже сделал */
+  hasMoved: boolean
+}
+
+/**
+ * Очередь хода на текущий круг: тот же порядок, по которому ходят игроки.
+ * Выбывшие и неучаствующие в очередь не попадают.
+ */
+export function turnQueueForSnapshot(game: GameSnapshot, mapId: string): TurnQueueEntry[] {
+  const state = gameStateFromSnapshot(game, mapId)
+  const order = activePlayerOrder(state.players, game.participatingPlayerIds, turnOrderContext(state))
+  const activeIndex = state.activePlayerId ? order.indexOf(state.activePlayerId) : -1
+  return order.map((playerId, index) => {
+    const player = state.players.find((p) => p.id === playerId)
+    return {
+      playerId,
+      name: player?.name ?? playerId,
+      color: player?.color ?? '#94a3b8',
+      position: index + 1,
+      isActive: index === activeIndex,
+      hasMoved: activeIndex > 0 && index < activeIndex,
+    }
+  })
+}
