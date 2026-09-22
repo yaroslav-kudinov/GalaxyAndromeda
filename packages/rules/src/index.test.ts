@@ -492,6 +492,14 @@ describe('galaxy save file', () => {
     expect(validateGalaxySave(parsed)).toEqual([])
   })
 
+  it('rejects a save from an older rules version with a readable message', () => {
+    const map = createEmptyMap('old', 'Old')
+    const stale = { ...galaxySaveFromMap(map), version: 1 }
+
+    expect(() => parseGalaxySave(stale)).toThrow(/Сохранение версии 1 не поддерживается/)
+    // Карты остаются импортируемыми: у них нет поля format вовсе.
+    expect(parseGalaxySave(map).map.id).toBe('old')
+  })
   it('parses legacy MapDefinition JSON', () => {
     const map = createEmptyMap('legacy', 'Legacy')
     const parsed = parseGalaxySave(map)
@@ -2033,7 +2041,12 @@ describe('production', () => {
 
     const cell = game.cells.find((c) => c.coord.q === 0 && c.coord.r === 0)!
     expect(cell.ships.some((s) => s.type === 'destroyer' && s.ownerId === 'player-1')).toBe(true)
-    expect(cell.resourceTokens[0]?.faceUp).toBe(false)
+    // Автооплата подбирает наименьший пережог: за 2 кредита платит фишкой 2 с (1,0),
+    // а фишку 3 с (0,0) оставляет нетронутой.
+    expect(cell.resourceTokens[0]?.faceUp).toBe(true)
+    expect(game.cells.find((c) => c.coord.q === 1 && c.coord.r === 0)!.resourceTokens[0]?.faceUp).toBe(
+      false,
+    )
     expect(game.cells.find((c) => c.coord.q === 0 && c.coord.r === 1)!.resourceTokens[0]?.faceUp).toBe(
       false,
     )
@@ -2061,7 +2074,7 @@ describe('production', () => {
     })
     expect(errors).toEqual([])
     expect(game.actionMarkers.some((m) => m.id === secondId)).toBe(true)
-    expect(game.cells.find((c) => c.coord.q === 0 && c.coord.r === 0)!.resourceTokens[0]?.faceUp).toBe(
+    expect(game.cells.find((c) => c.coord.q === 1 && c.coord.r === 0)!.resourceTokens[0]?.faceUp).toBe(
       false,
     )
   })
@@ -2213,15 +2226,16 @@ describe('production', () => {
     placeProductionMarkerForTest(game, 'player-1', { q: 0, r: 0 }, map)
     const marker = game.actionMarkers[0]!
 
-    // Автоподбор взял бы кредиты 3 с (0,0); игрок платит кредитами 2 с (1,0)
+    // Автооплата берёт кредиты 2 с (1,0) как наименьший пережог; игрок сознательно
+    // платит кредитами 3 с (0,0), и движок обязан потратить именно его выбор.
     const auto = autoAllocateTokens(game, map.id, marker, 2, 2)!
-    expect(auto).toContainEqual({ coord: { q: 0, r: 0 }, tokenIndex: 0 })
+    expect(auto).toContainEqual({ coord: { q: 1, r: 0 }, tokenIndex: 0 })
 
     const { errors } = applyGameActionOnSnapshot(game, map, 'player-1', 'execute-production', {
       markerId: marker.id,
       ships: [{ type: 'destroyer', coord: { q: 0, r: 0 } }],
       spentTokens: [
-        { coord: { q: 1, r: 0 }, tokenIndex: 0 },
+        { coord: { q: 0, r: 0 }, tokenIndex: 0 },
         { coord: { q: 0, r: 1 }, tokenIndex: 0 },
       ],
     })
@@ -2229,10 +2243,37 @@ describe('production', () => {
 
     const cellAt = (q: number, r: number) =>
       game.cells.find((c) => c.coord.q === q && c.coord.r === r)!
-    expect(cellAt(0, 0).resourceTokens[0]?.faceUp).toBe(true)
-    expect(cellAt(1, 0).resourceTokens[0]?.faceUp).toBe(false)
+    expect(cellAt(0, 0).resourceTokens[0]?.faceUp).toBe(false)
+    expect(cellAt(1, 0).resourceTokens[0]?.faceUp).toBe(true)
     expect(cellAt(0, 1).resourceTokens[0]?.faceUp).toBe(false)
     expect(cellAt(0, 0).ships.some((sh) => sh.type === 'destroyer')).toBe(true)
+  })
+
+  it('autoAllocateTokens picks the least wasteful combination', () => {
+    const map = productionTestMap()
+    const game = gameSnapshotFromMap(map)
+    game.phase = 'actions'
+    game.activePlayerId = 'player-1'
+    placeProductionMarkerForTest(game, 'player-1', { q: 0, r: 0 }, map)
+    const marker = game.actionMarkers[0]!
+
+    // Кредиты в регионе: 3 на (0,0) и 2 на (1,0). За 2 кредита платим двойкой — пережог 0.
+    const exact = autoAllocateTokens(game, map.id, marker, 2, 0)!
+    expect(exact).toEqual([{ coord: { q: 1, r: 0 }, tokenIndex: 0 }])
+
+    // За 4 кредита одной фишки не хватает, поэтому берём обе: 3 + 2 = 5, пережог 1.
+    const both = autoAllocateTokens(game, map.id, marker, 4, 0)!
+    expect(both).toHaveLength(2)
+
+    // За 3 кредита точное попадание тройкой предпочтительнее двойки с добором.
+    const single = autoAllocateTokens(game, map.id, marker, 3, 0)!
+    expect(single).toEqual([{ coord: { q: 0, r: 0 }, tokenIndex: 0 }])
+
+    // Больше, чем есть в регионе, подобрать нельзя.
+    expect(autoAllocateTokens(game, map.id, marker, 99, 0)).toBeNull()
+
+    // Нулевая потребность не переворачивает ничего.
+    expect(autoAllocateTokens(game, map.id, marker, 0, 0)).toEqual([])
   })
 
   it('execute-production rejects a token pick that does not cover the cost', () => {

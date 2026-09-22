@@ -69,6 +69,10 @@ export function renderAsciiMap(state: GameState): string {
 }
 
 export function buildSpatialSummary(state: GameState): SpatialSummary {
+  // Индекс клеток по ключу: заливка ниже иначе делает find() на каждый шаг (O(клеток²)).
+  const cellByKey = new Map<string, GameState['cells'][number]>()
+  for (const cell of state.cells) cellByKey.set(hexKey(cell.coord.q, cell.coord.r), cell)
+
   const powerCenters = state.cells
     .filter((c) => c.isPowerCenter)
     .map((c) => ({
@@ -90,7 +94,7 @@ export function buildSpatialSummary(state: GameState): SpatialSummary {
       const cur = stack.pop()!
       const curKey = hexKey(cur.q, cur.r)
       if (visited.has(curKey)) continue
-      const curCell = state.cells.find((c) => c.coord.q === cur.q && c.coord.r === cur.r)
+      const curCell = cellByKey.get(curKey)
       if (!curCell || curCell.controlOwnerId !== cell.controlOwnerId) continue
       visited.add(curKey)
       hexes.push(curKey)

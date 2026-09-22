@@ -11,7 +11,8 @@
     "test": "pnpm --filter @galaxy/rules run build && pnpm -r run test",
     "typecheck": "pnpm -r run typecheck",
     "smoke": "tsx harness/agent-smoke/run-smoke.ts",
-    "tabletop:print": "tsx harness/scripts/build-tabletop-print.mjs"
+    "tabletop:print": "tsx harness/scripts/build-tabletop-print.mjs",
+    "balance": "tsx harness/balance/run.ts"
   },
   "devDependencies": {
     "tsx": "^4.19.2"

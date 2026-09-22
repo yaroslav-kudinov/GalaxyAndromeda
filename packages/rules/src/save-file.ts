@@ -24,7 +24,12 @@ import { hexKey, parseHexKey } from './types.js'
 
 
 export const GALAXY_SAVE_FORMAT = 'galaxy-save' as const
-export const GALAXY_SAVE_VERSION = 1 as const
+/**
+ * Версия 2 — пересборка ядра: бюджет перезарядки вместо интервала, порог победы из карты,
+ * постоянные маркеры действия, осада, доктрины, бой на попаданиях. Партии версии 1 по новым
+ * правилам неиграбельны, поэтому миграции нет — они отклоняются с явным сообщением.
+ */
+export const GALAXY_SAVE_VERSION = 2 as const
 
 const WINDOWS_ILLEGAL_FILENAME_CHARS = /[\\/:*?"<>|]/g
 const MAX_GALAXY_SAVE_DOWNLOAD_BASE_LEN = 120
@@ -465,6 +470,13 @@ export function gameStateFromSnapshot(snapshot: GameSnapshot, mapId: string): Ga
 export function parseGalaxySave(raw: unknown): GalaxySaveFile {
   if (isGalaxySaveFile(raw)) {
     return normalizeGalaxySave(raw)
+  }
+  if (isRecord(raw) && raw.format === GALAXY_SAVE_FORMAT) {
+    throw new Error(
+      `Сохранение версии ${String(raw.version)} не поддерживается: правила игры изменились, `
+        + `нужна версия ${GALAXY_SAVE_VERSION}. Старую партию продолжить нельзя, начните новую. `
+        + `Карты (.galaxy.json) по-прежнему открываются.`,
+    )
   }
   if (isLegacyMapDefinition(raw)) {
     return galaxySaveFromMap(normalizeMapDefinition(raw))

@@ -2,6 +2,7 @@
 import type { GalaxySaveFile, GameSnapshot, HexCoord, LegalAction, MapDefinition, ScenarioHighlight, ScenarioStep, ShipMovePlan, BombardmentPlan, CombatOptions, CombatResolutionResult, TokenSpendRef } from '@galaxy/rules'
 import {
   createEmptyMap,
+  GALAXY_SAVE_VERSION,
   executeMarkerBombardment,
   executeMarkerMovement,
   galaxySaveFromMap,
@@ -1238,7 +1239,7 @@ function applyObservation(
   if (!map) return false
   saveFile.value = {
     format: 'galaxy-save',
-    version: 1,
+    version: GALAXY_SAVE_VERSION,
     savedAt: new Date().toISOString(),
     map: normalizeMapDefinition(map),
     game,
