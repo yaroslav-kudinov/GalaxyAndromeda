@@ -1,100 +1,228 @@
-import { describe, expect, it, vi } from 'vitest'
-import type { GameSnapshot } from './save-file.js'
+import { describe, expect, it } from 'vitest'
+import type { GameSnapshot, RuntimeCellState } from './save-file.js'
 import {
-  formatResourceRechargeBannerText,
-  formatResourceRechargePlayerHint,
-  migrateResourceRechargeSchedule,
-  maybeApplyAutomaticResourceRecharge,
-  rollNewResourceRechargeSchedule,
-  rollResourceRechargeTurns,
+  autoResolveAllRechargePicks,
+  autoResolveRechargePicks,
+  computeRechargeBudget,
+  countFaceDownTokens,
+  executeRechargePicks,
+  formatRechargeBudgetHint,
+  RECHARGE_PICK_ERRORS,
+  rechargePicksRemaining,
+  refreshRechargeBudgets,
 } from './resource-recharge.js'
 
-function emptyGame(): GameSnapshot {
+interface CellSpec {
+  q: number
+  isPowerCenter?: boolean
+  owner?: string | null
+  /** Номиналы фишек лицом вниз. */
+  faceDown?: number[]
+  /** Номиналы фишек лицом вверх. */
+  faceUp?: number[]
+}
+
+function cellOf(spec: CellSpec): RuntimeCellState {
   return {
-    phase: 'actions',
+    coord: { q: spec.q, r: 0 },
+    isPowerCenter: !!spec.isPowerCenter,
+    controlOwnerId: spec.owner === undefined ? 'player-1' : spec.owner,
+    resourceTokens: [
+      ...(spec.faceDown ?? []).map((value) => ({
+        type: 'credits' as const,
+        value: value as 1,
+        faceUp: false,
+      })),
+      ...(spec.faceUp ?? []).map((value) => ({
+        type: 'credits' as const,
+        value: value as 1,
+        faceUp: true,
+      })),
+    ],
+    ships: [],
+    actionMarkerId: null,
+    productionMarkerId: null,
+  }
+}
+
+function gameOf(cells: CellSpec[], victoryPowerCenters = 6): GameSnapshot {
+  return {
+    phase: 'planning',
     turnNumber: 1,
     activePlayerId: 'player-1',
-    players: [],
-    cells: [
-      {
-        coord: { q: 0, r: 0 },
-        isPowerCenter: false,
-        controlOwnerId: 'player-1',
-        resourceTokens: [{ type: 'credits', value: 3, faceUp: false }],
-        ships: [],
-        actionMarkerId: null,
-        productionMarkerId: null,
-      },
+    players: [
+      { id: 'player-1', name: 'P1', color: '#111', isAi: false, eliminated: false },
+      { id: 'player-2', name: 'P2', color: '#222', isAi: false, eliminated: false },
     ],
+    cells: cells.map(cellOf),
     eventLog: [],
     pendingEvents: [],
     actionMarkers: [],
     productionMarkers: [],
     actionMarkerResolvedThisTurn: false,
     productionMarkerResolvedThisTurn: false,
+    victoryPowerCenters,
   }
 }
 
-describe('resource-recharge', () => {
-  it('rollResourceRechargeTurns returns 1, 2 or 3', () => {
-    expect(rollResourceRechargeTurns(() => 0)).toBe(1)
-    expect(rollResourceRechargeTurns(() => 0.34)).toBe(2)
-    expect(rollResourceRechargeTurns(() => 0.67)).toBe(3)
+function faceUpValues(game: GameSnapshot, ownerId: string): number[] {
+  return game.cells
+    .filter((cell) => cell.controlOwnerId === ownerId)
+    .flatMap((cell) => cell.resourceTokens.filter((t) => t.faceUp !== false).map((t) => t.value))
+    .sort((a, b) => b - a)
+}
+
+describe('recharge budget', () => {
+  it('falls one token per power center and bottoms out one step before victory', () => {
+    const ladder = [1, 2, 3, 4, 5].map((powerCenters) => {
+      const cells: CellSpec[] = []
+      for (let i = 0; i < powerCenters; i += 1) cells.push({ q: i, isPowerCenter: true })
+      return computeRechargeBudget(gameOf(cells, 6), 'player-1')
+    })
+    expect(ladder).toEqual([4, 3, 2, 1, 0])
   })
 
-  it('formatResourceRechargePlayerHint uses Russian plural', () => {
-    expect(formatResourceRechargePlayerHint(1)).toContain('конце этого хода')
-    expect(formatResourceRechargePlayerHint(2)).toContain('2 хода')
-    expect(formatResourceRechargePlayerHint(3)).toContain('3 хода')
+  it('never goes below zero', () => {
+    const cells: CellSpec[] = []
+    for (let i = 0; i < 9; i += 1) cells.push({ q: i, isPowerCenter: true })
+    expect(computeRechargeBudget(gameOf(cells, 6), 'player-1')).toBe(0)
+    expect(computeRechargeBudget(gameOf(cells, 6), 'player-1', -5)).toBe(0)
   })
 
-  it('formatResourceRechargeBannerText uses prominent countdown wording', () => {
-    expect(formatResourceRechargeBannerText(1)).toBe('До перезарядки ресурсов — 1 ход')
-    expect(formatResourceRechargeBannerText(2)).toBe('До перезарядки ресурсов — 2 хода')
-    expect(formatResourceRechargeBannerText(3)).toBe('До перезарядки ресурсов — 3 хода')
+  it('follows the map threshold, not half the power centers', () => {
+    const cells: CellSpec[] = [{ q: 0, isPowerCenter: true }]
+    expect(computeRechargeBudget(gameOf(cells, 6), 'player-1')).toBe(4)
+    expect(computeRechargeBudget(gameOf(cells, 4), 'player-1')).toBe(2)
+  })
+})
+
+describe('recharge picks', () => {
+  it('flips everything silently when there is nothing to choose between', () => {
+    const game = gameOf([
+      { q: 0, isPowerCenter: true },
+      { q: 1, faceDown: [3, 4] },
+    ])
+    refreshRechargeBudgets(game)
+
+    // Две фишки лицом вниз при бюджете четыре — выбор не нужен, долга нет.
+    expect(rechargePicksRemaining(game, 'player-1')).toBe(0)
+    expect(countFaceDownTokens(game, 'player-1')).toBe(0)
+    expect(faceUpValues(game, 'player-1')).toEqual([4, 3])
   })
 
-  it('maybeApplyAutomaticResourceRecharge decrements countdown', () => {
-    const game = emptyGame()
-    game.resourceRechargeTurnsRemaining = 3
-    maybeApplyAutomaticResourceRecharge(game, () => 0)
-    expect(game.resourceRechargeTurnsRemaining).toBe(2)
-    expect(game.cells[0]!.resourceTokens[0]!.faceUp).toBe(false)
+  it('owes exactly the budget when there is more face-down than budget', () => {
+    const game = gameOf([
+      { q: 0, isPowerCenter: true },
+      { q: 1, isPowerCenter: true },
+      { q: 2, faceDown: [9, 7, 5, 2, 1] },
+    ])
+    refreshRechargeBudgets(game)
+
+    // Два центра власти → бюджет три, лицом вниз пять фишек.
+    expect(rechargePicksRemaining(game, 'player-1')).toBe(3)
+    expect(countFaceDownTokens(game, 'player-1')).toBe(5)
   })
 
-  it('maybeApplyAutomaticResourceRecharge flips tokens and rolls next interval', () => {
-    const game = emptyGame()
-    game.resourceRechargeTurnsRemaining = 1
-    maybeApplyAutomaticResourceRecharge(game, () => 0)
-    expect(game.cells[0]!.resourceTokens[0]!.faceUp).toBe(true)
-    expect(game.resourceRechargeTurnsRemaining).toBe(1)
-    expect(game.eventLog.some((e) => e.message.includes('Автоперезарядка'))).toBe(true)
+  it('does not grant a budget at the top of the ladder', () => {
+    const cells: CellSpec[] = [{ q: 9, faceDown: [5, 5] }]
+    for (let i = 0; i < 5; i += 1) cells.push({ q: i, isPowerCenter: true })
+    const game = gameOf(cells, 6)
+    refreshRechargeBudgets(game)
+    expect(rechargePicksRemaining(game, 'player-1')).toBe(0)
+    expect(countFaceDownTokens(game, 'player-1')).toBe(2)
   })
 
-  it('migrateResourceRechargeSchedule migrates legacy interval without rolling', () => {
-    const game = emptyGame() as GameSnapshot & { resourceRechargeInterval?: number }
-    game.resourceRechargeInterval = 2
-    expect(migrateResourceRechargeSchedule(game)).toBe(2)
-    expect(game.resourceRechargeTurnsRemaining).toBe(2)
+  it('flips the chosen tokens and counts them against the debt', () => {
+    const game = gameOf([
+      { q: 0, isPowerCenter: true },
+      { q: 1, isPowerCenter: true },
+      { q: 2, faceDown: [9, 7, 5, 2, 1] },
+    ])
+    refreshRechargeBudgets(game)
+
+    expect(executeRechargePicks(game, 'player-1', [
+      { coord: { q: 2, r: 0 }, tokenIndex: 0 },
+      { coord: { q: 2, r: 0 }, tokenIndex: 1 },
+    ])).toEqual([])
+    expect(rechargePicksRemaining(game, 'player-1')).toBe(1)
+    expect(faceUpValues(game, 'player-1')).toEqual([9, 7])
   })
 
-  it('migrateResourceRechargeSchedule does not roll when schedule is missing', () => {
-    const game = emptyGame()
-    const rng = vi.fn(() => 0)
-    expect(migrateResourceRechargeSchedule(game)).toBeUndefined()
-    expect(game.resourceRechargeTurnsRemaining).toBeUndefined()
-    expect(rng).not.toHaveBeenCalled()
+  it('rejects picks that are not the player’s, not face-down, duplicated or over budget', () => {
+    const game = gameOf([
+      { q: 0, isPowerCenter: true },
+      { q: 1, isPowerCenter: true },
+      { q: 2, faceDown: [9, 7, 5, 2, 1], faceUp: [6] },
+      { q: 3, owner: 'player-2', faceDown: [8] },
+    ])
+    refreshRechargeBudgets(game)
+
+    const pick = (q: number, tokenIndex: number) => ({ coord: { q, r: 0 }, tokenIndex })
+    expect(executeRechargePicks(game, 'player-1', [pick(3, 0)])).toEqual([
+      RECHARGE_PICK_ERRORS.notYours,
+    ])
+    expect(executeRechargePicks(game, 'player-1', [pick(2, 5)])).toEqual([
+      RECHARGE_PICK_ERRORS.notFaceDown,
+    ])
+    expect(executeRechargePicks(game, 'player-1', [pick(2, 0), pick(2, 0)])).toEqual([
+      RECHARGE_PICK_ERRORS.duplicate,
+    ])
+    expect(
+      executeRechargePicks(game, 'player-1', [pick(2, 0), pick(2, 1), pick(2, 2), pick(2, 3)]),
+    ).toEqual([RECHARGE_PICK_ERRORS.tooMany])
+
+    // Ни одна неудачная попытка ничего не перевернула.
+    expect(countFaceDownTokens(game, 'player-1')).toBe(5)
   })
 
-  it('maybeApplyAutomaticResourceRecharge is a no-op before match start schedule', () => {
-    const game = emptyGame()
-    maybeApplyAutomaticResourceRecharge(game, () => 0)
-    expect(game.resourceRechargeTurnsRemaining).toBeUndefined()
+  it('auto-resolve takes the biggest tokens and is deterministic', () => {
+    const build = () => {
+      const game = gameOf([
+        { q: 0, isPowerCenter: true },
+        { q: 1, isPowerCenter: true },
+        { q: 2, faceDown: [2, 9, 5, 7, 1] },
+      ])
+      refreshRechargeBudgets(game)
+      return game
+    }
+
+    const first = build()
+    expect(autoResolveRechargePicks(first, 'player-1')).toBe(3)
+    expect(faceUpValues(first, 'player-1')).toEqual([9, 7, 5])
+    expect(rechargePicksRemaining(first, 'player-1')).toBe(0)
+
+    const second = build()
+    autoResolveRechargePicks(second, 'player-1')
+    expect(faceUpValues(second, 'player-1')).toEqual(faceUpValues(first, 'player-1'))
   })
 
-  it('rollNewResourceRechargeSchedule sets explicit interval', () => {
-    const game = emptyGame()
-    expect(rollNewResourceRechargeSchedule(game, () => 0)).toBe(1)
-    expect(game.resourceRechargeTurnsRemaining).toBe(1)
+  it('closes every outstanding debt so a turn cannot hang', () => {
+    const game = gameOf([
+      { q: 0, isPowerCenter: true },
+      { q: 1, faceDown: [1, 2, 3, 4, 5, 6] },
+    ])
+    refreshRechargeBudgets(game)
+    expect(rechargePicksRemaining(game, 'player-1')).toBe(4)
+
+    autoResolveAllRechargePicks(game)
+    expect(game.rechargePicksRemainingByPlayer).toEqual({})
+    expect(countFaceDownTokens(game, 'player-1')).toBe(2)
+  })
+
+  it('budget caps the rate of return, not the amount a player may hold', () => {
+    const game = gameOf([
+      { q: 0, isPowerCenter: true },
+      { q: 1, faceUp: [9, 9, 9], faceDown: [4] },
+    ])
+    refreshRechargeBudgets(game)
+
+    // Уже поднятые фишки не сгорают: копить на дорогой корабль можно.
+    expect(faceUpValues(game, 'player-1')).toEqual([9, 9, 9, 4])
+  })
+
+  it('hint tells the player what the budget is doing', () => {
+    expect(formatRechargeBudgetHint(4, 0)).toBe('Перезарядка: до 4 фишек за ход')
+    expect(formatRechargeBudgetHint(3, 2)).toBe('Перезарядка: выберите фишки, осталось 2')
+    expect(formatRechargeBudgetHint(0, 0)).toContain('недоступна')
   })
 })

@@ -39,7 +39,8 @@ import {
   combatRoundStateOf,
   combatResolutionFingerprint,
   combatResolutionFromPending,
-  formatResourceRechargeBannerText,
+  computeRechargeBudget,
+  formatRechargeBudgetHint,
   getCombatRetreatDestinations,
 } from '@galaxy/rules'
 import { advanceScenarioStep, fetchObservation, fetchRoomBootstrap, GameApiError, joinRoom, rejoinRoom, startRoom, closeRoom, submitGameAction, updateCombatPrepAction } from '~/composables/useGameApi'
@@ -1329,9 +1330,15 @@ const {
 } = useTurnEventAnnounce(roomId, activeEvent, turnNumber)
 
 const resourceRechargeBanner = computed(() => {
-  const remaining = snapshot.value?.resourceRechargeTurnsRemaining
-  if (remaining !== 1 && remaining !== 2 && remaining !== 3) return null
-  return formatResourceRechargeBannerText(remaining)
+  const game = snapshot.value
+  const me = playerId.value
+  if (!game || !me) return null
+  // Отсчёта до перезарядки больше нет: фишки возвращаются каждый ход, но не больше
+  // бюджета, и бюджет падает с ростом числа центров власти.
+  const owed = game.rechargePicksRemainingByPlayer?.[me] ?? 0
+  const budget = computeRechargeBudget(game, me)
+  if (owed <= 0 && budget <= 0) return null
+  return formatRechargeBudgetHint(budget, owed)
 })
 
 const {

@@ -29,6 +29,7 @@ import {
   getShipProductionCost,
   getShipProductionRegionMin,
   hexKey,
+  rechargePicksRemaining,
   SHIP_PRODUCTION_COST,
   resolveCombatPrep,
 } from '../../packages/rules/src/index.js'
@@ -617,7 +618,12 @@ export function runGame(map: MapDefinition, seed: number, options: RunOptions): 
       }
 
       let progressed = false
-      if (game.phase === 'planning') progressed = tryPlaceMarker(game, map, active)
+      if (game.phase === 'planning' && rechargePicksRemaining(game, active) > 0) {
+        progressed = applyGameActionOnSnapshot(
+          game, map, active, 'execute-recharge-picks',
+        ).errors.length === 0
+      }
+      if (!progressed && game.phase === 'planning') progressed = tryPlaceMarker(game, map, active)
       else if (game.phase === 'actions') progressed = stepActions(game, map, active, tally, attempts)
 
       note(

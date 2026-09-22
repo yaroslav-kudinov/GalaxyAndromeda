@@ -41,7 +41,7 @@ export interface MapDefinition {
   /**
    * Сколько центров власти нужно для победы. Задаётся картой, а не выводится из их общего
    * числа: порог — параметр баланса конкретной карты. Если не задан, действует запасное
-   * правило «строго больше половины» (см. `victoryThresholdFor`).
+   * правило «строго больше половины» (см. `victoryThresholdForState`).
    */
   victoryPowerCenters?: number
   cells: MapCellDefinition[]

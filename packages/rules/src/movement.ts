@@ -62,6 +62,13 @@ import { advanceGameSnapshot, completeEventsPhaseIfActive } from './turn.js'
 import type { HexCoord, LegalAction, MapDefinition, ShipType, ShipUnit } from './types.js'
 import { hexKey } from './types.js'
 import { getLegalActions } from './game.js'
+import {
+  autoResolveRechargePicks,
+  executeRechargePicks,
+  rechargePicksRemaining,
+  RECHARGE_PICK_ERRORS,
+} from './resource-recharge.js'
+import type { ResourceTokenRef } from './resource-recharge.js'
 import { applyVictoryAndDefeatChecks } from './victory.js'
 import { surrenderPlayer } from './surrender.js'
 
@@ -737,6 +744,16 @@ export function getLegalActionsForSnapshot(
   const state = gameStateFromSnapshot(game, mapId)
   const actions = getLegalActions(state, playerId)
 
+  const owedPicks = rechargePicksRemaining(game, playerId)
+  if (game.phase === 'planning' && owedPicks > 0 && !game.gameOver) {
+    actions.push({
+      id: 'execute-recharge-picks',
+      type: 'rechargePicks',
+      description: `Перезарядка: выбрать фишки (осталось ${owedPicks}); без выбора поднимутся самые крупные`,
+      params: { remaining: owedPicks },
+    })
+  }
+
   const me = game.players.find((p) => p.id === playerId)
   if (!game.gameOver && me && !me.eliminated) {
     actions.push({
@@ -1101,6 +1118,21 @@ export function applyGameActionOnSnapshot(
     const markerId = params?.markerId as string | undefined
     if (!markerId) return { errors: ['Некорректные параметры действия'] }
     return { errors: executeProductionRecharge(game, map.id, playerId, { markerId }) }
+  }
+
+  if (actionId === 'execute-recharge-picks') {
+    if (rechargePicksRemaining(game, playerId) <= 0) {
+      return { errors: [RECHARGE_PICK_ERRORS.nothingOwed] }
+    }
+    const picks = params?.picks as ResourceTokenRef[] | undefined
+    // Без списка фишек — это пропуск выбора: движок поднимает самые крупные номиналы.
+    // Так действие безопасно для ботов, таймаутов и простых клиентов.
+    if (picks === undefined || (Array.isArray(picks) && picks.length === 0)) {
+      autoResolveRechargePicks(game, playerId)
+      return { errors: [] }
+    }
+    if (!Array.isArray(picks)) return { errors: ['Некорректные параметры действия'] }
+    return { errors: executeRechargePicks(game, playerId, picks) }
   }
 
   if (actionId === 'toggle-marker') {

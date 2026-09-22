@@ -478,8 +478,8 @@ function roomObservation(
     overtimeRegionByPlayer: s.overtimeRegionByPlayer ?? null,
     actionMarkerLimitByPlayer: s.actionMarkerLimitByPlayer ?? null,
     productionMarkerLimitByPlayer: s.productionMarkerLimitByPlayer ?? null,
-    resourceRechargeTurnsRemaining:
-      room.status === 'playing' ? (s.resourceRechargeTurnsRemaining ?? null) : undefined,
+    rechargePicksRemainingByPlayer:
+      room.status === 'playing' ? (s.rechargePicksRemainingByPlayer ?? null) : undefined,
     lastCombatResult: room.lastCombatResult ?? null,
     observationRevision: room.observationRevision,
     roomStatus: room.status,

@@ -109,7 +109,7 @@ export function buildObservation(
     'eventDeck',
     'actionMarkerLimitByPlayer',
     'productionMarkerLimitByPlayer',
-    'resourceRechargeTurnsRemaining',
+    'rechargePicksRemainingByPlayer',
   ] as const) {
     if (key in stateExtra) {
       mechanicsExtra[key] = stateExtra[key] ?? null

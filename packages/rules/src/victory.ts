@@ -52,10 +52,21 @@ function totalPowerCentersOnMap(state: GameState): number {
  * Запасное правило «строго больше половины» остаётся для снимков без явного порога —
  * например, собранных в тестах напрямую из карты, без старта матча.
  */
-export function victoryThresholdFor(state: GameState): number {
+export function victoryThresholdForState(state: GameState): number {
   const explicit = state.victoryPowerCenters
   if (explicit != null && explicit > 0) return explicit
   return Math.floor(totalPowerCentersOnMap(state) / 2) + 1
+}
+
+/**
+ * То же, что `victoryThresholdForState`, но по снимку партии: экономике нужен порог там,
+ * где `GameState` не строится. Правило одно и живёт в одном месте.
+ */
+export function victoryThresholdForSnapshot(game: GameSnapshot): number {
+  const explicit = game.victoryPowerCenters
+  if (explicit != null && explicit > 0) return explicit
+  const total = game.cells.reduce((n, cell) => n + (cell.isPowerCenter ? 1 : 0), 0)
+  return Math.floor(total / 2) + 1
 }
 
 function controlledCellCount(state: GameState, playerId: string): number {
@@ -85,7 +96,7 @@ function playerControlsAnyPowerCenter(state: GameState, playerId: string): boole
 
 function detectVictoryReason(state: GameState, winnerId: string): VictoryReason {
   const pc = powerCenterCounts(state).get(winnerId) ?? 0
-  if (pc >= victoryThresholdFor(state)) return 'power_centers'
+  if (pc >= victoryThresholdForState(state)) return 'power_centers'
   return 'last_standing'
 }
 
@@ -159,7 +170,7 @@ export function checkVictory(state: GameState): { winnerId: string; reason: Vict
   }
 
   const pcCounts = powerCenterCounts(state)
-  const threshold = victoryThresholdFor(state)
+  const threshold = victoryThresholdForState(state)
   if (totalPowerCentersOnMap(state) > 0) {
     let bestId: string | null = null
     let bestCount = 0

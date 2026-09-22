@@ -9,7 +9,6 @@ import {
   productionMarkerLimitForPlayer,
 } from './marker-pools.js'
 import { syncActionMarkerTurnTracking, syncProductionMarkerTurnTracking } from './markers.js'
-import { migrateResourceRechargeSchedule, normalizeResourceRechargeTurns } from './resource-recharge.js'
 import type {
   CellState,
   GameEvent,
@@ -322,6 +321,13 @@ export interface GameSnapshot {
   turnLimit?: number
   /** Сид партии: разрешает ничьи и прочие броски, одинаковые при повторной загрузке сейва. */
   matchSeed?: number
+  /**
+   * Сколько фишек игроку ещё предстоит поднять в этом ходу.
+   *
+   * Поле появляется, только когда перевёрнутых фишек больше бюджета: если выбирать не из
+   * чего, фишки поднимаются молча и долг не заводится.
+   */
+  rechargePicksRemainingByPlayer?: Record<string, number>
   /** Глобальное событие текущего хода (одно на всех игроков) */
   turnEvent?: TurnEventState
   /**
@@ -341,10 +347,6 @@ export interface GameSnapshot {
   actionMarkerLimitByPlayer?: Record<string, number>
   /** Купленный лимит маркеров производства (устарело; миграция очищает PM) */
   productionMarkerLimitByPlayer?: Record<string, number>
-  /** Полных ходов до следующей автоперезарядки (1 — в конце текущего) */
-  resourceRechargeTurnsRemaining?: 1 | 2 | 3
-  /** @deprecated миграция; см. resourceRechargeTurnsRemaining */
-  resourceRechargeInterval?: 1 | 2 | 3
   /** Прогресс обучающего сценария */
   scenarioProgress?: import('./scenario.js').ScenarioProgress
 }
@@ -578,14 +580,12 @@ function normalizeGameSnapshot(game: GameSnapshot, _map?: MapDefinition): GameSn
     productionMarkerLimitByPlayer: game.productionMarkerLimitByPlayer
       ? { ...game.productionMarkerLimitByPlayer }
       : undefined,
-    resourceRechargeTurnsRemaining:
-      normalizeResourceRechargeTurns(game.resourceRechargeTurnsRemaining)
-      ?? normalizeResourceRechargeTurns(game.resourceRechargeInterval)
-      ?? undefined,
+    rechargePicksRemainingByPlayer: game.rechargePicksRemainingByPlayer
+      ? { ...game.rechargePicksRemainingByPlayer }
+      : undefined,
   }
 
   ensureMarkerLimits(normalized)
-  migrateResourceRechargeSchedule(normalized)
   return normalized
 }
 
@@ -821,10 +821,10 @@ export function gameSnapshotFromObservation(
       'productionMarkerLimitByPlayer',
       preserve?.productionMarkerLimitByPlayer,
     ),
-    resourceRechargeTurnsRemaining: fromObservationField(
+    rechargePicksRemainingByPlayer: fromObservationField(
       mech,
-      'resourceRechargeTurnsRemaining',
-      preserve?.resourceRechargeTurnsRemaining,
+      'rechargePicksRemainingByPlayer',
+      preserve?.rechargePicksRemainingByPlayer,
     ),
   }, map)
 

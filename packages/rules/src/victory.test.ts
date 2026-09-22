@@ -7,7 +7,7 @@ import {
   checkVictory,
   provisionalWinnerForSnapshot,
   resolveTurnLimitWinner,
-  victoryThresholdFor,
+  victoryThresholdForState,
 } from './victory.js'
 import { gameStateFromSnapshot } from './save-file.js'
 
@@ -77,7 +77,7 @@ describe('victory', () => {
     game.cells.find((c) => c.coord.q === 0 && c.coord.r === 1)!.controlOwnerId = 'player-1'
     game.cells.find((c) => c.coord.q === 1 && c.coord.r === 1)!.controlOwnerId = 'player-2'
 
-    expect(victoryThresholdFor(gameStateFromSnapshot(game, map.id))).toBe(3)
+    expect(victoryThresholdForState(gameStateFromSnapshot(game, map.id))).toBe(3)
 
     game.cells.find((c) => c.coord.q === 0 && c.coord.r === 0)!.controlOwnerId = 'player-1'
     game.cells.find((c) => c.coord.q === 1 && c.coord.r === 0)!.controlOwnerId = 'player-1'
@@ -95,7 +95,7 @@ describe('victory', () => {
     for (let i = 0; i < 5; i += 1) map.cells.push({ q: i, r: 0, isPowerCenter: true })
     map.cells.push({ q: 0, r: 1, startPlayer: 1 }, { q: 1, r: 1, startPlayer: 2 })
     const game = gameSnapshotFromMap(map)
-    expect(victoryThresholdFor(gameStateFromSnapshot(game, map.id))).toBe(3)
+    expect(victoryThresholdForState(gameStateFromSnapshot(game, map.id))).toBe(3)
   })
 
   it('turn limit resolves through the whole chain and always names a winner', () => {

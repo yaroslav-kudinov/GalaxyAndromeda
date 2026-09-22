@@ -714,29 +714,30 @@ describe('galaxy save file', () => {
     expect(mech.observationRevision).toBe(3)
   })
 
-  it('buildObservation forwards resourceRechargeTurnsRemaining', () => {
+  it('buildObservation forwards rechargePicksRemainingByPlayer', () => {
     const map = createEmptyMap()
     const game = gameSnapshotFromMap(map)
-    game.resourceRechargeTurnsRemaining = 2
 
     const obs = buildObservation(
       {
         ...gameStateFromSnapshot(game, map.id),
         actionMarkers: game.actionMarkers,
         productionMarkers: game.productionMarkers,
-        resourceRechargeTurnsRemaining: 2,
+        rechargePicksRemainingByPlayer: { 'player-1': 2 },
       } as Parameters<typeof buildObservation>[0] & Record<string, unknown>,
       [],
       { geometry: false },
     )
 
-    expect((obs.mechanics as Record<string, unknown>).resourceRechargeTurnsRemaining).toBe(2)
+    expect((obs.mechanics as Record<string, unknown>).rechargePicksRemainingByPlayer).toEqual({
+      'player-1': 2,
+    })
   })
 
-  it('gameSnapshotFromObservation syncs resourceRechargeTurnsRemaining from server', () => {
+  it('gameSnapshotFromObservation syncs rechargePicksRemainingByPlayer from server', () => {
     const map = createEmptyMap()
     const local = gameSnapshotFromMap(map)
-    local.resourceRechargeTurnsRemaining = 3
+    local.rechargePicksRemainingByPlayer = { 'player-1': 3 }
 
     const synced = gameSnapshotFromObservation(
       {
@@ -747,13 +748,13 @@ describe('galaxy save file', () => {
         cells: local.cells,
         actionMarkers: local.actionMarkers,
         productionMarkers: local.productionMarkers,
-        resourceRechargeTurnsRemaining: 1,
+        rechargePicksRemainingByPlayer: { 'player-1': 1 },
       } as Parameters<typeof gameSnapshotFromObservation>[0] & Record<string, unknown>,
       local,
       map,
     )
 
-    expect(synced.resourceRechargeTurnsRemaining).toBe(1)
+    expect(synced.rechargePicksRemainingByPlayer).toEqual({ 'player-1': 1 })
   })
 
   it('ensurePlayerSlots pads players up to slot count', () => {

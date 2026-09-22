@@ -2,6 +2,8 @@ import type { GameObservation, LegalAction } from './types.js'
 import type { BotPolicy, ScenarioStep } from './scenario.js'
 
 const SKIP_PREFERENCE = [
+  // Долг по перезарядке бот закрывает первым: иначе фаза планирования не закроется.
+  'execute-recharge-picks',
   'update-combat-prep',
   'confirm-combat-destruction',
   'continue-combat',

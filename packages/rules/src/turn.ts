@@ -6,7 +6,7 @@ import {
   syncActionMarkerTurnTracking,
   validateActionMarkerBeforeAdvance,
 } from './markers.js'
-import { maybeApplyAutomaticResourceRecharge } from './resource-recharge.js'
+import { autoResolveAllRechargePicks, refreshRechargeBudgets, rechargePicksRemaining } from './resource-recharge.js'
 import { applyVictoryAndDefeatChecks } from './victory.js'
 import type { GameSnapshot } from './save-file.js'
 import { gameStateFromSnapshot } from './save-file.js'
@@ -139,6 +139,8 @@ function canPlayerActInPhase(game: GameSnapshot, state: GameState, playerId: str
   if (state.phase === 'events') return true
 
   if (state.phase === 'planning') {
+    // Долг по перезарядке — такое же действие фазы планирования, как расстановка маркеров.
+    if (rechargePicksRemaining(game, playerId) > 0) return true
     const canPlaceAction = game.cells.some(
       (cell) =>
         !cell.actionMarkerId
@@ -167,8 +169,9 @@ function applyTurnState(game: GameSnapshot, state: GameState, prevPhase: Phase, 
   game.eventLog = state.eventLog
   syncActionMarkerTurnTracking(game, prevPhase, prevActivePlayerId)
   maybeApplyProductionHexClaims(game, prevPhase)
-  if (prevPhase === 'actions' && game.phase === 'events') {
-    maybeApplyAutomaticResourceRecharge(game)
+  // Выход из планирования: несделанный выбор не должен подвешивать партию.
+  if (prevPhase === 'planning' && game.phase !== 'planning') {
+    autoResolveAllRechargePicks(game)
   }
 }
 
@@ -387,6 +390,7 @@ export function completeEventsPhaseIfActive(game: GameSnapshot, mapId: string): 
   const errors = applyTurnEventIfInEventsPhase(game)
   if (errors.length) return errors
   refreshActionMarkerCapacity(game)
+  refreshRechargeBudgets(game)
   return advanceGameSnapshot(game, mapId)
 }
 
@@ -414,6 +418,7 @@ export function advanceGameSnapshot(game: GameSnapshot, mapId: string): string[]
   applyTurnState(game, state, prevPhase, prevActivePlayerId)
   if (game.phase === 'planning' && prevPhase === 'events') {
     refreshActionMarkerCapacity(game)
+    refreshRechargeBudgets(game)
   }
   applyVictoryAndDefeatChecks(game, mapId)
   const afterEvents = completeEventsPhaseIfActive(game, mapId)
