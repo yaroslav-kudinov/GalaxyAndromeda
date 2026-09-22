@@ -467,6 +467,9 @@ function roomObservation(
     actionMarkerResolvedThisTurn: s.actionMarkerResolvedThisTurn ?? false,
     productionMarkerResolvedThisTurn: s.productionMarkerResolvedThisTurn ?? false,
     participatingPlayerIds: s.participatingPlayerIds,
+    victoryPowerCenters: s.victoryPowerCenters ?? null,
+    turnLimit: s.turnLimit ?? null,
+    matchSeed: s.matchSeed ?? null,
     turnEvent: s.turnEvent ?? null,
     eventDeck: s.eventDeck ?? null,
     gameOver: s.gameOver ?? null,
@@ -775,7 +778,10 @@ export function startRoom(roomId: string, playerId: string): RoomStartResult {
   room.hostPlayerId = room.hostPlayerId ?? playerId
   syncParticipatingPlayerIds(room.state, room.playerIds)
   if (isPristineMatchSnapshot(room.state)) {
-    beginMatchForParticipants(room.state, room.map.id, room.playerIds)
+    beginMatchForParticipants(room.state, room.map.id, room.playerIds, {
+      // Обучение не обрывается лимитом ходов: урок важнее темпа.
+      turnLimit: room.mode === 'tutorial' ? null : undefined,
+    })
   } else {
     ensureActivePlayerParticipating(room.state)
   }

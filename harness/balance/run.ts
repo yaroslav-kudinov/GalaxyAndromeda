@@ -58,6 +58,14 @@ function parseArgs(argv: readonly string[]): Args {
       maxTurns: Math.max(1, Math.floor(number('maxTurns', DEFAULT_RUN_OPTIONS.maxTurns))),
       handicapCells: Math.max(0, Math.floor(number('handicap', DEFAULT_RUN_OPTIONS.handicapCells))),
       maxSteps: Math.max(1000, Math.floor(number('maxSteps', DEFAULT_RUN_OPTIONS.maxSteps))),
+      turnLimit: flags.has('noTurnLimit')
+        ? null
+        : flags.has('turnLimit')
+          ? Math.max(1, Math.floor(number('turnLimit', 15)))
+          : undefined,
+      victoryPowerCenters: flags.has('victory')
+        ? Math.max(1, Math.floor(number('victory', 6)))
+        : null,
     },
     out: flags.get('out') ?? null,
     label: flags.get('label') ?? null,

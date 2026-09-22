@@ -45,8 +45,15 @@ import type { GameRecord, PlayerSample, TurnSample } from './metrics.js'
 import { withSeededRandom } from './rng.js'
 
 export interface RunOptions {
-  /** Жёсткий потолок ходов. До фазы 1 лимит живёт только здесь. */
+  /**
+   * Страховочный потолок ходов на стороне харнесса. Сам лимит партии теперь живёт в
+   * правилах (`GameSnapshot.turnLimit`), поэтому здесь он только ловит разгон.
+   */
   maxTurns: number
+  /** Лимит ходов партии; `null` — без лимита. По умолчанию берётся из правил. */
+  turnLimit: number | null | undefined
+  /** Подмена порога победы для подбора: карта своего порога может не задавать. */
+  victoryPowerCenters: number | null
   /** Аварийный предохранитель: партия не должна крутиться бесконечно. */
   maxSteps: number
   /** Сколько раундов бот готов драться, прежде чем выйти из боя. */
@@ -62,7 +69,9 @@ export interface RunOptions {
 }
 
 export const DEFAULT_RUN_OPTIONS: RunOptions = {
-  maxTurns: 15,
+  maxTurns: 60,
+  turnLimit: undefined,
+  victoryPowerCenters: null,
   maxSteps: 250_000,
   maxCombatRounds: 3,
   handicapCells: 0,
@@ -519,7 +528,11 @@ export function runGame(map: MapDefinition, seed: number, options: RunOptions): 
       record.handicappedPlayerId = playerIds[0]!
       applyHandicap(game, playerIds[0]!, options.handicapCells)
     }
-    beginMatchForParticipants(game, map.id, playerIds)
+    if (options.victoryPowerCenters != null) {
+      game.victoryPowerCenters = options.victoryPowerCenters
+    }
+
+    beginMatchForParticipants(game, map.id, playerIds, { turnLimit: options.turnLimit })
 
     const tally: SpendTally = { tokenFaceValue: 0, shipCost: 0 }
     const orderSeen: Record<string, number[]> = Object.fromEntries(

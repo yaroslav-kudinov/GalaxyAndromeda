@@ -32,6 +32,9 @@ export function gameStateFromMap(map: MapDefinition, playerNames: string[] = [])
 
   const state: GameState = {
     mapId: map.id,
+    // Порог победы фиксируется в момент рождения партии: карту можно отредактировать
+    // позже, а начатая партия обязана доиграться со своим порогом.
+    victoryPowerCenters: map.victoryPowerCenters,
     phase: 'planning',
     turnNumber: 1,
     activePlayerId: players[0]?.id ?? null,
@@ -89,6 +92,9 @@ export function buildObservation(
   /** Явная передача полей snapshot — null означает «очищено на сервере» */
   for (const key of [
     'participatingPlayerIds',
+    'victoryPowerCenters',
+    'turnLimit',
+    'matchSeed',
     'turnEvent',
     'gameOver',
     'pendingCombat',

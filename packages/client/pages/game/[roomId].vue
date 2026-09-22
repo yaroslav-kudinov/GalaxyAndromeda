@@ -540,6 +540,7 @@ const gameOverWinnerName = computed(() => {
 const GAME_OVER_REASON_LABELS: Record<string, string> = {
   power_centers: 'Большинство центров власти',
   last_standing: 'Последний игрок на карте',
+  turn_limit: 'Лимит ходов',
 }
 
 const gameOverReasonLabel = computed(() => {

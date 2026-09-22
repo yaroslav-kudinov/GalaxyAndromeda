@@ -310,6 +310,18 @@ export interface GameSnapshot {
   productionMarkerBoughtByPlayerThisTurn?: Record<string, boolean>
   /** Кто реально в игре (остальные слоты карты пропускаются в очереди хода) */
   participatingPlayerIds?: string[]
+  /**
+   * Порог победы по центрам власти, скопированный из карты при старте партии.
+   *
+   * Хранится в снимке, а не читается из карты каждый раз: карту можно отредактировать
+   * между партиями, и начатая партия обязана доиграться со своим порогом. Заодно до
+   * проверки победы доезжает только `mapId`, а не сама карта.
+   */
+  victoryPowerCenters?: number
+  /** Жёсткий лимит ходов; по его достижении победитель определяется цепочкой тай-брейков. */
+  turnLimit?: number
+  /** Сид партии: разрешает ничьи и прочие броски, одинаковые при повторной загрузке сейва. */
+  matchSeed?: number
   /** Глобальное событие текущего хода (одно на всех игроков) */
   turnEvent?: TurnEventState
   /**
@@ -399,6 +411,8 @@ export function gameSnapshotFromGameState(state: GameState): GameSnapshot {
     productionMarkers: [],
     actionMarkerResolvedThisTurn: false,
     productionMarkerResolvedThisTurn: false,
+    victoryPowerCenters: state.victoryPowerCenters,
+    turnLimit: state.turnLimit,
   }
   ensureMarkerLimits(snapshot)
   return snapshot
@@ -464,6 +478,8 @@ export function gameStateFromSnapshot(snapshot: GameSnapshot, mapId: string): Ga
     players: snapshot.players,
     cells: snapshot.cells.map(({ actionMarkerId: _a, productionMarkerId: _p, ...cell }) => cell),
     eventLog: snapshot.eventLog,
+    victoryPowerCenters: snapshot.victoryPowerCenters,
+    turnLimit: snapshot.turnLimit,
   }
 }
 
@@ -533,6 +549,9 @@ function normalizeGameSnapshot(game: GameSnapshot, _map?: MapDefinition): GameSn
     participatingPlayerIds: game.participatingPlayerIds
       ? [...game.participatingPlayerIds]
       : undefined,
+    victoryPowerCenters: game.victoryPowerCenters,
+    turnLimit: game.turnLimit,
+    matchSeed: game.matchSeed,
     turnEvent: game.turnEvent
       ? {
           ...game.turnEvent,
@@ -766,6 +785,13 @@ export function gameSnapshotFromObservation(
       ? (fromObservationField(mech, 'participatingPlayerIds', preserve?.participatingPlayerIds)
         ?? preserve?.participatingPlayerIds)
       : preserve?.participatingPlayerIds,
+    victoryPowerCenters: fromObservationField(
+      mech,
+      'victoryPowerCenters',
+      preserve?.victoryPowerCenters,
+    ),
+    turnLimit: fromObservationField(mech, 'turnLimit', preserve?.turnLimit),
+    matchSeed: fromObservationField(mech, 'matchSeed', preserve?.matchSeed),
     turnEvent: fromObservationField(mech, 'turnEvent', preserve?.turnEvent),
     eventDeck: fromObservationField(mech, 'eventDeck', preserve?.eventDeck),
     productionTokensSpentThisTurn: fromObservationField(

@@ -20,13 +20,35 @@ export function isPristineMatchSnapshot(game: GameSnapshot): boolean {
  * Старт матча для реально вошедших слотов: очередь хода только среди них,
  * корабли и контроль пустых слотов снимаются (иначе «призраки» на карте).
  */
+/**
+ * Жёсткий лимит ходов. По его достижении победитель определяется цепочкой тай-брейков
+ * (`resolveTurnLimitWinner`): партия не может закончиться без победителя.
+ */
+export const DEFAULT_TURN_LIMIT = 15
+
+export interface BeginMatchOptions {
+  /**
+   * Лимит ходов партии. `null` — без лимита: обучение не должно обрываться на середине
+   * урока. По умолчанию `DEFAULT_TURN_LIMIT`.
+   */
+  turnLimit?: number | null
+}
+
 export function beginMatchForParticipants(
   game: GameSnapshot,
   mapId: string,
   participatingIds: string[],
+  options?: BeginMatchOptions,
 ): void {
   const ids = [...new Set(participatingIds.filter(Boolean))]
   game.participatingPlayerIds = ids
+
+  // Сид партии: разрешение ничьих должно быть одинаковым при повторной загрузке сейва,
+  // но разным от партии к партии — иначе одно и то же место выигрывало бы все ничьи.
+  game.matchSeed ??= Math.floor(Math.random() * 0xffffffff) >>> 0
+  const turnLimit = options?.turnLimit === undefined ? DEFAULT_TURN_LIMIT : options.turnLimit
+  if (turnLimit == null) game.turnLimit = undefined
+  else game.turnLimit ??= turnLimit
 
   rollNewResourceRechargeSchedule(game)
 

@@ -30,7 +30,7 @@ export {
   START_PRODUCTION_MARKER_LIMIT,
   MAX_PRODUCTION_MARKERS_PER_PLAYER,
   PRODUCTION_MARKER_EXPAND_COST,
-  ACTION_MARKER_LIMIT_BASE,
+  ACTION_MARKER_LIMIT,
   countControlledPowerCenters,
   computeActionMarkerLimit,
   actionMarkerLimitForPlayer,

@@ -543,6 +543,18 @@ describe('galaxy save file', () => {
       coord: { q: 4, r: 0 },
       placedInPhase: 'planning',
     })
+    game.actionMarkers.push({
+      id: 'act-5',
+      ownerId: 'player-1',
+      coord: { q: 5, r: 0 },
+      placedInPhase: 'planning',
+    })
+    game.actionMarkers.push({
+      id: 'act-6',
+      ownerId: 'player-1',
+      coord: { q: 6, r: 0 },
+      placedInPhase: 'planning',
+    })
     const save = { ...galaxySaveFromMap(map), game }
     expect(validateGalaxySave(save).some((e) => e.includes('action markers'))).toBe(true)
   })

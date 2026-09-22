@@ -4,8 +4,17 @@ import type { ShipProductionCost } from './ships.js'
 export const START_PRODUCTION_MARKER_LIMIT = 1
 export const MAX_PRODUCTION_MARKERS_PER_PLAYER = 3
 
-/** База формулы: доступные маркеры действия = 3 + число центров власти (при одном центре — 4). */
-export const ACTION_MARKER_LIMIT_BASE = 3
+/**
+ * Маркеров действия за ход — столько у каждого игрока, всю партию.
+ *
+ * Прежняя формула «3 + число центров власти» делала центр власти двойной наградой:
+ * он и приближал победу, и давал лишнее действие, а цену платил только бюджет
+ * перезарядки. Размен «одно на одно» требует, чтобы число маркеров было постоянным.
+ *
+ * Шесть выбрано под максимальный лимит захвата, чтобы прибавка к захвату была
+ * реализуемой. Оставлено именованной константой: харнесс баланса сравнивает 5 и 6.
+ */
+export const ACTION_MARKER_LIMIT = 6
 
 export const PRODUCTION_MARKER_EXPAND_COST: Record<2 | 3, ShipProductionCost> = {
   2: { credits: 8, production: 6 },
@@ -23,8 +32,8 @@ export function countControlledPowerCenters(
   return n
 }
 
-export function computeActionMarkerLimit(powerCenterCount: number): number {
-  return ACTION_MARKER_LIMIT_BASE + Math.max(0, powerCenterCount)
+export function computeActionMarkerLimit(_powerCenterCount?: number): number {
+  return ACTION_MARKER_LIMIT
 }
 
 /**
