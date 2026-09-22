@@ -27,6 +27,8 @@ import {
   getCombatRetreatDestinations,
   getMovableShipsAtMarker,
   getShipProductionCost,
+  claimPicksRemaining,
+  computeClaimLimit,
   getShipProductionRegionMin,
   hexKey,
   rechargePicksRemaining,
@@ -482,9 +484,7 @@ function sampleTurn(
       cells,
       ships: shipCount(game, playerId),
       faceUpValue: faceUpValueFor(game, playerId),
-      // Будущая формула лимита захвата (фаза 3). На базовом замере показывает,
-      // насколько рост территории уже сейчас упёрся бы в этот потолок.
-      claimLimit: 1 + powerCenters,
+      claimLimit: computeClaimLimit(game, playerId),
       claimsMade: Math.max(0, cells - (previousCells[playerId] ?? cells)),
     }
   }
@@ -618,7 +618,12 @@ export function runGame(map: MapDefinition, seed: number, options: RunOptions): 
       }
 
       let progressed = false
-      if (game.phase === 'planning' && rechargePicksRemaining(game, active) > 0) {
+      if (game.phase === 'planning' && claimPicksRemaining(game, active) > 0) {
+        progressed = applyGameActionOnSnapshot(
+          game, map, active, 'execute-claim-picks',
+        ).errors.length === 0
+      }
+      if (!progressed && game.phase === 'planning' && rechargePicksRemaining(game, active) > 0) {
         progressed = applyGameActionOnSnapshot(
           game, map, active, 'execute-recharge-picks',
         ).errors.length === 0

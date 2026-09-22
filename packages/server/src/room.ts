@@ -480,6 +480,8 @@ function roomObservation(
     productionMarkerLimitByPlayer: s.productionMarkerLimitByPlayer ?? null,
     rechargePicksRemainingByPlayer:
       room.status === 'playing' ? (s.rechargePicksRemainingByPlayer ?? null) : undefined,
+    claimPicksRemainingByPlayer:
+      room.status === 'playing' ? (s.claimPicksRemainingByPlayer ?? null) : undefined,
     lastCombatResult: room.lastCombatResult ?? null,
     observationRevision: room.observationRevision,
     roomStatus: room.status,

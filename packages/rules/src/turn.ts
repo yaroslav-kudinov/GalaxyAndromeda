@@ -1,4 +1,4 @@
-import { maybeApplyProductionHexClaims } from './claim.js'
+import { autoResolveAllClaimPicks, claimPicksRemaining, maybeApplyTurnEndClaims } from './claim.js'
 import { trimGameEventLog } from './event-log.js'
 import { ensureTurnEventForPhase, resolveTurnEvent } from './events.js'
 import { refreshActionMarkerCapacity } from './marker-pools.js'
@@ -139,7 +139,9 @@ function canPlayerActInPhase(game: GameSnapshot, state: GameState, playerId: str
   if (state.phase === 'events') return true
 
   if (state.phase === 'planning') {
-    // Долг по перезарядке — такое же действие фазы планирования, как расстановка маркеров.
+    // Долги по захвату и перезарядке — такие же действия фазы планирования,
+    // как расстановка маркеров.
+    if (claimPicksRemaining(game, playerId) > 0) return true
     if (rechargePicksRemaining(game, playerId) > 0) return true
     const canPlaceAction = game.cells.some(
       (cell) =>
@@ -168,9 +170,11 @@ function applyTurnState(game: GameSnapshot, state: GameState, prevPhase: Phase, 
   game.activePlayerId = state.activePlayerId
   game.eventLog = state.eventLog
   syncActionMarkerTurnTracking(game, prevPhase, prevActivePlayerId)
-  maybeApplyProductionHexClaims(game, prevPhase)
+  maybeApplyTurnEndClaims(game, prevPhase, state.mapId)
   // Выход из планирования: несделанный выбор не должен подвешивать партию.
+  // Захват первым: от него зависит число центров власти, а значит и бюджет.
   if (prevPhase === 'planning' && game.phase !== 'planning') {
+    autoResolveAllClaimPicks(game, state.mapId)
     autoResolveAllRechargePicks(game)
   }
 }
@@ -390,7 +394,7 @@ export function completeEventsPhaseIfActive(game: GameSnapshot, mapId: string): 
   const errors = applyTurnEventIfInEventsPhase(game)
   if (errors.length) return errors
   refreshActionMarkerCapacity(game)
-  refreshRechargeBudgets(game)
+  refreshRechargeBudgets(game, (playerId) => claimPicksRemaining(game, playerId) > 0)
   return advanceGameSnapshot(game, mapId)
 }
 
@@ -418,7 +422,7 @@ export function advanceGameSnapshot(game: GameSnapshot, mapId: string): string[]
   applyTurnState(game, state, prevPhase, prevActivePlayerId)
   if (game.phase === 'planning' && prevPhase === 'events') {
     refreshActionMarkerCapacity(game)
-    refreshRechargeBudgets(game)
+    refreshRechargeBudgets(game, (playerId) => claimPicksRemaining(game, playerId) > 0)
   }
   applyVictoryAndDefeatChecks(game, mapId)
   const afterEvents = completeEventsPhaseIfActive(game, mapId)

@@ -110,6 +110,7 @@ export function buildObservation(
     'actionMarkerLimitByPlayer',
     'productionMarkerLimitByPlayer',
     'rechargePicksRemainingByPlayer',
+    'claimPicksRemainingByPlayer',
   ] as const) {
     if (key in stateExtra) {
       mechanicsExtra[key] = stateExtra[key] ?? null

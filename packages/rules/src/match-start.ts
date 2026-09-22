@@ -51,6 +51,7 @@ export function beginMatchForParticipants(
   else game.turnLimit ??= turnLimit
 
   // Бюджет перезарядки выдаётся каждый игровой ход, включая первый.
+  game.claimPicksRemainingByPlayer = {}
   refreshRechargeBudgets(game)
 
   for (const cell of game.cells) {

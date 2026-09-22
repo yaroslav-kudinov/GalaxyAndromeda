@@ -12,8 +12,13 @@ import {
   toggleMarkerAtCell,
   type MarkerKind,
 } from './markers.js'
-import { transferControlIfEnemyOwned } from './claim.js'
-import { executeDestroyerSacrifice } from './destroyer-sacrifice.js'
+import {
+  autoResolveClaimPicks,
+  claimPicksRemaining,
+  executeClaimPicks,
+  transferControlIfEnemyOwned,
+  CLAIM_PICK_ERRORS,
+} from './claim.js'
 import type { GameSnapshot, RuntimeCellState } from './save-file.js'
 import { gameStateFromSnapshot } from './save-file.js'
 import {
@@ -744,6 +749,16 @@ export function getLegalActionsForSnapshot(
   const state = gameStateFromSnapshot(game, mapId)
   const actions = getLegalActions(state, playerId)
 
+  const owedClaims = claimPicksRemaining(game, playerId)
+  if (game.phase === 'planning' && owedClaims > 0 && !game.gameOver) {
+    actions.push({
+      id: 'execute-claim-picks',
+      type: 'claimPicks',
+      description: `Занять клетки (осталось ${owedClaims}); без выбора займутся лучшие`,
+      params: { remaining: owedClaims },
+    })
+  }
+
   const owedPicks = rechargePicksRemaining(game, playerId)
   if (game.phase === 'planning' && owedPicks > 0 && !game.gameOver) {
     actions.push({
@@ -1072,13 +1087,6 @@ export function applyGameActionOnSnapshot(
     return { errors: result.errors, combatResult: result.combatResult }
   }
 
-  if (actionId === 'execute-destroyer-sacrifice') {
-    const from = params?.from as HexCoord | undefined
-    const shipId = params?.shipId as string | undefined
-    if (!from || !shipId) return { errors: ['Некорректные параметры действия'] }
-    return executeDestroyerSacrifice(game, map, playerId, from, shipId)
-  }
-
   if (actionId === 'execute-marker-bombardment') {
     const from = params?.from as HexCoord | undefined
     const bombardments = params?.bombardments as BombardmentPlan[] | undefined
@@ -1118,6 +1126,21 @@ export function applyGameActionOnSnapshot(
     const markerId = params?.markerId as string | undefined
     if (!markerId) return { errors: ['Некорректные параметры действия'] }
     return { errors: executeProductionRecharge(game, map.id, playerId, { markerId }) }
+  }
+
+  if (actionId === 'execute-claim-picks') {
+    if (claimPicksRemaining(game, playerId) <= 0) {
+      return { errors: [CLAIM_PICK_ERRORS.nothingOwed] }
+    }
+    const picks = params?.picks as HexCoord[] | undefined
+    // Без списка клеток — законный пропуск выбора: движок берёт по приоритету,
+    // центры власти и дорогие фишки первыми.
+    if (picks === undefined || (Array.isArray(picks) && picks.length === 0)) {
+      autoResolveClaimPicks(game, map.id, playerId)
+      return { errors: [] }
+    }
+    if (!Array.isArray(picks)) return { errors: ['Некорректные параметры действия'] }
+    return { errors: executeClaimPicks(game, map.id, playerId, picks) }
   }
 
   if (actionId === 'execute-recharge-picks') {

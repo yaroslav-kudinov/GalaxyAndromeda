@@ -78,7 +78,7 @@ function appendRechargeEvent(game: GameSnapshot, message: string): void {
   trimGameEventLog(game)
 }
 
-function participantsOf(game: GameSnapshot): string[] {
+export function participantsOf(game: GameSnapshot): string[] {
   const participating = game.participatingPlayerIds?.length
     ? new Set(game.participatingPlayerIds)
     : null
@@ -88,29 +88,44 @@ function participantsOf(game: GameSnapshot): string[] {
 }
 
 /**
- * Начало игрового хода: выдать каждому бюджет перезарядки.
+ * Выдать бюджет одному игроку.
  *
- * Если перевёрнутых фишек не больше бюджета — поднимаем все молча, без выбора. Это убирает
- * диалог в подавляющем большинстве ситуаций: он нужен, только когда выбирать действительно
- * приходится.
+ * Отдельно для каждого, потому что бюджет зависит от числа центров власти, а оно
+ * уточняется захватом: пока у игрока не разрешён выбор клеток, считать ему бюджет рано.
+ *
+ * Если перевёрнутых фишек не больше бюджета — поднимаем все молча: диалог нужен только
+ * когда выбирать действительно приходится.
  */
-export function refreshRechargeBudgets(game: GameSnapshot): void {
+export function grantRechargeBudgetFor(game: GameSnapshot, playerId: string): void {
+  setPicksRemaining(game, playerId, 0)
+  const faceDown = faceDownTokensOf(game, playerId)
+  if (faceDown.length === 0) return
+
+  const budget = computeRechargeBudget(game, playerId)
+  if (budget === 0) return
+
+  if (faceDown.length <= budget) {
+    for (const entry of faceDown) {
+      const token = entry.cell.resourceTokens[entry.tokenIndex]
+      if (token) token.faceUp = true
+    }
+    return
+  }
+  setPicksRemaining(game, playerId, budget)
+}
+
+/**
+ * Начало игрового хода: выдать бюджет всем, у кого не осталось незакрытого выбора клеток
+ * для захвата. Остальным бюджет выдаётся в момент закрытия этого выбора.
+ */
+export function refreshRechargeBudgets(
+  game: GameSnapshot,
+  hasPendingClaims: (playerId: string) => boolean = () => false,
+): void {
   game.rechargePicksRemainingByPlayer = {}
   for (const playerId of participantsOf(game)) {
-    const faceDown = faceDownTokensOf(game, playerId)
-    if (faceDown.length === 0) continue
-
-    const budget = computeRechargeBudget(game, playerId)
-    if (budget === 0) continue
-
-    if (faceDown.length <= budget) {
-      for (const entry of faceDown) {
-        const token = entry.cell.resourceTokens[entry.tokenIndex]
-        if (token) token.faceUp = true
-      }
-      continue
-    }
-    setPicksRemaining(game, playerId, budget)
+    if (hasPendingClaims(playerId)) continue
+    grantRechargeBudgetFor(game, playerId)
   }
 }
 

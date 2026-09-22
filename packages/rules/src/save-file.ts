@@ -328,6 +328,13 @@ export interface GameSnapshot {
    * чего, фишки поднимаются молча и долг не заводится.
    */
   rechargePicksRemainingByPlayer?: Record<string, number>
+  /**
+   * Сколько клеток игроку ещё предстоит занять по итогам прошлого хода.
+   *
+   * Заводится, только когда подходящих клеток больше лимита захвата: если выбирать не из
+   * чего, клетки занимаются сразу в конце хода.
+   */
+  claimPicksRemainingByPlayer?: Record<string, number>
   /** Глобальное событие текущего хода (одно на всех игроков) */
   turnEvent?: TurnEventState
   /**
@@ -583,6 +590,9 @@ function normalizeGameSnapshot(game: GameSnapshot, _map?: MapDefinition): GameSn
     rechargePicksRemainingByPlayer: game.rechargePicksRemainingByPlayer
       ? { ...game.rechargePicksRemainingByPlayer }
       : undefined,
+    claimPicksRemainingByPlayer: game.claimPicksRemainingByPlayer
+      ? { ...game.claimPicksRemainingByPlayer }
+      : undefined,
   }
 
   ensureMarkerLimits(normalized)
@@ -825,6 +835,11 @@ export function gameSnapshotFromObservation(
       mech,
       'rechargePicksRemainingByPlayer',
       preserve?.rechargePicksRemainingByPlayer,
+    ),
+    claimPicksRemainingByPlayer: fromObservationField(
+      mech,
+      'claimPicksRemainingByPlayer',
+      preserve?.claimPicksRemainingByPlayer,
     ),
   }, map)
 

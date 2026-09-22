@@ -187,11 +187,10 @@ const tutorialMarkerActionModes = computed(() => {
       typeof allowed === 'string' ? allowed : allowed.actionId,
     ),
   )
-  const modes: Array<'movement' | 'bombardment' | 'build' | 'sacrifice'> = []
+  const modes: Array<'movement' | 'bombardment' | 'build'> = []
   if (ids.has('execute-marker-movement')) modes.push('movement')
   if (ids.has('execute-marker-bombardment')) modes.push('bombardment')
   if (ids.has('execute-production')) modes.push('build')
-  if (ids.has('execute-destroyer-sacrifice')) modes.push('sacrifice')
   return modes
 })
 
@@ -2031,51 +2030,6 @@ async function confirmMarkerBuild(
   }
 }
 
-async function confirmMarkerSacrifice(payload: { shipId: string }) {
-  const from = markerActionSource.value
-  if (!saveFile.value?.game || !from || markerActionBusy.value) return
-
-  markerActionBusy.value = true
-  markerActionHint.value = null
-
-  try {
-    if (serverStatus.value === 'online' && !roomId.value.startsWith('local-')) {
-      bumpObservationEpoch()
-      const obs = await submitGameAction(roomId.value, playerId.value, 'execute-destroyer-sacrifice', {
-        from,
-        shipId: payload.shipId,
-      })
-      applyObservation(obs)
-      persistLocal()
-      markerActionOpen.value = false
-      markerActionSource.value = null
-      markerActionHint.value = 'Клетка занята, эсминец погиб'
-      return
-    }
-
-    const result = applyGameActionOnSnapshot(
-      saveFile.value.game,
-      saveFile.value.map,
-      playerId.value,
-      'execute-destroyer-sacrifice',
-      { from, shipId: payload.shipId },
-    )
-    if (result.errors.length) {
-      markerActionHint.value = result.errors[0] ?? null
-      return
-    }
-    persistLocal()
-    refreshLocalLegalActions()
-    markerActionOpen.value = false
-    markerActionSource.value = null
-    markerActionHint.value = 'Клетка занята, эсминец погиб'
-  } catch (e) {
-    markerActionHint.value = actionErrorMessage(e, 'Не удалось занять клетку')
-  } finally {
-    markerActionBusy.value = false
-  }
-}
-
 async function confirmMarkerMovement(
   moves: ShipMovePlan[],
   fromOverride?: HexCoord,
@@ -3081,7 +3035,6 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
       @close="closeMarkerActionModal"
       @start-pick="startMarkerMapPick"
       @execute-build="confirmMarkerBuild($event.orders, $event.spentTokens)"
-      @execute-sacrifice="confirmMarkerSacrifice"
       @remove-marker="removeMarkerAtSourceFromModal"
     />
 

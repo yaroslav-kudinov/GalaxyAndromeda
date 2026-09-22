@@ -5,7 +5,6 @@ import type {
   HexCoord,
   MapDefinition,
   ResourceTokenDef,
-  SacrificableDestroyerOption,
   ShipType,
   TokenSpendRef,
 } from '@galaxy/rules'
@@ -20,7 +19,6 @@ import {
   getRegionForMarker,
   getRegionResourceSummary,
   getRegionTokensForMarker,
-  getSacrificableDestroyersAtMarker,
   regionPlacementCapacity,
   tokenSpendKey,
   validateTokenPayment,
@@ -62,12 +60,11 @@ const props = withDefaults(
 
 const emit = defineEmits<{
   close: []
-  startPick: [payload: { shipIds: string[]; mode: Exclude<MarkerActionMode, 'build' | 'sacrifice'> }]
+  startPick: [payload: { shipIds: string[]; mode: Exclude<MarkerActionMode, 'build'> }]
   executeBuild: [payload: { orders: ShipBuildOrder[]; spentTokens: TokenSpendRef[] | null }]
   tokenPickState: [
     payload: { active: boolean; pickKeys: string[]; pickedKeys: string[] },
   ]
-  executeSacrifice: [payload: { shipId: string }]
   removeMarker: []
 }>()
 
@@ -96,7 +93,6 @@ function onBackdropClick() {
 
 const actionMode = ref<MarkerActionMode>('movement')
 const selectedShipIds = ref<string[]>([])
-const sacrificeShipId = ref<string | null>(null)
 const buildCounts = ref<Partial<Record<ShipType, number>>>({})
 /** 'auto' — правила подбирают фишки сами, 'manual' — игрок выбирает вручную */
 const buildPaymentMode = ref<'auto' | 'manual'>('auto')
@@ -135,16 +131,8 @@ const bombardableShipOptions = computed(() =>
   getBombardableShipsAtMarker(props.snapshot, props.map, props.playerId, props.source),
 )
 
-const sacrificeDestroyerOptions = computed(() =>
-  getSacrificableDestroyersAtMarker(props.snapshot, props.playerId, props.source),
-)
-
-const showSacrificeTab = computed(
-  () => modeAllowed('sacrifice') && sacrificeDestroyerOptions.value.length > 0,
-)
-
 const shipOptions = computed(() => {
-  if (actionMode.value === 'build' || actionMode.value === 'sacrifice') return []
+  if (actionMode.value === 'build') return []
   return actionMode.value === 'bombardment' ? bombardableShipOptions.value : movableShipOptions.value
 })
 
@@ -258,17 +246,12 @@ const playerColor = computed(() =>
 
 function resetForm() {
   selectedShipIds.value = []
-  sacrificeShipId.value = null
   buildCounts.value = {}
   buildPaymentMode.value = 'auto'
   selectedTokenKeys.value = []
   tokenPickTouched.value = false
   stepError.value = null
 }
-
-watch(showSacrificeTab, (visible) => {
-  if (!visible && actionMode.value === 'sacrifice') actionMode.value = 'movement'
-})
 
 watch(
   () => props.allowedModes,
@@ -282,7 +265,6 @@ watch(() => props.source, () => resetForm(), { immediate: true })
 
 watch(actionMode, () => {
   selectedShipIds.value = []
-  sacrificeShipId.value = null
   buildCounts.value = {}
   buildPaymentMode.value = 'auto'
   selectedTokenKeys.value = []
@@ -448,7 +430,7 @@ function onStartPick() {
     stepError.value = 'Выберите хотя бы один корабль'
     return
   }
-  if (actionMode.value === 'build' || actionMode.value === 'sacrifice') return
+  if (actionMode.value === 'build') return
   emit('startPick', {
     shipIds: [...selectedShipIds.value],
     mode: actionMode.value,
@@ -486,28 +468,6 @@ function onExecuteBuild() {
   emit('executeBuild', { orders: buildOrders(), spentTokens })
 }
 
-function onExecuteSacrifice() {
-  if (!sacrificeShipId.value) {
-    stepError.value = 'Выберите эсминец, которым займёте клетку'
-    return
-  }
-  const opt = sacrificeDestroyerOptions.value.find(
-    (o: SacrificableDestroyerOption) => o.ship.id === sacrificeShipId.value,
-  )
-  if (!opt || opt.disabledReason) {
-    stepError.value = opt?.disabledReason ?? 'Эсминец недоступен'
-    return
-  }
-  if (
-    !window.confirm(
-      'Занять эту клетку ценой эсминца?\n\nКорабль погибнет, маркер действия будет потрачен. Отменить это нельзя.',
-    )
-  ) {
-    return
-  }
-  emit('executeSacrifice', { shipId: sacrificeShipId.value })
-}
-
 function onRemoveMarker() {
   if (
     !window.confirm(
@@ -530,13 +490,6 @@ function onKeydown(e: KeyboardEvent) {
     if (!buildBlockedReason.value) {
       e.preventDefault()
       onExecuteBuild()
-    }
-    return
-  }
-  if (actionMode.value === 'sacrifice') {
-    if (sacrificeShipId.value) {
-      e.preventDefault()
-      onExecuteSacrifice()
     }
     return
   }
@@ -599,17 +552,6 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
           @click="actionMode = 'bombardment'"
         >
           Обстрел
-        </button>
-        <button
-          v-if="showSacrificeTab"
-          type="button"
-          role="tab"
-          class="mode-tab"
-          :class="{ active: actionMode === 'sacrifice' }"
-          :aria-selected="actionMode === 'sacrifice'"
-          @click="actionMode = 'sacrifice'"
-        >
-          Занять клетку
         </button>
         <button
           v-if="modeAllowed('build')"
@@ -822,45 +764,6 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
           <p v-else class="empty">Нет доступных кораблей для постройки в этом регионе.</p>
         </template>
 
-        <template v-else-if="actionMode === 'sacrifice'">
-          <p class="lead">
-            Эсминец на этой клетке погибает, и клетка сразу становится вашей. Тратится маркер
-            действия, перемещение при этом не выполняется.
-          </p>
-          <ul v-if="sacrificeDestroyerOptions.length" class="ship-list">
-            <li v-for="opt in sacrificeDestroyerOptions" :key="opt.ship.id">
-              <label
-                class="ship-row"
-                :class="{
-                  disabled: !!opt.disabledReason,
-                  selected: sacrificeShipId === opt.ship.id,
-                }"
-              >
-                <input
-                  type="radio"
-                  name="sacrifice-dd"
-                  :checked="sacrificeShipId === opt.ship.id"
-                  :disabled="!!opt.disabledReason"
-                  @change="sacrificeShipId = opt.ship.id; stepError = null"
-                />
-                <svg width="28" height="28" viewBox="-14 -14 28 28" aria-hidden="true">
-                  <ShipGlyph
-                    :type="opt.ship.type"
-                    :player-color="playerColor"
-                    :scale="0.85"
-                    :show-plate="true"
-                  />
-                </svg>
-                <span class="ship-meta">
-                  <strong>{{ SHIP_LABELS[opt.ship.type] }}</strong>
-                  <span v-if="opt.disabledReason" class="ship-disabled">{{ opt.disabledReason }}</span>
-                </span>
-              </label>
-            </li>
-          </ul>
-          <p v-else class="empty">На этой клетке нет ваших эсминцев.</p>
-        </template>
-
         <template v-else>
           <p v-if="actionMode === 'movement'" class="lead">
             Выберите корабли для перемещения. Затем укажите клетки назначения на карте.
@@ -935,15 +838,6 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
           @click="onExecuteBuild"
         >
           Построить (Enter)
-        </button>
-        <button
-          v-else-if="actionMode === 'sacrifice'"
-          type="button"
-          class="btn-primary"
-          :disabled="!sacrificeShipId"
-          @click="onExecuteSacrifice"
-        >
-          Занять ценой эсминца (Enter)
         </button>
         <button
           v-else

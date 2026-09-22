@@ -35,7 +35,9 @@
       "why": "После обучения вы сможете открыть обычную карту и понимать, чего игра ждёт от вас.",
       "highlight": "board",
       "allowedActions": [],
-      "advanceWhen": { "type": "manual" }
+      "advanceWhen": {
+        "type": "manual"
+      }
     },
     {
       "id": "board-tour",
@@ -43,9 +45,14 @@
       "body": "Цвет клетки показывает контроль игрока. Серая клетка нейтральна. Жёлтая звезда — центр власти: центры увеличивают запас маркеров действия и помогают победить. Жёлтые фишки дают кредиты, оранжевые — производство.",
       "objective": "Найдите слева свою синюю стартовую область, затем нажмите «Далее».",
       "why": "Контроль соединяет клетки в регионы. Ресурсы и постройка работают внутри такого связного региона.",
-      "highlight": { "q": -6, "r": 0 },
+      "highlight": {
+        "q": -6,
+        "r": 0
+      },
       "allowedActions": [],
-      "advanceWhen": { "type": "manual" }
+      "advanceWhen": {
+        "type": "manual"
+      }
     },
     {
       "id": "ships-tour",
@@ -53,9 +60,14 @@
       "body": "На прямой линии стоят два крейсера и два эсминца. Крейсер медленнее, зато захватывает нейтральную клетку в конце фазы действий. Эсминец быстрее, но для захвата нейтральной клетки его придётся пожертвовать.",
       "objective": "Посмотрите на клетки с крейсерами и эсминцами, затем нажмите «Далее».",
       "why": "Разные корабли решают разные задачи. Сейчас мы увидим разницу на соседних нейтральных клетках.",
-      "highlight": { "q": -5, "r": 0 },
+      "highlight": {
+        "q": -5,
+        "r": 0
+      },
       "allowedActions": [],
-      "advanceWhen": { "type": "manual" }
+      "advanceWhen": {
+        "type": "manual"
+      }
     },
     {
       "id": "marker-cruisers",
@@ -64,18 +76,33 @@
       "objective": "Нажмите клетку (-5, 0) с двумя крейсерами и поставьте на неё маркер действия.",
       "why": "Один маркер позволяет один раз использовать корабли с этой клетки в фазе действий.",
       "hint": "Нужная клетка подсвечена. В карточке клетки нажмите «Поставить маркер действия».",
-      "highlight": { "q": -5, "r": 0 },
+      "highlight": {
+        "q": -5,
+        "r": 0
+      },
       "allowedActions": [
         {
           "actionId": "toggle-marker",
-          "params": { "coord": { "q": -5, "r": 0 }, "kind": "action" }
+          "params": {
+            "coord": {
+              "q": -5,
+              "r": 0
+            },
+            "kind": "action"
+          }
         }
       ],
       "advanceWhen": {
         "type": "action",
         "actionId": "toggle-marker",
         "playerId": "player-1",
-        "params": { "coord": { "q": -5, "r": 0 }, "kind": "action" }
+        "params": {
+          "coord": {
+            "q": -5,
+            "r": 0
+          },
+          "kind": "action"
+        }
       }
     },
     {
@@ -85,18 +112,33 @@
       "objective": "Поставьте маркер действия на клетку (-4, 0) с эсминцами.",
       "why": "Этот маркер отправит один эсминец на нейтральную клетку.",
       "hint": "Выберите соседнюю справа клетку с двумя эсминцами.",
-      "highlight": { "q": -4, "r": 0 },
+      "highlight": {
+        "q": -4,
+        "r": 0
+      },
       "allowedActions": [
         {
           "actionId": "toggle-marker",
-          "params": { "coord": { "q": -4, "r": 0 }, "kind": "action" }
+          "params": {
+            "coord": {
+              "q": -4,
+              "r": 0
+            },
+            "kind": "action"
+          }
         }
       ],
       "advanceWhen": {
         "type": "action",
         "actionId": "toggle-marker",
         "playerId": "player-1",
-        "params": { "coord": { "q": -4, "r": 0 }, "kind": "action" }
+        "params": {
+          "coord": {
+            "q": -4,
+            "r": 0
+          },
+          "kind": "action"
+        }
       }
     },
     {
@@ -106,18 +148,33 @@
       "objective": "Поставьте маркер на клетку (-6, 1), где стоят щитоносец и авианосец.",
       "why": "Позже мы потратим фишки кредитов 5 и производства 3 и построим крейсер.",
       "hint": "Это верхняя левая клетка вашей стартовой области.",
-      "highlight": { "q": -6, "r": 1 },
+      "highlight": {
+        "q": -6,
+        "r": 1
+      },
       "allowedActions": [
         {
           "actionId": "toggle-marker",
-          "params": { "coord": { "q": -6, "r": 1 }, "kind": "action" }
+          "params": {
+            "coord": {
+              "q": -6,
+              "r": 1
+            },
+            "kind": "action"
+          }
         }
       ],
       "advanceWhen": {
         "type": "action",
         "actionId": "toggle-marker",
         "playerId": "player-1",
-        "params": { "coord": { "q": -6, "r": 1 }, "kind": "action" }
+        "params": {
+          "coord": {
+            "q": -6,
+            "r": 1
+          },
+          "kind": "action"
+        }
       }
     },
     {
@@ -128,7 +185,9 @@
       "why": "Когда все игроки закончат планирование, начинается исполнение маркеров.",
       "hint": "Ищите кнопку «Далее» в блоке с названием текущей фазы.",
       "highlight": "phase-panel",
-      "allowedActions": ["advance-phase"],
+      "allowedActions": [
+        "advance-phase"
+      ],
       "advanceWhen": {
         "type": "action",
         "actionId": "advance-phase",
@@ -142,15 +201,31 @@
       "objective": "Откройте маркер на (-5, 0), выберите оба крейсера и переместите их на (-3, 0).",
       "why": "Крейсеры окажутся на нейтральной клетке с кредитами. Контроль будет объявлен в конце фазы.",
       "hint": "Нажмите маркер, выберите «Перемещение», отметьте оба крейсера, затем укажите подсвеченную цель.",
-      "highlight": { "q": -3, "r": 0 },
+      "highlight": {
+        "q": -3,
+        "r": 0
+      },
       "allowedActions": [
         {
           "actionId": "execute-marker-movement",
           "params": {
-            "from": { "q": -5, "r": 0 },
+            "from": {
+              "q": -5,
+              "r": 0
+            },
             "moves": [
-              { "to": { "q": -3, "r": 0 } },
-              { "to": { "q": -3, "r": 0 } }
+              {
+                "to": {
+                  "q": -3,
+                  "r": 0
+                }
+              },
+              {
+                "to": {
+                  "q": -3,
+                  "r": 0
+                }
+              }
             ]
           }
         }
@@ -162,12 +237,23 @@
             "type": "action",
             "actionId": "execute-marker-movement",
             "playerId": "player-1",
-            "params": { "from": { "q": -5, "r": 0 } }
+            "params": {
+              "from": {
+                "q": -5,
+                "r": 0
+              }
+            }
           },
           {
             "type": "cell",
-            "coord": { "q": -3, "r": 0 },
-            "ship": { "ownerId": "player-1", "type": "cruiser" },
+            "coord": {
+              "q": -3,
+              "r": 0
+            },
+            "ship": {
+              "ownerId": "player-1",
+              "type": "cruiser"
+            },
             "minShips": 2
           }
         ]
@@ -180,13 +266,26 @@
       "objective": "С клетки (-4, 0) переместите один эсминец на (-2, 0).",
       "why": "В следующем ходу мы пожертвуем его и сравним результат с захватом крейсером.",
       "hint": "Откройте второй маркер, выберите один эсминец и клетку с оранжевой фишкой.",
-      "highlight": { "q": -2, "r": 0 },
+      "highlight": {
+        "q": -2,
+        "r": 0
+      },
       "allowedActions": [
         {
           "actionId": "execute-marker-movement",
           "params": {
-            "from": { "q": -4, "r": 0 },
-            "moves": [{ "to": { "q": -2, "r": 0 } }]
+            "from": {
+              "q": -4,
+              "r": 0
+            },
+            "moves": [
+              {
+                "to": {
+                  "q": -2,
+                  "r": 0
+                }
+              }
+            ]
           }
         }
       ],
@@ -197,12 +296,23 @@
             "type": "action",
             "actionId": "execute-marker-movement",
             "playerId": "player-1",
-            "params": { "from": { "q": -4, "r": 0 } }
+            "params": {
+              "from": {
+                "q": -4,
+                "r": 0
+              }
+            }
           },
           {
             "type": "cell",
-            "coord": { "q": -2, "r": 0 },
-            "ship": { "ownerId": "player-1", "type": "destroyer" }
+            "coord": {
+              "q": -2,
+              "r": 0
+            },
+            "ship": {
+              "ownerId": "player-1",
+              "type": "destroyer"
+            }
           }
         ]
       }
@@ -214,13 +324,22 @@
       "objective": "Откройте маркер на (-6, 1), вкладку «Постройка» и постройте один крейсер на этой клетке.",
       "why": "Потраченные фишки перевернутся. Они снова станут доступны после перезарядки ресурсов.",
       "hint": "В окне маркера выберите «Постройка», добавьте крейсер и подтвердите заказ.",
-      "highlight": { "q": -6, "r": 1 },
+      "highlight": {
+        "q": -6,
+        "r": 1
+      },
       "allowedActions": [
         {
           "actionId": "execute-production",
           "params": {
             "ships": [
-              { "type": "cruiser", "coord": { "q": -6, "r": 1 } }
+              {
+                "type": "cruiser",
+                "coord": {
+                  "q": -6,
+                  "r": 1
+                }
+              }
             ]
           }
         }
@@ -231,7 +350,13 @@
         "playerId": "player-1",
         "params": {
           "ships": [
-            { "type": "cruiser", "coord": { "q": -6, "r": 1 } }
+            {
+              "type": "cruiser",
+              "coord": {
+                "q": -6,
+                "r": 1
+              }
+            }
           ]
         }
       }
@@ -242,9 +367,14 @@
       "body": "Клетка (-3, 0) с крейсерами стала вашей. На нейтральной клетке (-2, 0) эсминец остался без контроля. Так игра отличает удержание территории от быстрого разведывательного полёта.",
       "objective": "Сравните цвет двух клеток и нажмите «Далее».",
       "why": "Крейсер и более тяжёлые корабли объявляют контроль в конце действий. Эсминцу нужна жертва.",
-      "highlight": { "q": -3, "r": 0 },
+      "highlight": {
+        "q": -3,
+        "r": 0
+      },
       "allowedActions": [],
-      "advanceWhen": { "type": "manual" }
+      "advanceWhen": {
+        "type": "manual"
+      }
     },
     {
       "id": "marker-sacrifice",
@@ -253,18 +383,33 @@
       "objective": "Поставьте маркер действия на клетку (-2, 0).",
       "why": "Исполнив этот маркер, вы сможете пожертвовать эсминец и немедленно получить контроль.",
       "hint": "Выберите клетку с эсминцем и оранжевой фишкой.",
-      "highlight": { "q": -2, "r": 0 },
+      "highlight": {
+        "q": -2,
+        "r": 0
+      },
       "allowedActions": [
         {
           "actionId": "toggle-marker",
-          "params": { "coord": { "q": -2, "r": 0 }, "kind": "action" }
+          "params": {
+            "coord": {
+              "q": -2,
+              "r": 0
+            },
+            "kind": "action"
+          }
         }
       ],
       "advanceWhen": {
         "type": "action",
         "actionId": "toggle-marker",
         "playerId": "player-1",
-        "params": { "coord": { "q": -2, "r": 0 }, "kind": "action" }
+        "params": {
+          "coord": {
+            "q": -2,
+            "r": 0
+          },
+          "kind": "action"
+        }
       }
     },
     {
@@ -274,18 +419,33 @@
       "objective": "Поставьте маркер действия на клетку (-3, 0).",
       "why": "Цель обстрела — вражеский эсминец на боковой клетке (-2, -1).",
       "hint": "Поставьте второй маркер этого хода на клетку с двумя крейсерами.",
-      "highlight": { "q": -3, "r": 0 },
+      "highlight": {
+        "q": -3,
+        "r": 0
+      },
       "allowedActions": [
         {
           "actionId": "toggle-marker",
-          "params": { "coord": { "q": -3, "r": 0 }, "kind": "action" }
+          "params": {
+            "coord": {
+              "q": -3,
+              "r": 0
+            },
+            "kind": "action"
+          }
         }
       ],
       "advanceWhen": {
         "type": "action",
         "actionId": "toggle-marker",
         "playerId": "player-1",
-        "params": { "coord": { "q": -3, "r": 0 }, "kind": "action" }
+        "params": {
+          "coord": {
+            "q": -3,
+            "r": 0
+          },
+          "kind": "action"
+        }
       }
     },
     {
@@ -296,42 +456,13 @@
       "why": "Маркеры можно исполнять в выбранном вами порядке.",
       "hint": "Завершите планирование кнопкой в панели фазы.",
       "highlight": "phase-panel",
-      "allowedActions": ["advance-phase"],
+      "allowedActions": [
+        "advance-phase"
+      ],
       "advanceWhen": {
         "type": "action",
         "actionId": "advance-phase",
         "playerId": "player-1"
-      }
-    },
-    {
-      "id": "sacrifice-destroyer",
-      "title": "Пожертвуйте эсминец",
-      "body": "Жертва уничтожает эсминец, но нейтральная клетка сразу переходит под ваш контроль. Это отдельное действие в окне маркера.",
-      "objective": "Откройте маркер на (-2, 0) и нажмите «Пожертвовать эсминец».",
-      "why": "Так дешёвый быстрый корабль может проложить контроль вперёд, не дожидаясь конца фазы.",
-      "hint": "Нужная кнопка находится в окне маркера на клетке эсминца.",
-      "highlight": { "q": -2, "r": 0 },
-      "allowedActions": [
-        {
-          "actionId": "execute-destroyer-sacrifice",
-          "params": { "from": { "q": -2, "r": 0 } }
-        }
-      ],
-      "advanceWhen": {
-        "type": "and",
-        "conditions": [
-          {
-            "type": "action",
-            "actionId": "execute-destroyer-sacrifice",
-            "playerId": "player-1",
-            "params": { "from": { "q": -2, "r": 0 } }
-          },
-          {
-            "type": "cell",
-            "coord": { "q": -2, "r": 0 },
-            "controlOwnerId": "player-1"
-          }
-        ]
       }
     },
     {
@@ -341,15 +472,31 @@
       "objective": "Откройте маркер на (-3, 0), выберите оба крейсера и обстреляйте клетку (-2, -1).",
       "why": "Четыре кубика двух крейсеров гарантированно дают достаточно очков для учебной цели.",
       "hint": "В окне маркера выберите «Обстрел», отметьте оба крейсера и боковую красную клетку.",
-      "highlight": { "q": -2, "r": -1 },
+      "highlight": {
+        "q": -2,
+        "r": -1
+      },
       "allowedActions": [
         {
           "actionId": "execute-marker-bombardment",
           "params": {
-            "from": { "q": -3, "r": 0 },
+            "from": {
+              "q": -3,
+              "r": 0
+            },
             "bombardments": [
-              { "target": { "q": -2, "r": -1 } },
-              { "target": { "q": -2, "r": -1 } }
+              {
+                "target": {
+                  "q": -2,
+                  "r": -1
+                }
+              },
+              {
+                "target": {
+                  "q": -2,
+                  "r": -1
+                }
+              }
             ]
           }
         }
@@ -358,7 +505,12 @@
         "type": "action",
         "actionId": "execute-marker-bombardment",
         "playerId": "player-1",
-        "params": { "from": { "q": -3, "r": 0 } }
+        "params": {
+          "from": {
+            "q": -3,
+            "r": 0
+          }
+        }
       }
     },
     {
@@ -368,8 +520,13 @@
       "objective": "В окне подготовки нажмите «Готов».",
       "why": "Подтверждение не даёт случайно начать бросок с неверно выбранными кораблями.",
       "hint": "Кнопка «Готов» находится в окне боя.",
-      "highlight": { "q": -2, "r": -1 },
-      "allowedActions": ["update-combat-prep"],
+      "highlight": {
+        "q": -2,
+        "r": -1
+      },
+      "allowedActions": [
+        "update-combat-prep"
+      ],
       "advanceWhen": {
         "type": "action",
         "actionId": "update-combat-prep",
@@ -382,9 +539,15 @@
       "body": "После короткого отсчёта игра бросит кубики и применит урон. Ничего нажимать не нужно.",
       "objective": "Дождитесь результата обстрела и закройте его кнопкой «Понятно».",
       "why": "Сумма кубиков обстрела превращается в очки уничтожения; щитоносец цели мог бы поглотить часть урона.",
-      "highlight": { "q": -2, "r": -1 },
+      "highlight": {
+        "q": -2,
+        "r": -1
+      },
       "allowedActions": [],
-      "advanceWhen": { "type": "combat", "status": "resolved" }
+      "advanceWhen": {
+        "type": "combat",
+        "status": "resolved"
+      }
     },
     {
       "id": "bombardment-result",
@@ -392,9 +555,14 @@
       "body": "Вражеский эсминец уничтожен обстрелом. Ваши крейсеры остались на своей клетке: обстрел не переносит флот и не меняет контроль клетки цели.",
       "objective": "Посмотрите итог броска на клетке (-2, -1) и нажмите «Далее».",
       "why": "Так можно ослабить соседнюю клетку перед обычным входом в бой.",
-      "highlight": { "q": -2, "r": -1 },
+      "highlight": {
+        "q": -2,
+        "r": -1
+      },
       "allowedActions": [],
-      "advanceWhen": { "type": "manual" }
+      "advanceWhen": {
+        "type": "manual"
+      }
     },
     {
       "id": "marker-battle",
@@ -403,18 +571,33 @@
       "objective": "Поставьте маркер действия на клетку (-3, 0).",
       "why": "За целью стоит флот третьего игрока, который покажет механику поддержки.",
       "hint": "Выберите клетку с двумя крейсерами.",
-      "highlight": { "q": -3, "r": 0 },
+      "highlight": {
+        "q": -3,
+        "r": 0
+      },
       "allowedActions": [
         {
           "actionId": "toggle-marker",
-          "params": { "coord": { "q": -3, "r": 0 }, "kind": "action" }
+          "params": {
+            "coord": {
+              "q": -3,
+              "r": 0
+            },
+            "kind": "action"
+          }
         }
       ],
       "advanceWhen": {
         "type": "action",
         "actionId": "toggle-marker",
         "playerId": "player-1",
-        "params": { "coord": { "q": -3, "r": 0 }, "kind": "action" }
+        "params": {
+          "coord": {
+            "q": -3,
+            "r": 0
+          },
+          "kind": "action"
+        }
       }
     },
     {
@@ -425,7 +608,9 @@
       "why": "После этого маркер можно исполнить движением в занятую врагом клетку.",
       "hint": "Завершите планирование.",
       "highlight": "phase-panel",
-      "allowedActions": ["advance-phase"],
+      "allowedActions": [
+        "advance-phase"
+      ],
       "advanceWhen": {
         "type": "action",
         "actionId": "advance-phase",
@@ -439,16 +624,34 @@
       "objective": "Переместите оба крейсера с (-3, 0) на (-1, 0).",
       "why": "Флот поддержки рядом автоматически присоединится к вашей стороне и покажет дополнительные кубики.",
       "hint": "Откройте маркер, выберите оба крейсера и красную клетку с эсминцем.",
-      "highlight": { "q": -1, "r": 0 },
-      "botSupportSide": { "player-3": "attacker" },
+      "highlight": {
+        "q": -1,
+        "r": 0
+      },
+      "botSupportSide": {
+        "player-3": "attacker"
+      },
       "allowedActions": [
         {
           "actionId": "execute-marker-movement",
           "params": {
-            "from": { "q": -3, "r": 0 },
+            "from": {
+              "q": -3,
+              "r": 0
+            },
             "moves": [
-              { "to": { "q": -1, "r": 0 } },
-              { "to": { "q": -1, "r": 0 } }
+              {
+                "to": {
+                  "q": -1,
+                  "r": 0
+                }
+              },
+              {
+                "to": {
+                  "q": -1,
+                  "r": 0
+                }
+              }
             ]
           }
         }
@@ -457,7 +660,12 @@
         "type": "action",
         "actionId": "execute-marker-movement",
         "playerId": "player-1",
-        "params": { "from": { "q": -3, "r": 0 } }
+        "params": {
+          "from": {
+            "q": -3,
+            "r": 0
+          }
+        }
       }
     },
     {
@@ -467,9 +675,16 @@
       "objective": "Посмотрите состав сторон и нажмите «Готов».",
       "why": "Перед броском можно объявить пропуск приоритета уничтожения. Он разрешает обойти дешёвый тип, но делает его дороже на одно очко.",
       "hint": "Оставьте приоритет без изменений и подтвердите готовность.",
-      "highlight": { "q": -1, "r": 0 },
-      "botSupportSide": { "player-3": "attacker" },
-      "allowedActions": ["update-combat-prep"],
+      "highlight": {
+        "q": -1,
+        "r": 0
+      },
+      "botSupportSide": {
+        "player-3": "attacker"
+      },
+      "allowedActions": [
+        "update-combat-prep"
+      ],
       "advanceWhen": {
         "type": "action",
         "actionId": "update-combat-prep",
@@ -482,10 +697,18 @@
       "body": "Игра складывает ваши боевые кубики и кубики поддержки, затем сравнивает сумму с защитником. Разница становится очками уничтожения.",
       "objective": "Дождитесь результата и закройте его кнопкой «Понятно».",
       "why": "Если после раунда оба флота остаются, стороны решают: продолжать бой или отступить. В этом упражнении поддержка гарантирует короткий бой.",
-      "highlight": { "q": -1, "r": 0 },
-      "botSupportSide": { "player-3": "attacker" },
+      "highlight": {
+        "q": -1,
+        "r": 0
+      },
+      "botSupportSide": {
+        "player-3": "attacker"
+      },
       "allowedActions": [],
-      "advanceWhen": { "type": "combat", "status": "resolved" }
+      "advanceWhen": {
+        "type": "combat",
+        "status": "resolved"
+      }
     },
     {
       "id": "battle-result",
@@ -493,9 +716,14 @@
       "body": "Вражеский корабль уничтожен, а ваши крейсеры вошли на клетку боя. Контроль чужой клетки переходит сразу, когда на ней больше нет защитников.",
       "objective": "Закройте результат броска, посмотрите на клетку (-1, 0) и нажмите «Далее».",
       "why": "Теперь вы прошли полный путь от планирования до захвата в бою.",
-      "highlight": { "q": -1, "r": 0 },
+      "highlight": {
+        "q": -1,
+        "r": 0
+      },
       "allowedActions": [],
-      "advanceWhen": { "type": "manual" }
+      "advanceWhen": {
+        "type": "manual"
+      }
     },
     {
       "id": "shield-carrier",
@@ -503,9 +731,14 @@
       "body": "Щитоносец не бросает обычные боевые кубики: когда его сторона проигрывает раунд, он поглощает до 6 очков на своей клетке или до 3 с соседней. Авианосец добавляет каждому союзному боевому кораблю один дополнительный кубик: шестигранный на своей клетке или четырёхгранный с соседней.",
       "objective": "Посмотрите на два специальных корабля в клетке (-6, 1), затем нажмите «Далее».",
       "why": "Оба корабля усиливают группу, поэтому их выгодно располагать рядом с местом будущего боя.",
-      "highlight": { "q": -6, "r": 1 },
+      "highlight": {
+        "q": -6,
+        "r": 1
+      },
       "allowedActions": [],
-      "advanceWhen": { "type": "manual" }
+      "advanceWhen": {
+        "type": "manual"
+      }
     },
     {
       "id": "battleship-hyper",
@@ -513,9 +746,14 @@
       "body": "Линкор медленный, зато бросает три шестигранных кубика в бою и два кубика поддержки. Гиперпространственное орудие стреляет только на расстояние две или три клетки и даёт три кубика поддержки; соседнюю клетку оно обстрелять не может.",
       "objective": "Посмотрите на корабли в клетке (-5, 1), затем нажмите «Далее».",
       "why": "Линкор прорывает фронт, а гиперпространственное орудие работает из глубины вашего региона.",
-      "highlight": { "q": -5, "r": 1 },
+      "highlight": {
+        "q": -5,
+        "r": 1
+      },
       "allowedActions": [],
-      "advanceWhen": { "type": "manual" }
+      "advanceWhen": {
+        "type": "manual"
+      }
     },
     {
       "id": "regions-resources",
@@ -525,7 +763,9 @@
       "why": "Если враг разрежет регион, часть ресурсов может перестать участвовать в постройке на выбранной клетке.",
       "highlight": "board",
       "allowedActions": [],
-      "advanceWhen": { "type": "manual" }
+      "advanceWhen": {
+        "type": "manual"
+      }
     },
     {
       "id": "victory-surrender",
@@ -535,7 +775,9 @@
       "why": "Центры власти — не просто дополнительные маркеры: это главная цель карты и условие выживания.",
       "highlight": "phase-panel",
       "allowedActions": [],
-      "advanceWhen": { "type": "manual" }
+      "advanceWhen": {
+        "type": "manual"
+      }
     },
     {
       "id": "complete",
@@ -545,7 +787,9 @@
       "why": "В обычной партии подсказки не ограничивают действия: план и порядок маркеров выбираете вы.",
       "highlight": "board",
       "allowedActions": [],
-      "advanceWhen": { "type": "manual" }
+      "advanceWhen": {
+        "type": "manual"
+      }
     }
   ]
 }

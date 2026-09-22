@@ -17,7 +17,7 @@ import {
   isCombatDestination,
 } from '@galaxy/rules'
 
-export type MarkerActionMode = 'movement' | 'bombardment' | 'build' | 'sacrifice'
+export type MarkerActionMode = 'movement' | 'bombardment' | 'build'
 
 export type DraftMovePreview = {
   shipId: string

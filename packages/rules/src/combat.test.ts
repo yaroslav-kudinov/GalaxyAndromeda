@@ -59,7 +59,6 @@ import {
   setupPendingCombatDestruction,
   stopPendingCombat,
 } from './combat.js'
-import { executeDestroyerSacrifice } from './destroyer-sacrifice.js'
 import { applyGameActionOnSnapshot, executeMarkerMovement, resolveCombatPrep } from './movement.js'
 import { advanceGameSnapshot } from './turn.js'
 import {
@@ -1704,25 +1703,7 @@ describe('bombardment', () => {
     }
   })
 
-  it('destroyer sacrifice on neutral claims control and destroys the ship', () => {
-    const map = createEmptyMap('neutral-dd-sacrifice', 'Neutral DD sacrifice')
-    const game = gameSnapshotFromMap(map)
-    game.phase = 'actions'
-    game.activePlayerId = 'player-1'
-    game.participatingPlayerIds = ['player-1']
-    addShip(game, 0, 0, 'player-1', 'destroyer', 'att-dd')
-    const targetCell = game.cells.find((c) => c.coord.q === 0 && c.coord.r === 0)!
-    placeMarker(game, 'player-1', { q: 0, r: 0 })
-    targetCell.controlOwnerId = null
-
-    const result = executeDestroyerSacrifice(game, map, 'player-1', { q: 0, r: 0 }, 'att-dd')
-    expect(result.errors).toEqual([])
-    expect(targetCell.controlOwnerId).toBe('player-1')
-    expect(targetCell.ships).toHaveLength(0)
-    expect(game.actionMarkers).toHaveLength(0)
-  })
-
-  it('destroyer winning combat on a neutral cell does not claim until sacrificed', () => {
+  it('destroyer winning combat on a neutral cell claims it at the end of the turn', () => {
     const map = createEmptyMap('neutral-dd-combat', 'Neutral DD combat')
     map.cells.push({ q: 1, r: 0 })
     const game = gameSnapshotFromMap(map)
@@ -1761,7 +1742,8 @@ describe('bombardment', () => {
 
       game.actionMarkers = []
       expect(advanceGameSnapshot(game, map.id)).toEqual([])
-      expect(targetCell.controlOwnerId).toBeNull()
+      // Занимать нейтраль умеет любой класс; отдельной жертвы эсминца больше нет.
+      expect(targetCell.controlOwnerId).toBe('player-1')
     } finally {
       Math.random = originalRandom
     }
