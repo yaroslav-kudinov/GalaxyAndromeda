@@ -885,7 +885,7 @@ export function applyGameActionOnSnapshot(
   if (actionId === 'confirm-combat-destruction') {
     const destructionSelection = params?.destructionSelection as string[] | undefined
     if (!Array.isArray(destructionSelection)) {
-      return { errors: ['Некорректные параметры выбора уничтожения'] }
+      return { errors: ['Не удалось передать выбор потерь — обновите страницу и попробуйте снова'] }
     }
     const priorRoundState = combatRoundStateOf(game.pendingCombat)
     const movementFrom = priorRoundState?.movementFrom
@@ -1026,7 +1026,7 @@ export function applyGameActionOnSnapshot(
     const prioritySkips = params?.prioritySkips as import('./combat.js').CombatPrioritySkipPlan[] | undefined
     const supportSide = params?.supportSide as 'attacker' | 'defender' | null | undefined
     if (typeof ready !== 'boolean') {
-      return { errors: ['Некорректные параметры подготовки к бою'] }
+      return { errors: ['Не удалось передать готовность к бою — обновите страницу и попробуйте снова'] }
     }
     if (supportSide != null && supportSide !== 'attacker' && supportSide !== 'defender') {
       return { errors: ['Некорректная сторона поддержки'] }
@@ -1050,7 +1050,7 @@ export function applyGameActionOnSnapshot(
     const from = params?.from as HexCoord | undefined
     const moves = params?.moves as ShipMovePlan[] | undefined
     const combatOptions = params?.combatOptions as CombatOptions | undefined
-    if (!from || !Array.isArray(moves)) return { errors: ['Некорректные параметры действия'] }
+    if (!from || !Array.isArray(moves)) return { errors: ['Не удалось выполнить действие — обновите страницу и попробуйте снова'] }
     const result = executeMarkerMovement(game, map, playerId, from, moves, combatOptions)
     return { errors: result.errors, combatResult: result.combatResult }
   }
@@ -1058,7 +1058,7 @@ export function applyGameActionOnSnapshot(
   if (actionId === 'execute-destroyer-sacrifice') {
     const from = params?.from as HexCoord | undefined
     const shipId = params?.shipId as string | undefined
-    if (!from || !shipId) return { errors: ['Некорректные параметры действия'] }
+    if (!from || !shipId) return { errors: ['Не удалось выполнить действие — обновите страницу и попробуйте снова'] }
     return executeDestroyerSacrifice(game, map, playerId, from, shipId)
   }
 
@@ -1066,7 +1066,7 @@ export function applyGameActionOnSnapshot(
     const from = params?.from as HexCoord | undefined
     const bombardments = params?.bombardments as BombardmentPlan[] | undefined
     const combatOptions = params?.combatOptions as CombatOptions | undefined
-    if (!from || !Array.isArray(bombardments)) return { errors: ['Некорректные параметры действия'] }
+    if (!from || !Array.isArray(bombardments)) return { errors: ['Не удалось выполнить действие — обновите страницу и попробуйте снова'] }
     const result = executeMarkerBombardment(game, map, playerId, from, bombardments, combatOptions)
     return { errors: result.errors, combatResult: result.combatResult }
   }
@@ -1077,13 +1077,13 @@ export function applyGameActionOnSnapshot(
     const spentTokens = params?.spentTokens as TokenSpendRef[] | undefined
     const buyActionMarkers = Math.max(0, Math.floor(Number(params?.buyActionMarkers ?? 0)))
     if (!markerId || !Array.isArray(ships)) {
-      return { errors: ['Некорректные параметры действия'] }
+      return { errors: ['Не удалось выполнить действие — обновите страницу и попробуйте снова'] }
     }
     if (buyActionMarkers > 0) {
       return { errors: ['Покупка маркеров действия отключена — лимит равен двум плюс число центров власти'] }
     }
     if (ships.length === 0) {
-      return { errors: ['Некорректные параметры действия'] }
+      return { errors: ['Не удалось выполнить действие — обновите страницу и попробуйте снова'] }
     }
     const plan: ProductionBatchPlan = { markerId, ships }
     return { errors: executeProductionBatch(game, map.id, playerId, plan, spentTokens) }
@@ -1092,14 +1092,14 @@ export function applyGameActionOnSnapshot(
   if (actionId === 'execute-buy-production-marker') {
     const spentTokens = params?.spentTokens as TokenSpendRef[] | undefined
     if (!Array.isArray(spentTokens) || spentTokens.length === 0) {
-      return { errors: ['Некорректные параметры действия'] }
+      return { errors: ['Не удалось выполнить действие — обновите страницу и попробуйте снова'] }
     }
     return { errors: executeBuyProductionMarker(game, map.id, playerId, spentTokens) }
   }
 
   if (actionId === 'execute-production-recharge') {
     const markerId = params?.markerId as string | undefined
-    if (!markerId) return { errors: ['Некорректные параметры действия'] }
+    if (!markerId) return { errors: ['Не удалось выполнить действие — обновите страницу и попробуйте снова'] }
     return { errors: executeProductionRecharge(game, map.id, playerId, { markerId }) }
   }
 
@@ -1107,7 +1107,7 @@ export function applyGameActionOnSnapshot(
     const coord = params?.coord as HexCoord | undefined
     const kind = params?.kind as MarkerKind | undefined
     if (!coord || (kind !== 'action' && kind !== 'production')) {
-      return { errors: ['Некорректные параметры действия'] }
+      return { errors: ['Не удалось выполнить действие — обновите страницу и попробуйте снова'] }
     }
     return { errors: toggleMarkerAtCell(game, playerId, coord, map, kind) }
   }
@@ -1116,7 +1116,7 @@ export function applyGameActionOnSnapshot(
     const markerId = params?.markerId as string | undefined
     const kind = params?.kind as MarkerKind | undefined
     if (!markerId || (kind !== 'action' && kind !== 'production')) {
-      return { errors: ['Некорректные параметры действия'] }
+      return { errors: ['Не удалось выполнить действие — обновите страницу и попробуйте снова'] }
     }
     if (kind === 'action') return { errors: removeActionMarker(game, markerId, playerId) }
     return { errors: removeProductionMarker(game, markerId, playerId) }
