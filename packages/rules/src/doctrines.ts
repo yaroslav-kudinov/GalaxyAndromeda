@@ -8,8 +8,8 @@ import { hexKey } from './types.js'
 /**
  * Доктрины (ADR 020) вместо колоды событий.
  *
- * Раз в окно ходов (по умолчанию 5: ходы 1–5, 6–10, 11–15) каждый игрок выбирает доктрину —
- * стратегическое лицо на треть партии. Выбор одновременный: пока не выбрали все, чужие
+ * Раз в окно ходов (по умолчанию 3: ходы 1–3, 4–6, …, 13–15) каждый игрок выбирает доктрину —
+ * стратегическое лицо на несколько ходов. Выбор одновременный: пока не выбрали все, чужие
  * доктрины скрыты. Доктрина действует с начала хода, в котором выбрана, поэтому и бюджет
  * перезарядки этого хода, и захват в его конце считаются уже по ней.
  *
@@ -53,10 +53,10 @@ export const DOCTRINES: readonly DoctrineDefinition[] = [
   {
     id: 'production',
     name: 'Производство',
-    gives: '+1 к бюджету перезарядки',
-    costs: '−1 к лимиту захвата',
-    claimLimit: -1,
-    rechargeBudget: 1,
+    gives: '+2 к бюджету перезарядки',
+    costs: 'ничего, кроме выбора другой доктрины',
+    claimLimit: 0,
+    rechargeBudget: 2,
     moveRange: 0,
     ownShots: 0,
     enemyShots: 0,
@@ -64,11 +64,13 @@ export const DOCTRINES: readonly DoctrineDefinition[] = [
   {
     id: 'maneuvers',
     name: 'Манёвры',
-    gives: '+1 к скорости всех кораблей',
+    gives: '+1 к скорости линкоров, авианосцев и гиперорудий',
     costs: '−1 к бюджету перезарядки и −1 к лимиту захвата',
     claimLimit: -1,
     rechargeBudget: -1,
     moveRange: 1,
+    // Ускорение эсминцев решало гонку за центрами в первые ходы при любой цене (замер 2026-09-23).
+    moveRangeTypes: ['battleship', 'carrier', 'hyper'],
     ownShots: 0,
     enemyShots: 0,
   },
@@ -76,9 +78,9 @@ export const DOCTRINES: readonly DoctrineDefinition[] = [
     id: 'attack',
     name: 'Атака',
     gives: 'ваши корабли попадают на 1 легче и стреляют на клетку дальше; не действует, пока осаждают ваши центры',
-    costs: '−2 к бюджету перезарядки',
-    claimLimit: 0,
-    rechargeBudget: -2,
+    costs: '−1 к бюджету перезарядки и −1 к лимиту захвата',
+    claimLimit: -1,
+    rechargeBudget: -1,
     moveRange: 0,
     ownShots: -1,
     enemyShots: 0,
@@ -86,13 +88,14 @@ export const DOCTRINES: readonly DoctrineDefinition[] = [
   {
     id: 'defense',
     name: 'Оборона',
-    gives: 'противнику нужно на 1 больше, чтобы попасть по вашим кораблям',
-    costs: '−1 к скорости (не ниже 1) и −2 к лимиту захвата',
-    claimLimit: -2,
+    gives: 'на ваших клетках противнику нужно на 1 больше, чтобы попасть по вашим кораблям',
+    costs: '−1 к лимиту захвата',
+    claimLimit: -1,
     rechargeBudget: 0,
-    moveRange: -1,
+    moveRange: 0,
     ownShots: 0,
     enemyShots: 1,
+    enemyShotsOnOwnCellsOnly: true,
   },
   {
     id: 'none',
@@ -107,7 +110,7 @@ export const DOCTRINES: readonly DoctrineDefinition[] = [
   },
 ]
 
-export const DEFAULT_DOCTRINE_WINDOW = 5
+export const DEFAULT_DOCTRINE_WINDOW = 3
 
 const BY_ID = new Map(DOCTRINES.map((doctrine) => [doctrine.id, doctrine]))
 

@@ -225,7 +225,8 @@ function pickDoctrine(game: GameSnapshot, playerId: string): DoctrineId {
   const scores: Record<DoctrineId, number> = {
     expansion: 3,
     production: powerCenters >= 3 ? 2 : 1,
-    maneuvers: game.turnNumber === 1 ? 3 : 1,
+    // Манёвры ускоряют только тяжёлые корабли — смысл есть, когда они в флоте.
+    maneuvers: myFleet.some((type) => type === 'battleship' || type === 'carrier' || type === 'hyper') ? 3 : 0,
     attack: powerCenters <= 2 && combatStrength(myFleet) > 1.5 * combatStrength(enemyFleet) ? 4 : 0,
     defense: besiegedCellKeysOf(game, playerId).length > 0 ? 6 : powerCenters >= 4 ? 4 : 0,
     none: 0,

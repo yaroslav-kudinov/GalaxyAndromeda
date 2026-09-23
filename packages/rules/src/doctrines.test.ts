@@ -38,9 +38,9 @@ function spendAllTokens(game: GameSnapshot, ownerId: string, count: number) {
 }
 
 describe('доктрины: окна и выбор', () => {
-  it('окна по пять ходов: 1–5, 6–10, 11–15', () => {
+  it('окна по три хода: 1–3, 4–6, …, 13–15', () => {
     const { game } = duel()
-    expect([1, 5, 6, 10, 11, 15].map((turn) => doctrineWindowStart(game, turn))).toEqual([1, 1, 6, 6, 11, 11])
+    expect([1, 3, 4, 6, 7, 13, 15].map((turn) => doctrineWindowStart(game, turn))).toEqual([1, 1, 4, 4, 7, 13, 13])
   })
 
   it('старт партии открывает выбор, бюджет перезарядки ждёт вскрытия', () => {
@@ -84,11 +84,11 @@ describe('доктрины: окна и выбор', () => {
     expect(game.doctrineChoice).toBeUndefined()
     expect(activeDoctrineId(game, 'player-1')).toBe('production')
     expect(activeDoctrineId(game, 'player-2')).toBe('attack')
-    // Порог 6, один центр: базовый бюджет 4. «Производство» +1, «Атака» −2.
-    expect(computeRechargeBudget(game, 'player-1')).toBe(5)
-    expect(computeRechargeBudget(game, 'player-2')).toBe(2)
+    // Порог 6, один центр: базовый бюджет 4. «Производство» +2, «Атака» −1.
+    expect(computeRechargeBudget(game, 'player-1')).toBe(6)
+    expect(computeRechargeBudget(game, 'player-2')).toBe(3)
     expect(rechargePicksRemaining(game, 'player-1')).toBe(0)
-    expect(rechargePicksRemaining(game, 'player-2')).toBe(2)
+    expect(rechargePicksRemaining(game, 'player-2')).toBe(3)
     expect(game.eventLog.at(-1)?.message).toMatch(/Доктрины вскрыты/)
   })
 
@@ -111,9 +111,9 @@ describe('доктрины: окна и выбор', () => {
       'player-2': { doctrineId: 'defense', fromTurn: 1 },
     }
     delete game.doctrineChoice
-    game.turnNumber = 5
+    game.turnNumber = 3
     expect(activeDoctrineId(game, 'player-1')).toBe('maneuvers')
-    game.turnNumber = 6
+    game.turnNumber = 4
     expect(activeDoctrineId(game, 'player-1')).toBe('none')
   })
 
@@ -136,24 +136,29 @@ describe('доктрины: эффекты', () => {
     const { game } = withDoctrines('expansion', 'production')
     expect(computeClaimLimit(game, 'player-1')).toBe(3)
     expect(computeRechargeBudget(game, 'player-1')).toBe(3)
-    expect(computeClaimLimit(game, 'player-2')).toBe(1)
-    expect(computeRechargeBudget(game, 'player-2')).toBe(5)
+    expect(computeClaimLimit(game, 'player-2')).toBe(2)
+    expect(computeRechargeBudget(game, 'player-2')).toBe(6)
   })
 
-  it('Манёвры ускоряют, Оборона замедляет не ниже одной клетки и режет захват до нуля', () => {
+  it('Манёвры ускоряют только тяжёлые корабли, Оборона скорость не трогает', () => {
     const { game } = withDoctrines('maneuvers', 'defense')
-    expect(effectiveMoveRange(game, 'cruiser', 'player-1')).toBe(3)
+    expect(effectiveMoveRange(game, 'battleship', 'player-1')).toBe(2)
+    expect(effectiveMoveRange(game, 'hyper', 'player-1')).toBe(2)
+    expect(effectiveMoveRange(game, 'cruiser', 'player-1')).toBe(2)
+    expect(effectiveMoveRange(game, 'destroyer', 'player-1')).toBe(3)
     expect(computeClaimLimit(game, 'player-1')).toBe(1)
     expect(computeRechargeBudget(game, 'player-1')).toBe(3)
-    expect(effectiveMoveRange(game, 'cruiser', 'player-2')).toBe(1)
-    expect(effectiveMoveRange(game, 'battleship', 'player-2')).toBe(1)
-    expect(computeClaimLimit(game, 'player-2')).toBe(0)
+    expect(effectiveMoveRange(game, 'cruiser', 'player-2')).toBe(2)
+    expect(computeClaimLimit(game, 'player-2')).toBe(1)
   })
 
-  it('Атака облегчает свои выстрелы, Оборона затрудняет вражеские', () => {
+  it('Атака облегчает свои выстрелы, Оборона затрудняет вражеские — только на своих клетках', () => {
     const { game } = withDoctrines('attack', 'defense')
-    // Атака против Обороны гасят друг друга.
-    expect(doctrineShotModifier(game, 'player-1', 'player-2')).toBe(0)
+    // Бой на клетке обороняющегося: Атака и Оборона гасят друг друга.
+    expect(doctrineShotModifier(game, 'player-1', 'player-2', { q: 1, r: 0 })).toBe(0)
+    // На чужой для обороняющегося клетке Оборона не действует.
+    expect(doctrineShotModifier(game, 'player-1', 'player-2', { q: 0, r: 0 })).toBe(-1)
+    expect(doctrineShotModifier(game, 'player-1', 'player-2', { q: 2, r: 0 })).toBe(-1)
     // Защищающийся стреляет по атакующему без поправок.
     expect(doctrineShotModifier(game, 'player-2', 'player-1')).toBe(0)
 
