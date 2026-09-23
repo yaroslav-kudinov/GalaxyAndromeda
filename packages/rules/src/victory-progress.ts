@@ -6,12 +6,12 @@
  * сколько ему осталось до порога. Сам итог партии по-прежнему подводит
  * `victory.ts`, и решения этот модуль не принимает.
  *
- * Порог вынесен в отдельную функцию `victoryThresholdFor` намеренно: в
- * перерабатываемом ядре он станет полем карты вместо «больше половины», и
- * тогда меняется одна эта функция, а не панель в клиенте.
+ * Порог — поле карты `victoryPowerCenters` (ADR 015); у карт без него действует
+ * запасное правило «строго больше половины». Само правило живёт в `victory.ts`.
  */
 import type { GameSnapshot } from './save-file.js'
 import type { MapDefinition } from './types.js'
+import { victoryThresholdForSnapshot } from './victory.js'
 
 /** Путь одного игрока к победе по центрам власти. */
 export interface VictoryProgressEntry {
@@ -42,14 +42,13 @@ function countPowerCentersOnMap(map: MapDefinition): number {
 }
 
 /**
- * Сколько центров власти нужно для победы на этой карте.
- *
- * Сейчас — строго больше половины всех центров власти, как в `checkVictory`.
- * Когда у карты появится собственный порог, править нужно только здесь.
+ * Сколько центров власти нужно для победы на этой карте: порог из карты, а если его нет —
+ * строго больше половины всех центров власти.
  */
 export function victoryThresholdFor(map: MapDefinition): number {
   const total = countPowerCentersOnMap(map)
   if (total <= 0) return 0
+  if (map.victoryPowerCenters != null && map.victoryPowerCenters > 0) return map.victoryPowerCenters
   return Math.floor(total / 2) + 1
 }
 
@@ -65,7 +64,8 @@ export function victoryProgressForSnapshot(
   map: MapDefinition,
 ): VictoryProgress {
   const total = countPowerCentersOnMap(map)
-  const needed = victoryThresholdFor(map)
+  // Порог партии скопирован в снимок при старте: сверяемся с ним, а не с описанием карты.
+  const needed = total > 0 ? victoryThresholdForSnapshot(game) : 0
   if (!needed) return { total, needed, entries: [] }
 
   // Считаем по живой доске, а не по описанию карты: контроль меняется в партии

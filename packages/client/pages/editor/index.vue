@@ -37,6 +37,7 @@ import {
   galaxySaveDownloadFileName,
   parseGalaxySave,
   serializeGalaxySave,
+  mapBalanceWarnings,
   validateMapDefinition,
 } from '@galaxy/rules'
 import { submitMapForModeration } from '~/composables/useGameApi'
@@ -113,6 +114,8 @@ const cellMap = computed(() => new Map(map.value.cells.map((c) => [hexKey(c.q, c
 const ghosts = computed(() => getGhostSlots(map.value))
 const asciiPreview = computed(() => renderAsciiMapFromDefinition(map.value))
 const errors = computed(() => validateMapDefinition(map.value))
+/** Неравный старт не ошибка — учебные карты асимметричны намеренно, — но о нём стоит знать. */
+const balanceWarnings = computed(() => mapBalanceWarnings(map.value))
 
 const selectedCell = computed(() =>
   selectedKey.value ? cellMap.value.get(selectedKey.value) : undefined,
@@ -621,6 +624,13 @@ useMapEditorHotkeys({
         <input v-model="map.id" type="text" placeholder="id" />
       </label>
       <p v-if="errors.length" class="err hud-err" :title="errors.join(' · ')">{{ errors[0] }}</p>
+      <p
+        v-else-if="balanceWarnings.length"
+        class="hud-err hud-warn"
+        :title="balanceWarnings.join(' · ')"
+      >
+        {{ balanceWarnings[0] }}<template v-if="balanceWarnings.length > 1"> (ещё {{ balanceWarnings.length - 1 }})</template>
+      </p>
     </header>
 
     <aside class="hud-right" :class="{ collapsed: panelCollapsed }">
@@ -936,6 +946,9 @@ useMapEditorHotkeys({
 }
 .id-field input {
   width: 88px;
+}
+.hud-warn {
+  color: #fcd34d;
 }
 .hud-err {
   font-size: 0.75rem;

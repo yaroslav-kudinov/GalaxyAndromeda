@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  ACTION_MARKER_LIMIT,
   actionMarkerLimitForPlayer,
   nextProductionMarkerExpandCost,
   refreshActionMarkerCapacity,
@@ -10,7 +11,6 @@ import {
 } from './production.js'
 import { addActionMarker } from './markers.js'
 import { beginMatchForParticipants } from './match-start.js'
-import { getLegalActionsForSnapshot } from './movement.js'
 import { gameSnapshotFromMap } from './save-file.js'
 import type { MapDefinition } from './types.js'
 
@@ -61,20 +61,6 @@ function powerCenterMap(): MapDefinition {
   }
 }
 
-function onePowerCenterMap(): MapDefinition {
-  return {
-    id: 'pc-am-one',
-    name: 'PC AM one',
-    cells: [
-      { q: 0, r: 0, isPowerCenter: true, startPlayer: 1 },
-      { q: 1, r: 0, isPowerCenter: true, startPlayer: 2 },
-      { q: 2, r: 0, startPlayer: 1 },
-      { q: 0, r: 1, startPlayer: 1 },
-      { q: 1, r: 1, startPlayer: 1 },
-    ],
-  }
-}
-
 function addShip(
   game: ReturnType<typeof gameSnapshotFromMap>,
   q: number,
@@ -89,80 +75,58 @@ function addShip(
 }
 
 describe('marker pools', () => {
-  it('start with 1 power center gives 4 action markers', () => {
-    const map = onePowerCenterMap()
+  it('action marker limit is the same for everyone regardless of power centers', () => {
+    const map = powerCenterMap()
+    const game = gameSnapshotFromMap(map)
+    // player-1 держит два центра власти, player-2 — один: прежняя формула дала бы 5 и 4.
+    expect(actionMarkerLimitForPlayer(game, 'player-1')).toBe(ACTION_MARKER_LIMIT)
+    expect(actionMarkerLimitForPlayer(game, 'player-2')).toBe(ACTION_MARKER_LIMIT)
+  })
+
+  it('keeps the limit after a power center changes hands', () => {
+    const map = powerCenterMap()
     const game = gameSnapshotFromMap(map)
     beginMatchForParticipants(game, map.id, ['player-1', 'player-2'])
-    expect(actionMarkerLimitForPlayer(game, 'player-1')).toBe(4)
-    expect(actionMarkerLimitForPlayer(game, 'player-2')).toBe(4)
-    expect(game.actionMarkerLimitByPlayer?.['player-1']).toBe(4)
+
+    game.cells.find((cell) => cell.coord.q === 1 && cell.coord.r === 0)!.controlOwnerId = 'player-2'
+    refreshActionMarkerCapacity(game)
+
+    // Сторож против возврата зависимости от центров власти: она делала центр двойной
+    // наградой и ломала размен «одно на одно» с бюджетом перезарядки.
+    expect(actionMarkerLimitForPlayer(game, 'player-1')).toBe(ACTION_MARKER_LIMIT)
+    expect(actionMarkerLimitForPlayer(game, 'player-2')).toBe(ACTION_MARKER_LIMIT)
   })
 
-  it('2 power centers at turn start give 5 action markers', () => {
-    const map = powerCenterMap()
-    const game = gameSnapshotFromMap(map)
-    expect(actionMarkerLimitForPlayer(game, 'player-1')).toBe(5)
-    expect(actionMarkerLimitForPlayer(game, 'player-2')).toBe(4)
-    expect(game.actionMarkerLimitByPlayer?.['player-1']).toBe(5)
-  })
-
-  it('losing a power center mid-turn keeps the frozen limit', () => {
-    const map = powerCenterMap()
+  it('refuses to place more markers than the limit', () => {
+    // Своя карта: клеток должно хватить на лимит плюс одну лишнюю попытку.
+    const spots = [
+      { q: 0, r: 0 },
+      { q: 1, r: 0 },
+      { q: 2, r: 0 },
+      { q: 3, r: 0 },
+      { q: 0, r: 1 },
+      { q: 1, r: 1 },
+      { q: 2, r: 1 },
+    ]
+    const map: MapDefinition = {
+      id: 'pc-am-wide',
+      name: 'PC AM wide',
+      cells: [
+        ...spots.map((spot, index) => ({ ...spot, startPlayer: 1, isPowerCenter: index === 0 })),
+        { q: 4, r: 0, startPlayer: 2, isPowerCenter: true },
+      ],
+    }
     const game = gameSnapshotFromMap(map)
     game.phase = 'planning'
     game.activePlayerId = 'player-1'
-    addShip(game, 0, 0, 'player-1')
-    addShip(game, 1, 0, 'player-1')
-    addShip(game, 0, 1, 'player-1')
-    addShip(game, 1, 1, 'player-1')
-    expect(addActionMarker(game, 'player-1', { q: 0, r: 0 })).toEqual([])
-    expect(addActionMarker(game, 'player-1', { q: 1, r: 0 })).toEqual([])
-    expect(addActionMarker(game, 'player-1', { q: 0, r: 1 })).toEqual([])
-    expect(game.actionMarkers).toHaveLength(3)
+    for (const spot of spots) addShip(game, spot.q, spot.r, 'player-1')
 
-    game.cells.find((cell) => cell.coord.q === 1 && cell.coord.r === 0)!.controlOwnerId = 'player-2'
-    expect(actionMarkerLimitForPlayer(game, 'player-1')).toBe(5)
-    expect(game.actionMarkers).toHaveLength(3)
-    expect(addActionMarker(game, 'player-1', { q: 1, r: 1 })).toEqual([])
-    expect(game.actionMarkers).toHaveLength(4)
-
-    getLegalActionsForSnapshot(game, map.id, 'player-1')
-    expect(actionMarkerLimitForPlayer(game, 'player-1')).toBe(5)
-    expect(game.actionMarkers).toHaveLength(4)
-  })
-
-  it('strips extras at the next turn start after losing a center', () => {
-    const map = powerCenterMap()
-    const game = gameSnapshotFromMap(map)
-    game.actionMarkerLimitByPlayer = { 'player-1': 5 }
-    game.cells.find((cell) => cell.coord.q === 1 && cell.coord.r === 0)!.controlOwnerId = 'player-2'
-    refreshActionMarkerCapacity(game)
-    expect(actionMarkerLimitForPlayer(game, 'player-1')).toBe(4)
-  })
-
-  it('occupying a power center in planning does not grant a slot until next turn', () => {
-    const map = onePowerCenterMap()
-    const game = gameSnapshotFromMap(map)
-    game.actionMarkerLimitByPlayer = { 'player-1': 4 }
-    game.phase = 'planning'
-    game.activePlayerId = 'player-1'
-    addShip(game, 0, 0, 'player-1')
-    addShip(game, 2, 0, 'player-1')
-    addShip(game, 0, 1, 'player-1')
-    addShip(game, 1, 1, 'player-1')
-    expect(addActionMarker(game, 'player-1', { q: 0, r: 0 })).toEqual([])
-    expect(addActionMarker(game, 'player-1', { q: 0, r: 1 })).toEqual([])
-    expect(addActionMarker(game, 'player-1', { q: 1, r: 1 })).toEqual([])
-    expect(addActionMarker(game, 'player-1', { q: 2, r: 0 })).toEqual([])
-    expect(game.actionMarkers).toHaveLength(4)
-
-    game.cells.find((cell) => cell.coord.q === 1 && cell.coord.r === 0)!.controlOwnerId = 'player-1'
-    expect(actionMarkerLimitForPlayer(game, 'player-1')).toBe(4)
-
-    refreshActionMarkerCapacity(game)
-    expect(actionMarkerLimitForPlayer(game, 'player-1')).toBe(5)
-    addShip(game, 1, 0, 'player-1')
-    expect(addActionMarker(game, 'player-1', { q: 1, r: 0 })).toEqual([])
+    for (let i = 0; i < ACTION_MARKER_LIMIT; i += 1) {
+      expect(addActionMarker(game, 'player-1', spots[i]!)).toEqual([])
+    }
+    expect(game.actionMarkers).toHaveLength(ACTION_MARKER_LIMIT)
+    expect(addActionMarker(game, 'player-1', spots[ACTION_MARKER_LIMIT]!)).not.toEqual([])
+    expect(game.actionMarkers).toHaveLength(ACTION_MARKER_LIMIT)
   })
 
   it('cannot buy action markers via production batch', () => {

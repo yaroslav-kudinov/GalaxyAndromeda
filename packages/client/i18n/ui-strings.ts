@@ -88,25 +88,100 @@ export const uiStringsRu = {
     next: 'Далее',
     finish: 'Завершить обучение',
   },
-  turnEvents: {
-    heading: 'События хода',
-    pastTurns: (count: number) => `Прошлые ходы (${count})`,
-    turn: (number: number) => `Ход ${number}`,
-    applied: 'Применено',
-    appliedAt: (when: string) => `Применено ${when}`,
-    notApplied: 'Не применено',
-    // Раньше: «События прошлых ходов пока не зафиксированы в журнале» —
-    // канцелярит про журнал вместо простого объяснения
-    empty: 'Прошлых ходов ещё не было — здесь появится их история.',
+  doctrines: {
+    heading: 'Доктрина',
+    windowLabel: (from: number, to: number) => `Ходы ${from}–${to}`,
+    choosePrompt:
+      'Выберите доктрину на эти ходы. Соперники увидят вашу доктрину, только когда выберут все.',
+    gives: 'Даёт',
+    costs: 'Платите',
+    choose: 'Выбрать',
+    choosing: 'Выбор…',
+    yourPick: (name: string) => `Вы выбрали: ${name}. Ждём соперников.`,
+    waitingFor: (names: string) => `Ещё выбирают: ${names}`,
+    activeTitle: 'Доктрины в силе',
+    you: 'вы',
+    notChosen: 'без доктрины',
+    untilTurn: (turn: number) => `до хода ${turn} включительно`,
+    nextChoice: (turn: number) => `Следующий выбор — в начале хода ${turn}.`,
+  },
+  combatTargets: {
+    heading: (round: number) => `Цели · раунд ${round}`,
+    diceLeft: (free: number, total: number) => `Свободно кубиков: ${free} из ${total}`,
+    allAssigned: 'Все кубики распределены',
+    freeGoAuto: 'Свободные кубики игра раздаст сама',
+    auto: 'Авто',
+    autoHint: 'Распределить, как предложила бы игра: сначала добивать подбитые и самые опасные',
+    clear: 'Снять все',
+    add: 'Добавить кубик',
+    remove: 'Убрать кубик',
+    hits: (damage: number, hull: number) => `Попаданий ${damage} из ${hull}`,
+    expected: (value: string) => `≈ ${value} попад.`,
+    needs: (threshold: number) => `${threshold}+`,
+    dieTitle: (ship: string, threshold: number, target: string | null) =>
+      target ? `${ship}: нужно ${threshold}+ → ${target}` : `${ship}: нужно ${threshold}+, цель не выбрана`,
+    pickDieHint: 'Щёлкните кубик внизу, затем «+» у цели. Щелчок по назначенному кубику возвращает его.',
+    noDice: 'Вашим кораблям в этом раунде нечем стрелять.',
+    noTargets: 'Целей не осталось.',
+    support: 'поддержка',
+    fire: 'Огонь',
+    supportBanner: (round: number) =>
+      `Раунд ${round}: ваши корабли поддерживают бой. Выберите цели и подтвердите — без вас раунд не начнётся.`,
+    supportPickSide: 'Выберите сторону — затем цели своих кораблей.',
+    supportReady: 'Готов',
+    assaultBlocked: 'Штурм невозможен: ни одна сторона не может стрелять. Можно только осадить.',
+  },
+  combatRerolls: {
+    heading: (round: number) => `Раунд ${round}: перебросы гарнизона`,
+    left: (count: number) => `Перебросов: ${count}`,
+    mineHint:
+      'Ваш гарнизон может перебросить свои промахи — по одному на корабль. Щёлкните промах, посмотрите результат и решайте дальше.',
+    waiting: (name: string) => `${name} перебрасывает промахи гарнизона. Попадания применятся после.`,
+    support: 'поддержка',
+    noTarget: 'без цели',
+    dieTitle: (value: number, threshold: number, target: string, history: number[]) =>
+      `${value} (нужно ${threshold}+) → ${target}${history.length ? `; было ${history.join(', ')}` : ''}`,
+    auto: 'Перебросить остальное за меня',
+    done: 'Готово',
+    destroyed: 'будет уничтожен',
+    hitsNow: (count: number) => `+${count} попад. сейчас`,
+    shipTitle: (name: string, before: number, now: number, hull: number) =>
+      `${name}: до раунда попаданий ${before}, в этом броске ${now}, прочность ${hull}`,
+  },
+  siegeContinuation: {
+    title: (q: number, r: number) => `Бой за осаждённый центр (${q}, ${r}) выигран`,
+    body: 'Продолжить осаду — гарнизон снова решит, нападать ли. Или отойти всем флотом на соседнюю клетку, сняв осаду.',
+    keep: 'Продолжить осаду',
+    withdraw: (q: number, r: number) => `Отойти в (${q}, ${r})`,
+    waiting: (name: string) => `${name} решает, продолжать ли осаду`,
+    blocked: 'Сначала решите, продолжать ли осаду',
+  },
+  garrisonChoice: {
+    banner: 'Ваш гарнизон стоит на клетке этого боя. Встаньте на сторону одного из противников — тогда он будет биться на клетке — или не вмешивайтесь.',
+  },
+  planningDecisions: {
+    heading: 'Нужно решить',
+    sub: 'Пока решения не приняты, ход не передаётся.',
+    blocked: 'Сначала примите решения в карточке «Нужно решить» над картой',
+    doctrineTitle: 'Доктрина на ближайшие ходы — соперники увидят её, когда выберут все',
+    costs: 'платите',
+    claimsTitle: (need: number, total: number) =>
+      `Захват: ваши корабли стоят на ${total} клетках, занять можно ${need}. Выберите здесь или щелчком по клетке на карте — подходящие обведены пунктиром.`,
+    claimsConfirm: (picked: number, need: number) => `Занять (${picked} из ${need})`,
+    rechargeTitle: (need: number, total: number) =>
+      `Перезарядка: поднимите лицом вверх ${need} из ${total} перевёрнутых фишек.`,
+    rechargeConfirm: (picked: number, need: number) => `Поднять (${picked} из ${need})`,
+    siegeTitle: 'Осада: гарнизон теряет по кораблю на каждой осаждённой клетке. Выберите, какой.',
+    siegeConfirm: 'Потерять выбранные',
+    powerCenter: 'центр власти',
+    noTokens: 'без фишек',
+    credits: (value: number) => `кредиты ${value}`,
+    production: (value: number) => `производство ${value}`,
   },
   turnAnnounce: {
-    newTurn: (number: number) => `Новый ход ${number}`,
     matchStart: 'Начало партии',
-    // Раньше: «Карта уже применена автоматически» — неясно, карта события
-    // или игровая карта; и рассказ про то, чем является само окно
-    eventHint: 'Карта события уже вступила в силу — подтверждать ничего не нужно.',
     rechargeHint:
-      'Когда счётчик дойдёт до нуля, перевёрнутые фишки ресурсов снова станут доступны.',
+      'Каждый ход в начале планирования перевёрнутые фишки поднимаются — не больше вашего бюджета перезарядки.',
     ok: 'Понятно',
   },
   productionOrder: {

@@ -23,13 +23,19 @@ HTTP base: `http://127.0.0.1:3001` (env `GAME_SERVER_URL` for MCP).
 
 | actionId | params | Description |
 |----------|--------|-------------|
-| `execute-marker-movement` | `{ from, moves, combatOptions? }` | `combatOptions.attacker/defender.prioritySkips`: `{ shipType }[]`; optional `destructionSelection` |
+| `execute-marker-movement` | `{ from, moves, combatOptions? }` | `combatOptions.attacker/defender`: `targetPriority?: string[]` (id вражеских кораблей в порядке фокуса), `diceTargets?: Record<shooterId, targetId[]>` (явная цель каждого кубика); без них кубики распределяются автоматически |
 | `execute-marker-bombardment` | `{ from, bombardments, combatOptions? }` | Same combat options |
-| `continue-combat` | `{ combatOptions? }` | Решение продолжать: сначала attacker, затем defender; после двух подтверждений — следующий раунд |
-| `stop-combat` | `{ retreatTo: { q, r } }` | Текущий решающий участник отступает в соседнюю клетку без вражеских кораблей (сначала attacker, затем defender; кроме «Стоять насмерть!») |
-| `confirm-combat-destruction` | `{ destructionSelection: string[] }` | Winner confirms ship IDs to destroy after round |
-| `update-combat-prep` | `{ ready: boolean, prioritySkips?: { shipType }[], supportSide?: 'attacker' \| 'defender' }` | Участники объявляют skip + ready; неучастник с доступной поддержкой выбирает `supportSide` без ready |
-| `cancel-combat-prep` | — | Attacker cancels prep before battle starts |
+| `continue-combat` | `{ diceTargets?: Record<shooterId, targetId[]> }` | Цели на следующий раунд и «продолжить». Пока никто не уничтожен — attacker и defender в любом порядке; после первого уничтожения defender после attacker. Поддерживающий третий игрок тоже подтверждает (`pendingCombat.supportReady`). Раунд бросается, когда решили все; неназначенные кубики раздаёт игра, чужие назначения в наблюдении скрыты (ADR 018) |
+| `stop-combat` | `{ retreatTo: { q, r } }` | Текущий решающий участник отступает в соседнюю клетку без вражеских кораблей (сначала attacker, затем defender) |
+| `update-combat-prep` | `{ ready: boolean, targetPriority?: string[], diceTargets?: Record<shooterId, targetId[]>, supportSide?: 'attacker' \| 'defender' \| null }` | Участники объявляют цели первого раунда + ready; неучастник с доступной поддержкой выбирает `supportSide` (с `ready: false`), затем цели и `ready: true`; `supportSide: null` с `ready: true` — «не поддерживать». При `prep.assaultBlocked` атакующему штурм недоступен — только `establish-siege` или отмена |
+| `cancel-combat-prep` | — | Attacker cancels prep before battle starts; для `prep.siegeResponse` — отказ осаждённого нападать |
+| `choose-doctrine` | `{ doctrineId }` | Планирование, первый ход окна доктрин (`doctrineChoice` открыт): `expansion`, `production`, `maneuvers`, `attack`, `defense`, `none`. Любой участник, вне очереди. Чужие выборы в наблюдении скрыты (`doctrineChoice.pickedBy` — кто уже выбрал); вскрытие, когда выбрали все (ADR 020) |
+| `reroll-combat-die` | `{ dieIndex: number }` | `pendingCombat.phase === 'awaiting-rerolls'`, только осаждённый (`rolledRound.rerolls.playerId`): перебросить свой промах (индекс в `rolledRound.dice`); когда перебросы кончились или перебрасывать нечего, раунд подсчитывается (ADR 019) |
+| `finish-combat-rerolls` | `{ auto?: boolean }` | Закончить перебросы; `auto: true` — остаток раздаёт игра |
+| `resolve-siege-continuation` | `{ continue: boolean, retreatTo?: { q, r } }` | `siegeContinuationChoice.playerId`: бой за осаждённую клетку выигран — продолжить осаду или отойти всем флотом на соседнюю клетку без чужих кораблей. Пока не решено, прочие действия отклоняются |
+| `establish-siege` | — | Атакующий в подготовке боя (`prep.siegeAvailable`) осаждает центр власти вместо штурма: корабли входят без боя, маркер исполнен (ADR 019) |
+| `execute-marker-assault` | `{ from, combatOptions? }` | Бой на клетке маркера с чужими кораблями без перемещения: вылазка гарнизона или штурм осаждающих |
+| `execute-siege-losses` | `{ shipIds? }` | Планирование: какой корабль каждого осаждённого гарнизона потерять (по одному на клетку из `siegeLossesOwedByPlayer`). Пока долг не закрыт, `advance-phase` отклоняется; без `shipIds` игра берёт самые дешёвые — для ботов |
 | `abort-combat` | — | Participant aborts a stuck combat; pending movement is finalized |
 | `surrender` | — | Сдаться в любой момент: `eliminated`, контроль и маркеры сняты, корабли остаются |
 | `execute-production` | `{ markerId, ships, spentTokens? }` | Постройка в регионе; `ships` не пустой. `spentTokens` — явный выбор фишек оплаты (`{ coord, tokenIndex }[]`, только лицом вверх и в регионе маркера); без него фишки подбираются автоматически от крупных к мелким |
@@ -37,7 +43,7 @@ HTTP base: `http://127.0.0.1:3001` (env `GAME_SERVER_URL` for MCP).
 
 Without `combatOptions`, movement/bombardment into combat enters `pendingCombat` with `phase: 'prep'`. Movement: mutual ready → countdown 3s → auto-resolve. Bombardment: attacker-only ready → countdown; multiple targets queued via `queuedBombardmentPlans`. Sync via `GET /state` polling.
 
-Combat FSM phases: `prep` → (roll) → `awaiting-destruction` (winner picks losses) → `awaiting-continue` (attacker then defender decide continue/retreat). Invalid `pendingCombat` is released automatically by the server.
+Combat FSM phases: `prep` → (rounds) → `awaiting-continue` (attacker then defender decide continue/retreat). Бой на попаданиях (ADR 018): каждый раунд обе стороны бросают d6 по порогу класса, попадания применяются одновременно; урон копится в `pendingCombat.damageByShipId` до конца боя, последний раунд лежит в `pendingCombat.lastRound`. Перед каждым раундом стороны выбирают цели (`continue-combat`), пока никто не уничтожен — отступать нельзя. Если в бою гарнизон осаждённой клетки, после броска бой встаёт в `awaiting-rerolls`, пока осаждённый перебрасывает промахи. Бой, в котором ни одна сторона не может стрелять, не начинается. Invalid `pendingCombat` is released automatically by the server.
 
 ## GameObservation
 
@@ -45,11 +51,11 @@ Combat FSM phases: `prep` → (roll) → `awaiting-destruction` (winner picks lo
 {
   mechanics: {
     phase, turnNumber, activePlayerId, players, cells,
-    pendingCombat?, turnEvent?, gameOver?, lastCombatResult?,
+    pendingCombat?, doctrineChoice?, doctrineByPlayer?, gameOver?, lastCombatResult?,
     observationRevision?, // monotonic; clients ignore stale responses
     roomStatus?, // 'lobby' | 'playing'
     hostPlayerId?,
-    actionMarkerLimitByPlayer?, // 2 + центры власти, заморожено в начале хода
+    actionMarkerLimitByPlayer?, // всегда 6 (ADR 015)
     productionMarkerLimitByPlayer?, // купленный пул PM (старт 1, макс 3)
     productionMarkerBoughtByPlayerThisTurn?, // кто уже купил доп. PM в этом игровом ходе
     // cleared fields are sent as explicit null, not omitted
@@ -63,9 +69,9 @@ Combat FSM phases: `prep` → (roll) → `awaiting-destruction` (winner picks lo
 }
 ```
 
-**Sync contract:** server is source of truth. `observationRevision` increments on each state change (actions, combat auto-resolve). `pendingCombat`, `turnEvent`, `gameOver`, `lastCombatResult` use **explicit `null`** when cleared — clients must not preserve local values when server sends `null`. `lastCombatResult` is cached until the next non-prep action so both players can poll the same round result.
+**Sync contract:** server is source of truth. `observationRevision` increments on each state change (actions, combat auto-resolve). `pendingCombat`, `doctrineChoice`, `gameOver`, `lastCombatResult` use **explicit `null`** when cleared — clients must not preserve local values when server sends `null`. `lastCombatResult` is cached until the next non-prep action so both players can poll the same round result.
 
-Карта события хода вытягивается и применяется **автоматически** при выходе из производства (фаза `events` не интерактивна). Действие `resolve-event` оставлено для старых клиентов и сразу уводит в планирование; в `legalActions` его больше не нужно выбирать.
+Цикл хода — две фазы: `planning` → `actions` (ADR 020). Колоды событий и фазы `events` больше нет; сохранение, застрявшее в `events`, при первом чтении переводится в планирование. В начале планирования: тик осады, в первый ход окна доктрин — выбор доктрины (`choose-doctrine`), затем долги захвата и перезарядки.
 
 ## ASCII legend
 

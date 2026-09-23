@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import type {
+  CombatDieRoll,
   CombatOptions,
+  CombatParticipant,
   CombatPreview,
   CombatResolutionResult,
   CombatRoundResult,
@@ -8,30 +10,19 @@ import type {
   ShipType,
 } from '@galaxy/rules'
 import {
-  DESTRUCTION_PRIORITY,
-  applyPrioritySkipToggle,
-  canTogglePrioritySkipType,
-  estimateRoundOneOutcome,
-  formatShieldContributionLabel,
-  SHIP_LABELS,
-  SHIP_COMBAT_DICE,
-  SHIP_SUPPORT_DIE_FACES,
-  sumCombatSideDiceTotal,
+  autoDiceTargetsFor,
+  combatSideOfPlayer,
   COMBAT_PREP_COUNTDOWN_MS,
-  SHIP_DESTROY_COST,
-  PRIORITY_SKIP_DESTROY_SURCHARGE,
-  presentDestructionPriorityChain,
-  primaryDestructionType,
-  selectableDestructionTypes,
-  validateDestructionSelection,
-  type ShipUnit,
+  estimateBattleOutcome,
+  playerCombatDice,
+  playerCombatTargets,
+  SHIP_LABELS,
 } from '@galaxy/rules'
-import type { ShieldContribution } from '@galaxy/rules'
+import { useUiStrings } from '~/i18n/ui-strings'
 import type { GameSnapshot } from '@galaxy/rules'
 import {
   combatDecisionStatusLine,
   combatRoundOutcome,
-  isCombatRoundDraw,
 } from '~/utils/combat-continue-ui'
 
 const props = defineProps<{
@@ -46,19 +37,26 @@ const props = defineProps<{
   selfReady?: boolean
   attackerReady?: boolean
   defenderReady?: boolean
-  remoteAttackerSkips?: ShipType[]
-  remoteDefenderSkips?: ShipType[]
   countdownStartedAt?: number
   /** Fallback: решение continue/retreat прямо в модалке (если баннер скрыт гонкой) */
-  continueDecisionRole?: 'attacker' | 'defender' | null
+  continueDecisionRole?: 'attacker' | 'defender' | 'support' | null
   retreatAllowed?: boolean
   retreatDestinations?: { q: number; r: number }[]
+  /** Атакующий может вместо штурма осадить центр власти. */
+  siegeAvailable?: boolean
+  /** Это ответ осаждённого на новую осаду: нападать необязательно. */
+  siegeResponse?: boolean
+  /** Штурм невозможен — ни одна сторона не может стрелять; остаётся осада. */
+  assaultBlocked?: boolean
+  /** Сторона, которую поддерживает этот игрок (третий в бою), если уже выбрана. */
+  supportSide?: 'attacker' | 'defender' | null
+  /** Цели следующего раунда — их держит страница, чтобы баннер и окно показывали одно. */
+  roundTargets?: Record<string, string[]>
 }>()
 
 const emit = defineEmits<{
   close: []
   resolve: [CombatOptions]
-  confirmDestruction: [string[]]
   prepReady: [CombatOptions]
   prepUnready: []
   supportSide: [side: 'attacker' | 'defender' | null]
@@ -66,7 +64,13 @@ const emit = defineEmits<{
   countdownComplete: []
   continueCombat: []
   stopCombat: [{ q: number; r: number }]
+  establishSiege: []
+  supportReady: [diceTargets: Record<string, string[]>]
+  'update:roundTargets': [value: Record<string, string[]>]
 }>()
+
+const tt = useUiStrings().combatTargets
+const garrisonText = useUiStrings().garrisonChoice
 
 const {
   panelRef,
@@ -76,12 +80,9 @@ const {
   consumeDragClick,
 } = useDraggablePanel()
 
-type Phase = 'pre' | 'rolling' | 'post' | 'destruction'
+type Phase = 'pre' | 'rolling' | 'post'
 
 const phase = ref<Phase>('pre')
-const attackerSkipTypes = ref<ShipType[]>([])
-const defenderSkipTypes = ref<ShipType[]>([])
-const selectedDestructionIds = ref<string[]>([])
 const revealedCount = ref(0)
 const animationDone = ref(false)
 const countdownDisplay = ref<number | null>(null)
@@ -90,15 +91,12 @@ const lastAnimatedResolutionKey = ref<string | null>(null)
 let countdownTimer: ReturnType<typeof setInterval> | null = null
 let countdownCompleteEmitted = false
 /**
- * Таймеры и флаги показа бросков объявлены здесь, а не рядом с функциями ниже:
- * watch с immediate: true может запустить анимацию ещё во время setup — например,
- * у наблюдателя окно боя открывается сразу с готовым итогом. Объявление ниже по
- * файлу попадало бы во временную мёртвую зону и падало с ReferenceError, а вместе
- * с ним падало и всё окно боя.
+ * Таймер показа бросков объявлен здесь, а не рядом с функциями ниже: watch с
+ * immediate: true может запустить анимацию ещё во время setup — например, у наблюдателя
+ * окно боя открывается сразу с готовым итогом. Объявление ниже по файлу попадало бы во
+ * временную мёртвую зону и падало с ReferenceError, а вместе с ним падало и всё окно боя.
  */
 let revealTimer: ReturnType<typeof setInterval> | null = null
-const destructionReviewReady = ref(false)
-let destructionReviewTimer: ReturnType<typeof setTimeout> | null = null
 
 const isOnlinePrep = computed(() => props.prepPhase != null)
 const isBombardment = computed(() => props.preview.trigger === 'bombardment')
@@ -112,22 +110,6 @@ const isThirdParty = computed(
 )
 const localSupportCandidate = computed(() =>
   props.preview.supportCandidates?.find((candidate) => candidate.playerId === props.localPlayerId),
-)
-
-watch(
-  () => props.remoteAttackerSkips,
-  (att) => {
-    if (!isLocalAttacker.value && att?.length) attackerSkipTypes.value = [...att]
-  },
-  { immediate: true },
-)
-
-watch(
-  () => props.remoteDefenderSkips,
-  (def) => {
-    if (!isLocalDefender.value && def?.length) defenderSkipTypes.value = [...def]
-  },
-  { immediate: true },
 )
 
 watch(
@@ -170,166 +152,35 @@ const roundResult = computed((): CombatRoundResult | null => {
 
 const allRolls = computed((): ShipCombatRollLog[] => roundResult.value?.shipRolls ?? [])
 
-function uniqueTypes(ships: { type: ShipType }[]): ShipType[] {
-  return [...new Set(ships.map((s) => s.type))]
-}
+const attackerShips = computed(() => (isBombardment.value ? [] : props.preview.attacker.ships))
+const defenderShips = computed(() => props.preview.defender.ships)
+const attackerSupportShips = computed(() => props.preview.attacker.supportingShips)
+const defenderSupportShips = computed(() =>
+  isBombardment.value ? [] : props.preview.defender.supportingShips,
+)
 
-const attackerTypesPresent = computed(() => {
-  if (isBombardment.value) {
-    return uniqueTypes(props.preview.attacker.supportingShips.map((s) => ({ type: s.type })))
+/** Типы кораблей по id — чтобы подписать цели кубиков, в том числе уже уничтоженные. */
+const shipTypeById = computed(() => {
+  const map = new Map<string, ShipType>()
+  for (const ship of [...props.preview.attacker.ships, ...props.preview.defender.ships]) {
+    map.set(ship.shipId, ship.type)
   }
-  // При показе бросков — состав из фактических shipRolls раунда (не устаревший preview).
-  if (allRolls.value.length) {
-    return uniqueTypes(
-      allRolls.value
-        .filter((r) => r.side === 'attacker' && !r.supportRolls?.length)
-        .map((r) => ({ type: r.shipType })),
-    )
-  }
-  return uniqueTypes(props.preview.attacker.ships)
+  for (const roll of allRolls.value) map.set(roll.shipId, roll.shipType)
+  return map
 })
-const defenderTypesPresent = computed(() => {
-  if (allRolls.value.length) {
-    return uniqueTypes(
-      allRolls.value
-        .filter((r) => r.side === 'defender' && !r.supportRolls?.length)
-        .map((r) => ({ type: r.shipType })),
-    )
-  }
-  return uniqueTypes(props.preview.defender.ships)
-})
-
-function countShipsOfType(side: 'attacker' | 'defender', type: ShipType): number {
-  if (side === 'attacker' && isBombardment.value) {
-    return props.preview.attacker.supportingShips.filter((s) => s.type === type).length
-  }
-  if (allRolls.value.length) {
-    return allRolls.value.filter(
-      (r) => r.side === side && r.shipType === type && !r.supportRolls?.length,
-    ).length
-  }
-  const ships = side === 'attacker' ? props.preview.attacker.ships : props.preview.defender.ships
-  return ships.filter((s) => s.type === type).length
-}
-
-const attackerSupportShips = computed(() =>
-  isBombardment.value ? [] : props.preview.attacker.supportingShips,
-)
-const defenderSupportShips = computed(() => props.preview.defender.supportingShips)
-
-const needsDestructionSelection = computed(
-  () => props.resolution?.needsDestructionSelection === true,
-)
-
-const isLocalWinner = computed(() => props.resolution?.winnerId === props.localPlayerId)
-
-const loserSideShips = computed(() => {
-  if (!props.resolution) return []
-  return props.resolution.attackerWon
-    ? props.preview.defender.ships
-    : props.preview.attacker.ships
-})
-
-const loserFleetOwnerId = computed(() =>
-  props.resolution?.attackerWon ? props.preview.defenderId : props.preview.attackerId,
-)
-
-const orderedLoserShips = computed(() => {
-  const order = props.resolution?.destructionState?.loserShipIds
-  const ships = loserSideShips.value
-  if (!order?.length) return ships
-  const byId = new Map(ships.map((s) => [s.shipId, s]))
-  return order.map((id) => byId.get(id)).filter((s): s is NonNullable<typeof s> => !!s)
-})
-
-const destructionBudget = computed(
-  () => props.resolution?.destructionState?.remainingDamage ?? 0,
-)
-
-const immediatelyDestroyableIds = computed(
-  () => new Set(props.resolution?.destructionState?.immediatelyDestroyableIds ?? []),
-)
-
-const selectableIdSet = computed(
-  () => new Set(props.resolution?.destructionState?.selectableIds ?? []),
-)
-
-const canSkipDestructionSelection = computed(
-  () => needsDestructionSelection.value && selectableIdSet.value.size === 0,
-)
-
-const destructionSkipTypes = computed((): Set<ShipType> => {
-  const fromState = props.resolution?.destructionState?.prioritySkipTypes
-  if (fromState) return new Set(fromState)
-  const pending = props.snapshot.pendingCombat
-  const rs =
-    pending && (pending.phase === 'awaiting-destruction' || pending.phase === 'awaiting-continue')
-      ? pending.roundState
-      : undefined
-  if (!rs) return new Set()
-  const types = props.resolution?.attackerWon ? rs.attackerSkipTypes : rs.defenderSkipTypes
-  return new Set(types)
-})
-
-const loserUnitsForValidation = computed((): ShipUnit[] =>
-  loserSideShips.value.map((s) => ({
-    id: s.shipId,
-    type: s.type,
-    ownerId: loserFleetOwnerId.value,
-  })),
-)
-
-function destructionCost(shipId: string): number {
-  return props.resolution?.destructionState?.destroyCostByShipId[shipId] ?? 0
-}
-
-const selectedDestructionCost = computed(() =>
-  selectedDestructionIds.value.reduce((sum, id) => {
-    return sum + destructionCost(id)
-  }, 0),
-)
-
-function destructionSelectionErrors(ids: readonly string[]): string[] {
-  if (!ids.length) return []
-  const state = props.resolution?.destructionState
-  return validateDestructionSelection(
-    loserUnitsForValidation.value,
-    ids,
-    destructionBudget.value,
-    destructionSkipTypes.value,
-    {
-      ignoreDestructionPriority: state?.ignoreDestructionPriority ?? false,
-      destroyCostForType: (type) => {
-        const sample = loserSideShips.value.find((s) => s.type === type)
-        return sample ? destructionCost(sample.shipId) : SHIP_DESTROY_COST[type]
-      },
-    },
-  )
-}
-
-function pruneDestructionSelection(ids: readonly string[]): string[] {
-  const kept: string[] = []
-  for (const id of ids) {
-    const trial = [...kept, id]
-    if (destructionSelectionErrors(trial).length === 0) kept.push(id)
-  }
-  return kept
-}
 
 function resolutionReadyForRolling(): boolean {
   return props.resolution != null && props.prepPhase == null
 }
 
-/**
- * Ключ анимации — только броски текущего раунда. Применение уничтожения меняет
- * fingerprint результата (destroyed/needsSelection), но броски те же — повторно
- * проигрывать анимацию и показывать «старый» состав флота нельзя.
- */
+/** Ключ анимации — только броски текущего раунда. */
 function combatAnimationKey(): string | null {
   if (!props.resolution) return null
-  const rolls = roundResult.value?.shipRolls ?? []
   const roundsLen = props.resolution.rounds?.length ?? 1
-  return `${roundsLen}:${rolls.map((r) => `${r.shipId}:${r.side}:${r.total}`).join('|')}`
+  const rolls = allRolls.value
+    .map((r) => `${r.shipId}:${r.dice.map((d) => `${d.value}>${d.targetShipId ?? '-'}`).join('.')}`)
+    .join('|')
+  return `${props.resolution.coord.q},${props.resolution.coord.r}:${roundsLen}:${rolls}`
 }
 
 function tryStartRollingAnimation() {
@@ -338,7 +189,7 @@ function tryStartRollingAnimation() {
   if (!key) return
 
   if (key === lastAnimatedResolutionKey.value) {
-    if (animationDone.value || phase.value === 'post' || phase.value === 'destruction') return
+    if (animationDone.value || phase.value === 'post') return
     if (revealTimer) return
   }
 
@@ -355,7 +206,7 @@ watch(
       return
     }
     if (prepPhase != null) {
-      if (phase.value !== 'destruction') phase.value = 'pre'
+      phase.value = 'pre'
       return
     }
     tryStartRollingAnimation()
@@ -363,21 +214,17 @@ watch(
   { immediate: true },
 )
 
-function sideDiceTotal(side: 'attacker' | 'defender', revealedOnly: number): number {
+function sideHits(side: 'attacker' | 'defender', revealedOnly: number): number {
   return allRolls.value
     .slice(0, revealedOnly)
     .filter((r) => r.side === side)
-    .reduce((sum, r) => sum + r.total, 0)
+    .reduce((sum, r) => sum + r.hits, 0)
 }
 
-const attackerRunningTotal = computed(() => sideDiceTotal('attacker', revealedCount.value))
-const defenderRunningTotal = computed(() => sideDiceTotal('defender', revealedCount.value))
-const finalAttackerTotal = computed(() =>
-  roundResult.value ? sumCombatSideDiceTotal(allRolls.value, 'attacker') : 0,
-)
-const finalDefenderTotal = computed(() =>
-  roundResult.value ? sumCombatSideDiceTotal(allRolls.value, 'defender') : 0,
-)
+const attackerRunningHits = computed(() => sideHits('attacker', revealedCount.value))
+const defenderRunningHits = computed(() => sideHits('defender', revealedCount.value))
+const finalAttackerHits = computed(() => roundResult.value?.attackerHits ?? 0)
+const finalDefenderHits = computed(() => roundResult.value?.defenderHits ?? 0)
 
 function startRevealAnimation() {
   revealedCount.value = 0
@@ -386,7 +233,7 @@ function startRevealAnimation() {
 
   if (allRolls.value.length === 0) {
     animationDone.value = true
-    goToPostPhase()
+    phase.value = 'post'
     return
   }
 
@@ -395,51 +242,12 @@ function startRevealAnimation() {
       if (revealTimer) clearInterval(revealTimer)
       revealTimer = null
       animationDone.value = true
-      goToPostPhase()
+      phase.value = 'post'
       return
     }
     revealedCount.value++
   }, 650)
 }
-
-function goToPostPhase() {
-  destructionReviewReady.value = false
-  if (destructionReviewTimer) {
-    clearTimeout(destructionReviewTimer)
-    destructionReviewTimer = null
-  }
-  phase.value = 'post'
-  if (needsDestructionSelection.value && isLocalWinner.value) {
-    destructionReviewReady.value = true
-  }
-}
-
-function openDestructionPicker() {
-  selectedDestructionIds.value = []
-  phase.value = 'destruction'
-}
-
-const attackerShields = computed(() =>
-  shieldContributions.value.filter((s) => s.ownerId === props.preview.attackerId),
-)
-const defenderShields = computed(() =>
-  shieldContributions.value.filter((s) => s.ownerId === props.preview.defenderId),
-)
-
-/** После confirm-destruction / перехода к continue показываем итог, а не пустой экран выбора */
-watch(
-  () =>
-    [
-      props.resolution?.needsDestructionSelection === true,
-      props.snapshot.pendingCombat?.phase,
-    ] as const,
-  ([needsDestruction, pendingPhase]) => {
-    if (phase.value !== 'destruction') return
-    if (!needsDestruction || pendingPhase === 'awaiting-continue') {
-      phase.value = 'post'
-    }
-  },
-)
 
 function playerLabel(id: string): string {
   return props.playerNames?.[id] ?? id
@@ -456,31 +264,34 @@ function sideColorVars(playerId: string): { '--side-color': string } {
 
 function rollLabel(entry: ShipCombatRollLog): string {
   const name = SHIP_LABELS[entry.shipType]
-  if (entry.supportRolls?.length) return `Поддержка · ${name}`
+  if (entry.distance > 0) {
+    return isBombardment.value ? `${name} · с ${entry.distance} кл.` : `Поддержка · ${name} · ${entry.distance} кл.`
+  }
   return name
 }
 
-function shieldLabel(contribution: ShieldContribution): string {
-  return formatShieldContributionLabel(contribution)
+function dieTitle(die: CombatDieRoll): string {
+  const target = die.targetShipId ? shipTypeById.value.get(die.targetShipId) : null
+  const targetLabel = target ? SHIP_LABELS[target] : 'нет цели'
+  return `${die.value} (нужно ${die.threshold}+) → ${targetLabel}: ${die.hit ? 'попадание' : 'промах'}`
 }
 
-function supportDieFaces(type: ShipType): number {
-  return SHIP_SUPPORT_DIE_FACES[type] ?? 6
+function dieTargetShort(die: CombatDieRoll): string {
+  const target = die.targetShipId ? shipTypeById.value.get(die.targetShipId) : null
+  return target ? SHIP_LABELS[target].slice(0, 3) : '—'
 }
 
-const shieldContributions = computed(() => props.preview.shieldContributions)
-
-function rollValues(entry: ShipCombatRollLog): number[] {
-  if (entry.supportRolls?.length) return entry.supportRolls.flatMap((s) => s.rolls)
-  return entry.combatRolls
+/** Кубики, порог и прочность корабля одной строкой. */
+function shipStatsLabel(ship: Pick<CombatParticipant, 'dice' | 'threshold'>): string {
+  if (!ship.dice || ship.threshold == null) return 'не стреляет'
+  return `${ship.dice}к · ${ship.threshold}+`
 }
 
-const isRoundDraw = computed(() =>
-  isCombatRoundDraw({
-    roundWinner: roundResult.value?.winner,
-    winnerId: props.resolution?.winnerId,
-  }),
-)
+function hullPips(ship: Pick<CombatParticipant, 'hull' | 'damage'>): boolean[] {
+  return Array.from({ length: ship.hull }, (_, i) => i < ship.hull - ship.damage)
+}
+
+const battleOver = computed(() => !props.snapshot.pendingCombat || props.snapshot.pendingCombat.phase === 'prep')
 
 const roundOutcome = computed(() =>
   combatRoundOutcome({
@@ -488,7 +299,8 @@ const roundOutcome = computed(() =>
     attackerId: props.preview.attackerId,
     defenderId: props.preview.defenderId,
     winnerId: props.resolution?.winnerId,
-    roundWinner: roundResult.value?.winner,
+    battleOver: battleOver.value,
+    stalemate: props.resolution?.stalemate === true,
   }),
 )
 
@@ -496,31 +308,27 @@ const decisionStatusText = computed(() =>
   combatDecisionStatusLine({
     pending: props.snapshot.pendingCombat,
     isBombardment: isBombardment.value,
-    isRoundDraw: isRoundDraw.value,
   }),
 )
-
-const roundDamageText = computed(() => {
-  if (!props.resolution) return ''
-  const rawDamage = props.resolution.rawDamage ?? 0
-  const absorbed = props.resolution.shieldAbsorbed ?? 0
-  const remaining = Math.max(0, rawDamage - absorbed)
-  if (absorbed > 0) {
-    return `Щиты поглотили ${absorbed} из ${rawDamage}. На уничтожение ${remaining}.`
-  }
-  if (rawDamage > 0) {
-    return `На уничтожение ${remaining}.`
-  }
-  return ''
-})
 
 const destroyedShipsText = computed(() => {
   if (!props.resolution?.destroyedShipIds.length) return ''
   const labels = props.resolution.destroyedShipIds.map((id) => {
-    const ship = loserSideShips.value.find((candidate) => candidate.shipId === id)
-    return ship ? SHIP_LABELS[ship.type] : id
+    const type = shipTypeById.value.get(id)
+    return type ? SHIP_LABELS[type] : id
   })
   return `Уничтожено: ${labels.join(', ')}.`
+})
+
+const damagedShipsText = computed(() => {
+  const damage = props.resolution?.damageByShipId
+  if (!damage) return ''
+  const parts: string[] = []
+  for (const ship of [...props.preview.attacker.ships, ...props.preview.defender.ships]) {
+    const taken = damage[ship.shipId]
+    if (taken) parts.push(`${SHIP_LABELS[ship.type]} ${taken}/${ship.hull}`)
+  }
+  return parts.length ? `Повреждены: ${parts.join(', ')}.` : ''
 })
 
 const showModalContinueActions = computed(
@@ -530,231 +338,76 @@ const showModalContinueActions = computed(
     && props.continueDecisionRole != null,
 )
 
-function presentTypesOnFleet(fleetSide: 'attacker' | 'defender'): ShipType[] {
-  return fleetSide === 'attacker' ? attackerTypesPresent.value : defenderTypesPresent.value
+function isLocalFleet(side: 'attacker' | 'defender'): boolean {
+  const owner = side === 'attacker' ? props.preview.attackerId : props.preview.defenderId
+  return owner === props.localPlayerId
 }
 
-function skipTitleOnFleet(fleetSide: 'attacker' | 'defender', type: ShipType): string {
-  if (!canToggleSkipOnFleet(fleetSide)) return SHIP_LABELS[type]
-  if (isTypeSkippedOnFleet(fleetSide, type)) return 'Снять пропуск (снимет и следующие)'
-  if (canInteractSkipOnCard(fleetSide, type)) return 'Пропустить приоритет (+1 цена)'
-  const chain = presentDestructionPriorityChain(presentTypesOnFleet(fleetSide))
-  if (chain.length <= 1 || chain[chain.length - 1] === type) {
-    return 'Пропуск бессмысленен: уже можно атаковать любой корабль этого флота'
-  }
-  return 'Сначала пропустите предыдущий тип в порядке приоритета'
+const prepOdds = computed(() => estimateBattleOutcome(props.preview, { samples: 200 }))
+
+/** Игрок стреляет в этом бою — ему выбирать цели. */
+const localFiringSide = computed(() => combatSideOfPlayer(props.preview, props.localPlayerId))
+const localEnemyId = computed(() =>
+  localFiringSide.value === 'attacker' ? props.preview.defenderId : props.preview.attackerId,
+)
+
+/** Цели первого раунда. Начинаем с предложения игры; состав боя поменялся — предлагаем заново. */
+const prepTargets = ref<Record<string, string[]>>({})
+const prepTargetsKey = computed(() => [
+  ...playerCombatDice(props.preview, props.localPlayerId).map((die) => `${die.shooterShipId}#${die.index}`),
+  '|',
+  ...playerCombatTargets(props.preview, props.localPlayerId).map((target) => target.shipId),
+].join(','))
+watch(
+  prepTargetsKey,
+  () => {
+    prepTargets.value = autoDiceTargetsFor(props.preview, props.localPlayerId)
+  },
+  { immediate: true },
+)
+
+const showPrepTargets = computed(
+  () =>
+    phase.value === 'pre'
+    && localFiringSide.value != null
+    && !isDefenderObserver.value
+    && !(props.assaultBlocked && isLocalAttacker.value),
+)
+
+const pendingDamage = computed(() => props.snapshot.pendingCombat?.damageByShipId ?? {})
+const pendingRound = computed(() => props.snapshot.pendingCombat?.roundNumber ?? 1)
+
+function localTargetsOptions(): CombatOptions {
+  const side = localFiringSide.value
+  return side ? { [side]: { diceTargets: prepTargets.value } } : {}
 }
 
-function canInteractSkipOnCard(fleetSide: 'attacker' | 'defender', type: ShipType): boolean {
-  if (!canToggleSkipOnFleet(fleetSide)) return false
-  return canTogglePrioritySkipType(type, skipsAppliedToFleet(fleetSide), presentTypesOnFleet(fleetSide))
-}
-
-function toggleSkipType(side: 'attacker' | 'defender', type: ShipType) {
-  const fleetSide: 'attacker' | 'defender' = side === 'attacker' ? 'defender' : 'attacker'
-  const refVal = side === 'attacker' ? attackerSkipTypes : defenderSkipTypes
-  refVal.value = applyPrioritySkipToggle(type, refVal.value, presentTypesOnFleet(fleetSide))
-}
-
-function buildCombatOptions(): CombatOptions {
-  const attSkips = attackerSkipTypes.value.map((shipType) => ({ shipType }))
-  const defSkips = defenderSkipTypes.value.map((shipType) => ({ shipType }))
-  return {
-    attacker: attSkips.length ? { prioritySkips: attSkips } : undefined,
-    defender: defSkips.length ? { prioritySkips: defSkips } : undefined,
-  }
+function pct(n: number): string {
+  return `${Math.round(n * 100)}%`
 }
 
 function startBattle() {
-  emit('resolve', buildCombatOptions())
+  emit('resolve', localTargetsOptions())
 }
 
 function submitPrepReady() {
-  emit('prepReady', buildCombatOptions())
+  emit('prepReady', localTargetsOptions())
 }
 
 function submitPrepUnready() {
   emit('prepUnready')
 }
 
-function toggleDestruction(shipId: string) {
-  if (selectedDestructionIds.value.includes(shipId)) {
-    selectedDestructionIds.value = pruneDestructionSelection(
-      selectedDestructionIds.value.filter((id) => id !== shipId),
-    )
-    return
-  }
-  if (!canToggleDestruction(shipId)) return
-  selectedDestructionIds.value = [...selectedDestructionIds.value, shipId]
-}
-
-function canToggleDestruction(shipId: string): boolean {
-  if (selectedDestructionIds.value.includes(shipId)) return true
-  return (
-    destructionSelectionErrors([...selectedDestructionIds.value, shipId]).length === 0
-  )
-}
-
-function destructionBlockedReason(shipId: string): string | null {
-  if (selectedDestructionIds.value.includes(shipId) || canToggleDestruction(shipId)) return null
-  const cost = destructionCost(shipId)
-  if (selectedDestructionCost.value + cost > destructionBudget.value) {
-    return 'Не хватает бюджета'
-  }
-  const err = destructionSelectionErrors([...selectedDestructionIds.value, shipId])[0]
-  return err ?? 'Сначала корабли выше по приоритету'
-}
-
-function confirmDestructionChoice() {
-  if (destructionSelectionErrors(selectedDestructionIds.value).length) return
-  emit('confirmDestruction', selectedDestructionIds.value)
-}
-
 function onKeydown(e: KeyboardEvent) {
-  if (e.key === 'Escape' && (phase.value === 'post' || phase.value === 'destruction')) {
+  if (e.key === 'Escape' && phase.value === 'post') {
     e.preventDefault()
-    if (phase.value !== 'destruction') emit('close')
+    emit('close')
   }
 }
 
 function onBackdropClick() {
   if (consumeDragClick()) return
   if (phase.value === 'post') emit('close')
-}
-
-/** Skip на флот объявляет противоположная сторона. */
-function skipsAppliedToFleet(fleetSide: 'attacker' | 'defender'): ShipType[] {
-  return fleetSide === 'attacker' ? defenderSkipTypes.value : attackerSkipTypes.value
-}
-
-function isTypeSkippedOnFleet(fleetSide: 'attacker' | 'defender', type: ShipType): boolean {
-  return skipsAppliedToFleet(fleetSide).includes(type)
-}
-
-function canToggleSkipOnFleet(fleetSide: 'attacker' | 'defender'): boolean {
-  if (isThirdParty.value || isDefenderObserver.value) return false
-  if (fleetSide === 'defender') {
-    if (isBombardment.value && isOnlinePrep.value && !isLocalAttacker.value) return false
-    return !isOnlinePrep.value || isLocalAttacker.value
-  }
-  if (isBombardment.value) return false
-  return !isOnlinePrep.value || isLocalDefender.value
-}
-
-function toggleSkipOnFleet(fleetSide: 'attacker' | 'defender', type: ShipType) {
-  if (!canToggleSkipOnFleet(fleetSide)) return
-  const declarer = fleetSide === 'attacker' ? 'defender' : 'attacker'
-  toggleSkipType(declarer, type)
-}
-
-function destroyCostLabel(type: ShipType, skipped: boolean): string {
-  const base = SHIP_DESTROY_COST[type]
-  return skipped ? String(base + PRIORITY_SKIP_DESTROY_SURCHARGE) : String(base)
-}
-
-function diceForType(type: ShipType): number {
-  return SHIP_COMBAT_DICE[type] ?? 0
-}
-
-function fleetOwnerId(side: 'attacker' | 'defender'): string {
-  return side === 'attacker' ? props.preview.attackerId : props.preview.defenderId
-}
-
-function isLocalFleet(side: 'attacker' | 'defender'): boolean {
-  return fleetOwnerId(side) === props.localPlayerId
-}
-
-const enemyFleetSide = computed((): 'attacker' | 'defender' | null => {
-  if (isLocalAttacker.value) return 'defender'
-  if (isLocalDefender.value && !isBombardment.value) return 'attacker'
-  return null
-})
-
-/** Рейка приоритета — флот противника, по которому объявляем skip. */
-const priorityRailTypes = computed(() => {
-  if (!enemyFleetSide.value) {
-    const present = new Set([...attackerTypesPresent.value, ...defenderTypesPresent.value])
-    return DESTRUCTION_PRIORITY.filter((t) => present.has(t))
-  }
-  return presentDestructionPriorityChain(presentTypesOnFleet(enemyFleetSide.value))
-})
-
-const mySkipTypes = computed((): ShipType[] => {
-  if (isLocalAttacker.value) return attackerSkipTypes.value
-  if (isLocalDefender.value) return defenderSkipTypes.value
-  return []
-})
-
-const mySkipCount = computed(() => mySkipTypes.value.length)
-
-const attackableEnemyTypes = computed((): ShipType[] => {
-  if (!enemyFleetSide.value) return []
-  return selectableDestructionTypes(presentTypesOnFleet(enemyFleetSide.value), mySkipTypes.value)
-})
-
-const primaryEnemyTargetType = computed((): ShipType | null => {
-  if (!enemyFleetSide.value) return null
-  return primaryDestructionType(presentTypesOnFleet(enemyFleetSide.value), mySkipTypes.value)
-})
-
-const attackableEnemyLabels = computed(() =>
-  attackableEnemyTypes.value.map((t) => SHIP_LABELS[t]).join(', '),
-)
-
-const nextSkippableType = computed((): ShipType | null => {
-  if (!enemyFleetSide.value) return null
-  const present = presentTypesOnFleet(enemyFleetSide.value)
-  const chain = presentDestructionPriorityChain(present)
-  for (const t of chain) {
-    if (canTogglePrioritySkipType(t, mySkipTypes.value, present) && !mySkipTypes.value.includes(t)) {
-      return t
-    }
-  }
-  return null
-})
-
-const prepDiceSummary = computed(() => {
-  const a =
-    props.preview.attacker.combatDiceTotal + props.preview.attacker.supportDiceTotal
-  const d =
-    props.preview.defender.combatDiceTotal + props.preview.defender.supportDiceTotal
-  const edge = (a - d) * 3.5
-  return { attackerDice: a, defenderDice: d, expectedEdge: edge }
-})
-
-const prepOdds = computed(() =>
-  estimateRoundOneOutcome(props.preview, { samples: 160 }),
-)
-
-function pct(n: number): string {
-  return `${Math.round(n * 100)}%`
-}
-
-function railItemClass(t: ShipType): Record<string, boolean> {
-  if (!enemyFleetSide.value) return {}
-  const skipped = isTypeSkippedOnFleet(enemyFleetSide.value, t)
-  const skippable =
-    canInteractSkipOnCard(enemyFleetSide.value, t) && !skipped
-  const primary = primaryEnemyTargetType.value === t
-  const locked =
-    canToggleSkipOnFleet(enemyFleetSide.value)
-    && !skipped
-    && !skippable
-    && !primary
-  return {
-    'priority-rail-item--enemy-skip': skipped,
-    'priority-rail-item--skippable': skippable,
-    'priority-rail-item--primary': primary && !skipped,
-    'priority-rail-item--locked': locked,
-  }
-}
-
-function isEnemyShipAttackable(fleetSide: 'attacker' | 'defender', type: ShipType): boolean {
-  return enemyFleetSide.value === fleetSide && attackableEnemyTypes.value.includes(type)
-}
-
-function isEnemyShipPrimary(fleetSide: 'attacker' | 'defender', type: ShipType): boolean {
-  return enemyFleetSide.value === fleetSide && primaryEnemyTargetType.value === type
 }
 
 onMounted(() => {
@@ -765,7 +418,6 @@ onUnmounted(() => {
   window.removeEventListener('keydown', onKeydown)
   if (revealTimer) clearInterval(revealTimer)
   if (countdownTimer) clearInterval(countdownTimer)
-  if (destructionReviewTimer) clearTimeout(destructionReviewTimer)
 })
 </script>
 
@@ -790,12 +442,12 @@ onUnmounted(() => {
               phase === 'pre'
                 ? isBombardment
                   ? 'Подготовка к обстрелу'
-                  : 'Подготовка к бою'
-                : phase === 'destruction'
-                  ? 'Выбор уничтожения'
-                  : isBombardment
-                    ? 'Обстрел'
-                    : 'Бой'
+                  : siegeResponse
+                    ? 'Ответ на осаду'
+                    : 'Подготовка к бою'
+                : isBombardment
+                  ? 'Обстрел'
+                  : 'Бой'
             }}
           </h2>
           <p class="battle-sub">
@@ -812,7 +464,13 @@ onUnmounted(() => {
         <section v-if="phase === 'pre'" class="pre-phase">
           <template v-if="isThirdParty">
             <p class="observer-banner">
-              {{ localSupportCandidate ? 'Сейчас будет бой. Ваши соседние корабли могут поддержать одну сторону.' : 'Сейчас будет бой.' }}
+              {{
+                localSupportCandidate?.garrisonShipIds?.length
+                  ? garrisonText.banner
+                  : localSupportCandidate
+                    ? 'Сейчас будет бой. Ваши корабли рядом могут поддержать одну сторону.'
+                    : 'Сейчас будет бой.'
+              }}
             </p>
             <ul v-if="localSupportCandidate" class="support-choice-list">
               <li v-for="ship in localSupportCandidate.ships" :key="ship.shipId">
@@ -821,413 +479,147 @@ onUnmounted(() => {
                   :style="{ background: playerColor(localPlayerId) }"
                   aria-hidden="true"
                 />
-                {{ SHIP_LABELS[ship.type] }} · +{{ ship.supportDice }}d{{ SHIP_SUPPORT_DIE_FACES[ship.type] ?? 4 }}
+                {{ SHIP_LABELS[ship.type] }} · {{ ship.dice }}к на {{ ship.threshold }}+
                 <span class="muted">({{ ship.fromCoord.q }}, {{ ship.fromCoord.r }})</span>
               </li>
             </ul>
             <p v-if="selfReady" class="observer-hint">
               Готовность подтверждена. Ждём остальных участников.
             </p>
-            <p v-else class="observer-hint">
+            <p v-else-if="!supportSide" class="observer-hint">
               Выберите сторону или «Не поддерживать» — без вашего ответа бой не начнётся.
             </p>
+            <CombatTargetsPanel
+              v-if="showPrepTargets && supportSide"
+              v-model="prepTargets"
+              :preview="preview"
+              :player-id="localPlayerId"
+              :player-color="playerColor(localPlayerId)"
+              :enemy-color="playerColor(localEnemyId)"
+              :round-number="1"
+              :disabled="selfReady || resolving"
+            />
           </template>
           <template v-else>
           <p v-if="isDefenderObserver" class="observer-banner">
             Вы наблюдаете за обстрелом
           </p>
+          <p v-if="siegeResponse && isLocalAttacker" class="observer-banner">
+            Ваш центр власти осадили. Можно напасть на осаждающих сейчас или отказаться — тогда
+            гарнизон будет терять по кораблю в начале каждого хода.
+          </p>
+          <p v-if="assaultBlocked && isLocalAttacker" class="observer-banner">
+            {{ tt.assaultBlocked }}
+          </p>
+          <p v-else-if="siegeAvailable && isLocalAttacker" class="observer-banner">
+            Центр власти защищён. Можно штурмовать или осадить: флот встанет рядом с гарнизоном,
+            а гарнизон будет терять по кораблю в начале каждого хода.
+          </p>
 
           <div class="fleet-arena">
             <section
+              v-for="side in (['attacker', 'defender'] as const)"
+              :key="side"
               class="fleet-col"
-              :style="sideColorVars(preview.attackerId)"
-              :class="{
-                'fleet-col--mine': isLocalFleet('attacker'),
-                'fleet-col--target': canToggleSkipOnFleet('attacker'),
-              }"
+              :style="sideColorVars(side === 'attacker' ? preview.attackerId : preview.defenderId)"
+              :class="{ 'fleet-col--mine': isLocalFleet(side) }"
             >
               <header class="fleet-col-head">
-                <span class="fleet-swatch" :style="{ background: playerColor(preview.attackerId) }" />
+                <span
+                  class="fleet-swatch"
+                  :style="{ background: playerColor(side === 'attacker' ? preview.attackerId : preview.defenderId) }"
+                />
                 <div class="fleet-col-titles">
-                  <strong>{{ isBombardment ? 'Обстрел' : 'Атака' }}</strong>
-                  <span>{{ playerLabel(preview.attackerId) }}</span>
+                  <strong>{{ side === 'attacker' ? (isBombardment ? 'Обстрел' : 'Атака') : 'Защита' }}</strong>
+                  <span>{{ playerLabel(side === 'attacker' ? preview.attackerId : preview.defenderId) }}</span>
                 </div>
                 <span
-                  v-if="isOnlinePrep"
+                  v-if="isOnlinePrep && (side === 'attacker' || !isBombardment)"
                   class="ready-pill"
-                  :class="{ 'ready-pill--on': attackerReady }"
-                  :title="attackerReady ? 'Готов' : 'Не готов'"
+                  :class="{ 'ready-pill--on': side === 'attacker' ? attackerReady : defenderReady }"
+                  :title="(side === 'attacker' ? attackerReady : defenderReady) ? 'Готов' : 'Не готов'"
                 />
               </header>
-              <div v-if="attackerTypesPresent.length || attackerSupportShips.length" class="ship-cards">
-                <button
-                  v-for="t in attackerTypesPresent"
-                  :key="'att-' + t"
-                  type="button"
+              <div
+                v-if="(side === 'attacker' ? attackerShips : defenderShips).length
+                  || (side === 'attacker' ? attackerSupportShips : defenderSupportShips).length"
+                class="ship-cards"
+              >
+                <div
+                  v-for="ship in (side === 'attacker' ? attackerShips : defenderShips)"
+                  :key="ship.shipId"
                   class="ship-card"
-                  :class="{
-                    'ship-card--skipped': isTypeSkippedOnFleet('attacker', t),
-                    'ship-card--interactive': canInteractSkipOnCard('attacker', t),
-                    'ship-card--pulse': canInteractSkipOnCard('attacker', t) && !isTypeSkippedOnFleet('attacker', t),
-                    'ship-card--attackable': isEnemyShipAttackable('attacker', t),
-                    'ship-card--primary-target': isEnemyShipPrimary('attacker', t),
-                    'ship-card--dim':
-                      canToggleSkipOnFleet('attacker')
-                      && !canInteractSkipOnCard('attacker', t)
-                      && !isTypeSkippedOnFleet('attacker', t),
-                    'ship-card--mine': isLocalFleet('attacker'),
-                  }"
-                  :disabled="!canInteractSkipOnCard('attacker', t)"
-                  :title="skipTitleOnFleet('attacker', t)"
-                  @click="toggleSkipOnFleet('attacker', t)"
+                  :class="{ 'ship-card--mine': isLocalFleet(side) }"
+                  :title="`${SHIP_LABELS[ship.type]}: ${shipStatsLabel(ship)}, прочность ${ship.hull}`
+                    + (ship.bonusDice ? `, от авианосца +${ship.bonusDice}к` : '')"
                 >
                   <svg class="ship-card-glyph" viewBox="-14 -14 28 28" aria-hidden="true">
-                    <ShipGlyph :type="t" :player-color="playerColor(preview.attackerId)" :scale="0.9" />
+                    <ShipGlyph :type="ship.type" :player-color="playerColor(ship.ownerId)" :scale="0.9" />
                   </svg>
-                  <span v-if="countShipsOfType('attacker', t) > 1" class="ship-card-count">
-                    ×{{ countShipsOfType('attacker', t) }}
-                  </span>
-                  <span v-if="isEnemyShipPrimary('attacker', t)" class="target-badge">цель</span>
                   <span class="ship-card-meta">
-                    <span v-if="diceForType(t)" class="meta-dice">{{ diceForType(t) }}d6</span>
-                    <span class="meta-cost">{{ destroyCostLabel(t, isTypeSkippedOnFleet('attacker', t)) }}</span>
+                    <span class="meta-dice">{{ shipStatsLabel(ship) }}</span>
                   </span>
-                  <span v-if="isTypeSkippedOnFleet('attacker', t)" class="skip-badge">+1</span>
-                </button>
+                  <span class="hull-pips" aria-hidden="true">
+                    <span
+                      v-for="(alive, pi) in hullPips(ship)"
+                      :key="pi"
+                      class="hull-pip"
+                      :class="{ 'hull-pip--lost': !alive }"
+                    />
+                  </span>
+                  <span v-if="ship.bonusDice" class="bonus-badge">+{{ ship.bonusDice }}</span>
+                </div>
                 <div
-                  v-for="sup in attackerSupportShips"
-                  :key="'att-sup-' + sup.shipId"
+                  v-for="sup in (side === 'attacker' ? attackerSupportShips : defenderSupportShips)"
+                  :key="'sup-' + sup.shipId"
                   class="ship-card ship-card--support"
                   :style="sideColorVars(sup.ownerId)"
-                  :title="`Поддержка · ${playerLabel(sup.ownerId)} · (${sup.fromCoord.q}, ${sup.fromCoord.r})`"
+                  :title="`${isBombardment ? 'Обстрел' : 'Поддержка'} · ${playerLabel(sup.ownerId)} · (${sup.fromCoord.q}, ${sup.fromCoord.r}), ${sup.distance} кл.`"
                 >
                   <svg class="ship-card-glyph" viewBox="-14 -14 28 28" aria-hidden="true">
                     <ShipGlyph :type="sup.type" :player-color="playerColor(sup.ownerId)" :scale="0.9" />
                   </svg>
-                  <span class="support-tag">поддержка · +{{ sup.supportDice }}d{{ supportDieFaces(sup.type) }}</span>
+                  <span class="support-tag">{{ isBombardment ? 'обстрел' : 'поддержка' }}</span>
                   <span class="ship-card-meta">
-                    <span class="meta-dice">+{{ sup.supportDice }}d{{ supportDieFaces(sup.type) }}</span>
+                    <span class="meta-dice">{{ sup.dice }}к · {{ sup.threshold }}+</span>
                   </span>
                 </div>
               </div>
               <p v-else class="fleet-empty">Нет кораблей</p>
-            </section>
-
-            <div class="fleet-vs" aria-hidden="true">
-              <span>VS</span>
-            </div>
-
-            <section
-              class="fleet-col"
-              :style="sideColorVars(preview.defenderId)"
-              :class="{
-                'fleet-col--mine': isLocalFleet('defender'),
-                'fleet-col--target': canToggleSkipOnFleet('defender'),
-              }"
-            >
-              <header class="fleet-col-head">
-                <span class="fleet-swatch" :style="{ background: playerColor(preview.defenderId) }" />
-                <div class="fleet-col-titles">
-                  <strong>Защита</strong>
-                  <span>{{ playerLabel(preview.defenderId) }}</span>
-                </div>
-                <span
-                  v-if="isOnlinePrep && !isBombardment"
-                  class="ready-pill"
-                  :class="{ 'ready-pill--on': defenderReady }"
-                  :title="defenderReady ? 'Готов' : 'Не готов'"
-                />
-              </header>
-              <div v-if="defenderTypesPresent.length || defenderSupportShips.length" class="ship-cards">
-                <button
-                  v-for="t in defenderTypesPresent"
-                  :key="'def-' + t"
-                  type="button"
-                  class="ship-card"
-                  :class="{
-                    'ship-card--skipped': isTypeSkippedOnFleet('defender', t),
-                    'ship-card--interactive': canInteractSkipOnCard('defender', t),
-                    'ship-card--pulse': canInteractSkipOnCard('defender', t) && !isTypeSkippedOnFleet('defender', t),
-                    'ship-card--attackable': isEnemyShipAttackable('defender', t),
-                    'ship-card--primary-target': isEnemyShipPrimary('defender', t),
-                    'ship-card--dim':
-                      canToggleSkipOnFleet('defender')
-                      && !canInteractSkipOnCard('defender', t)
-                      && !isTypeSkippedOnFleet('defender', t),
-                    'ship-card--mine': isLocalFleet('defender'),
-                  }"
-                  :disabled="!canInteractSkipOnCard('defender', t)"
-                  :title="skipTitleOnFleet('defender', t)"
-                  @click="toggleSkipOnFleet('defender', t)"
-                >
-                  <svg class="ship-card-glyph" viewBox="-14 -14 28 28" aria-hidden="true">
-                    <ShipGlyph :type="t" :player-color="playerColor(preview.defenderId)" :scale="0.9" />
-                  </svg>
-                  <span v-if="countShipsOfType('defender', t) > 1" class="ship-card-count">
-                    ×{{ countShipsOfType('defender', t) }}
-                  </span>
-                  <span v-if="isEnemyShipPrimary('defender', t)" class="target-badge">цель</span>
-                  <span class="ship-card-meta">
-                    <span v-if="diceForType(t)" class="meta-dice">{{ diceForType(t) }}d6</span>
-                    <span class="meta-cost">{{ destroyCostLabel(t, isTypeSkippedOnFleet('defender', t)) }}</span>
-                  </span>
-                  <span v-if="isTypeSkippedOnFleet('defender', t)" class="skip-badge">+1</span>
-                </button>
-                <div
-                  v-for="sup in defenderSupportShips"
-                  :key="'def-sup-' + sup.shipId"
-                  class="ship-card ship-card--support"
-                  :style="sideColorVars(sup.ownerId)"
-                  :title="`Поддержка · ${playerLabel(sup.ownerId)} · (${sup.fromCoord.q}, ${sup.fromCoord.r})`"
-                >
-                  <svg class="ship-card-glyph" viewBox="-14 -14 28 28" aria-hidden="true">
-                    <ShipGlyph :type="sup.type" :player-color="playerColor(sup.ownerId)" :scale="0.9" />
-                  </svg>
-                  <span class="support-tag">поддержка · +{{ sup.supportDice }}d{{ supportDieFaces(sup.type) }}</span>
-                  <span class="ship-card-meta">
-                    <span class="meta-dice">+{{ sup.supportDice }}d{{ supportDieFaces(sup.type) }}</span>
-                  </span>
-                </div>
-              </div>
-              <p v-else class="fleet-empty">Нет кораблей</p>
+              <p class="fleet-firepower">
+                {{ (side === 'attacker' ? preview.attacker : preview.defender).diceTotal }} кубиков ·
+                ожидаемо {{ (side === 'attacker' ? preview.attacker : preview.defender).expectedHits.toFixed(1) }} попад.
+              </p>
             </section>
           </div>
 
           <div v-if="!isDefenderObserver" class="prep-outlook">
-            <p class="prep-odds" title="Оценка по среднему броску 3.5 и симуляции раунда">
-              <span class="prep-odds-dice">
-                {{ prepDiceSummary.attackerDice }}d6 vs {{ prepDiceSummary.defenderDice }}d6
-              </span>
-              <span
-                class="prep-odds-edge"
-                :style="
-                  prepDiceSummary.expectedEdge > 0.5
-                    ? sideColorVars(preview.attackerId)
-                    : prepDiceSummary.expectedEdge < -0.5
-                      ? sideColorVars(preview.defenderId)
-                      : undefined
-                "
-              >
-                ожид. перевес
-                {{ prepDiceSummary.expectedEdge > 0 ? '+' : '' }}{{ prepDiceSummary.expectedEdge.toFixed(1) }}
-              </span>
+            <p class="prep-odds" title="Симуляция боя до конца, без отступлений">
               <span class="prep-odds-pct">
                 <span :style="{ color: playerColor(preview.attackerId) }">атака {{ pct(prepOdds.win) }}</span>
-                · ничья {{ pct(prepOdds.draw) }}
+                · взаимно {{ pct(prepOdds.draw) }}
                 ·
                 <span :style="{ color: playerColor(preview.defenderId) }">защита {{ pct(prepOdds.defeat) }}</span>
               </span>
             </p>
-            <p v-if="enemyFleetSide" class="skip-cue">
-              Можно выбрать
-              <em>пропуск приоритета</em>
-              кликом по
-              <template v-if="nextSkippableType">
-                мигающему типу
-                <strong>{{ SHIP_LABELS[nextSkippableType] }}</strong>
-              </template>
-              <template v-else>флоту противника</template>
-              — только на этот раунд
-              <span v-if="mySkipCount" class="skip-cue-count">· пропущено: {{ mySkipCount }}</span>
-            </p>
-            <p v-if="enemyFleetSide && attackableEnemyLabels" class="attackable-cue">
-              При победе можно уничтожать:
-              <strong>{{ attackableEnemyLabels }}</strong>
-              <span v-if="primaryEnemyTargetType" class="attackable-cue-primary">
-                · основная цель: {{ SHIP_LABELS[primaryEnemyTargetType] }}
-              </span>
-            </p>
           </div>
 
-          <ol
-            v-if="priorityRailTypes.length"
-            class="priority-rail"
-            aria-label="Порядок уничтожения / пропуск приоритета"
-          >
-            <li
-              v-for="(t, i) in priorityRailTypes"
-              :key="'rail-' + t"
-              class="priority-rail-item"
-              :class="railItemClass(t)"
-            >
-              <span v-if="i > 0" class="priority-rail-arrow" aria-hidden="true">→</span>
-              <button
-                v-if="enemyFleetSide && canToggleSkipOnFleet(enemyFleetSide)"
-                type="button"
-                class="priority-rail-btn"
-                :disabled="!canInteractSkipOnCard(enemyFleetSide, t)"
-                :title="skipTitleOnFleet(enemyFleetSide, t)"
-                @click="toggleSkipOnFleet(enemyFleetSide, t)"
-              >
-                <svg class="priority-rail-glyph" viewBox="-12 -12 24 24" aria-hidden="true">
-                  <ShipGlyph
-                    :type="t"
-                    :player-color="
-                      enemyFleetSide === 'defender'
-                        ? playerColor(preview.defenderId)
-                        : playerColor(preview.attackerId)
-                    "
-                    :scale="0.7"
-                    :show-plate="false"
-                  />
-                </svg>
-                <span class="priority-rail-label">{{ SHIP_LABELS[t] }}</span>
-              </button>
-              <template v-else>
-                <svg class="priority-rail-glyph" viewBox="-12 -12 24 24" aria-hidden="true">
-                  <ShipGlyph
-                    :type="t"
-                    :player-color="
-                      enemyFleetSide === 'defender'
-                        ? playerColor(preview.defenderId)
-                        : enemyFleetSide === 'attacker'
-                          ? playerColor(preview.attackerId)
-                          : '#94a3b8'
-                    "
-                    :scale="0.7"
-                    :show-plate="false"
-                  />
-                </svg>
-                <span class="priority-rail-label">{{ SHIP_LABELS[t] }}</span>
-              </template>
-            </li>
-          </ol>
-
-          <div v-if="shieldContributions.length" class="shield-chips" title="Щиты сторон (поглощают у проигравшего)">
-            <template v-if="attackerShields.length">
-              <span class="shield-side-label">Атака</span>
-              <span
-                v-for="sh in attackerShields"
-                :key="'att-sh-' + sh.shipId"
-                class="shield-chip"
-                :style="sideColorVars(sh.ownerId)"
-              >
-                <svg class="shield-chip-glyph" viewBox="-12 -12 24 24" aria-hidden="true">
-                  <ShipGlyph type="shield" :player-color="playerColor(sh.ownerId)" :scale="0.65" :show-plate="false" />
-                </svg>
-                <span>{{ formatShieldContributionLabel(sh) }}</span>
-              </span>
-            </template>
-            <template v-if="defenderShields.length">
-              <span class="shield-side-label">Защита</span>
-              <span
-                v-for="sh in defenderShields"
-                :key="'def-sh-' + sh.shipId"
-                class="shield-chip"
-                :style="sideColorVars(sh.ownerId)"
-              >
-                <svg class="shield-chip-glyph" viewBox="-12 -12 24 24" aria-hidden="true">
-                  <ShipGlyph type="shield" :player-color="playerColor(sh.ownerId)" :scale="0.65" :show-plate="false" />
-                </svg>
-                <span>{{ formatShieldContributionLabel(sh) }}</span>
-              </span>
-            </template>
-          </div>
-          <p v-else-if="phase === 'pre'" class="shield-empty muted">Щитоносцев у сторон рядом с клеткой боя нет.</p>
+          <CombatTargetsPanel
+            v-if="showPrepTargets"
+            v-model="prepTargets"
+            :preview="preview"
+            :player-id="localPlayerId"
+            :player-color="playerColor(localPlayerId)"
+            :enemy-color="playerColor(localEnemyId)"
+            :round-number="1"
+            :disabled="selfReady || resolving || prepPhase === 'countdown'"
+          />
 
           <p v-if="prepPhase === 'countdown' && countdownDisplay != null" class="countdown-banner">
             {{ countdownDisplay || '…' }}
           </p>
           </template>
         </section>
-
-        <template v-else-if="phase === 'destruction'">
-          <section class="destruction-phase">
-            <p class="decision-status" role="status">{{ decisionStatusText }}</p>
-            <div class="destruction-budget" aria-live="polite">
-              <span class="destruction-budget__label">Бюджет урона</span>
-              <span class="destruction-budget__value">
-                <strong>{{ selectedDestructionCost }}</strong>
-                <span class="destruction-budget__sep">/</span>
-                {{ destructionBudget }}
-              </span>
-              <div class="destruction-budget__bar" aria-hidden="true">
-                <div
-                  class="destruction-budget__fill"
-                  :style="{
-                    width: `${destructionBudget > 0 ? Math.min(100, (selectedDestructionCost / destructionBudget) * 100) : 0}%`,
-                  }"
-                />
-              </div>
-            </div>
-            <p class="hint">
-              Порядок: {{ DESTRUCTION_PRIORITY.map((t) => SHIP_LABELS[t]).join(' → ') }}.
-              Нельзя взять следующий тип, пока не выбраны (или не пропущены priority skip) все корабли выше.
-            </p>
-            <p v-if="canSkipDestructionSelection" class="hint">
-              Ни один корабль не помещается в бюджет. Раунд завершается без уничтожения.
-            </p>
-            <ul class="destruction-list" role="list">
-              <li v-for="s in orderedLoserShips" :key="s.shipId">
-                <button
-                  type="button"
-                  class="destruction-card"
-                  :class="{
-                    'destruction-card--immediate': immediatelyDestroyableIds.has(s.shipId),
-                    'destruction-card--selected': selectedDestructionIds.includes(s.shipId),
-                    'destruction-card--locked': !canToggleDestruction(s.shipId),
-                  }"
-                  :disabled="!canToggleDestruction(s.shipId)"
-                  :aria-pressed="selectedDestructionIds.includes(s.shipId)"
-                  :aria-label="`${SHIP_LABELS[s.type]}, стоимость ${destructionCost(s.shipId)}`"
-                  @click="toggleDestruction(s.shipId)"
-                >
-                  <span
-                    class="destruction-check"
-                    :class="{ 'destruction-check--on': selectedDestructionIds.includes(s.shipId) }"
-                    aria-hidden="true"
-                  >
-                    <svg
-                      v-if="selectedDestructionIds.includes(s.shipId)"
-                      viewBox="0 0 16 16"
-                      class="destruction-check__icon"
-                    >
-                      <path
-                        d="M3.2 8.4 6.5 11.6 12.8 4.4"
-                        fill="none"
-                        stroke="currentColor"
-                        stroke-width="2.2"
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
-                      />
-                    </svg>
-                  </span>
-                  <span class="destruction-card__glyph">
-                    <ShipGlyph
-                      :type="s.type"
-                      :player-color="playerColor(loserFleetOwnerId)"
-                      :scale="0.85"
-                    />
-                  </span>
-                  <span class="destruction-card__meta">
-                    <strong>{{ SHIP_LABELS[s.type] }}</strong>
-                    <span class="destruction-card__cost">
-                      {{ destructionCost(s.shipId) }}
-                      <span class="destruction-card__cost-unit">очков</span>
-                    </span>
-                  </span>
-                  <span
-                    v-if="immediatelyDestroyableIds.has(s.shipId) && !selectedDestructionIds.includes(s.shipId)"
-                    class="destruction-badge destruction-badge--ready"
-                  >
-                    доступен
-                  </span>
-                  <span
-                    v-else-if="destructionBlockedReason(s.shipId)"
-                    class="destruction-badge destruction-badge--blocked"
-                    :title="destructionBlockedReason(s.shipId) ?? undefined"
-                  >
-                    {{
-                      destructionBlockedReason(s.shipId)?.includes('бюджет')
-                        ? 'бюджет'
-                        : 'приоритет'
-                    }}
-                  </span>
-                </button>
-              </li>
-            </ul>
-          </section>
-        </template>
 
         <template v-else>
           <section
@@ -1251,8 +643,8 @@ onUnmounted(() => {
           >
             <p class="outcome-hero__label">{{ roundOutcome.label }}</p>
             <p class="decision-status">{{ decisionStatusText }}</p>
-            <p v-if="roundDamageText" class="outcome-hero__note">{{ roundDamageText }}</p>
             <p v-if="destroyedShipsText" class="outcome-hero__note">{{ destroyedShipsText }}</p>
+            <p v-if="damagedShipsText" class="outcome-hero__note">{{ damagedShipsText }}</p>
           </section>
           <p v-else class="decision-status decision-status--rolling" role="status">
             Кубики крутятся…
@@ -1261,22 +653,35 @@ onUnmounted(() => {
           <section class="totals-bar">
             <div class="total-side" :style="sideColorVars(preview.attackerId)">
               <span class="total-label">
-                {{ isBombardment ? 'Обстрел' : 'Атакующий' }} · {{ playerLabel(preview.attackerId) }}
+                {{ isBombardment ? 'Обстрел' : 'Атакующий' }} · {{ playerLabel(preview.attackerId) }} · попаданий
               </span>
-              <span class="total-value">{{ animationDone ? finalAttackerTotal : attackerRunningTotal }}</span>
+              <span class="total-value">{{ animationDone ? finalAttackerHits : attackerRunningHits }}</span>
             </div>
             <template v-if="!isBombardment">
               <span class="total-vs">vs</span>
               <div class="total-side" :style="sideColorVars(preview.defenderId)">
-                <span class="total-label">Защитник · {{ playerLabel(preview.defenderId) }}</span>
-                <span class="total-value">{{ animationDone ? finalDefenderTotal : defenderRunningTotal }}</span>
+                <span class="total-label">Защитник · {{ playerLabel(preview.defenderId) }} · попаданий</span>
+                <span class="total-value">{{ animationDone ? finalDefenderHits : defenderRunningHits }}</span>
               </div>
             </template>
             <div v-else class="total-side total-side--passive" :style="sideColorVars(preview.defenderId)">
               <span class="total-label">Защитник · {{ playerLabel(preview.defenderId) }}</span>
-              <span class="total-value muted">не бросает</span>
+              <span class="total-value muted">не отвечает</span>
             </div>
           </section>
+
+          <CombatTargetsPanel
+            v-if="showModalContinueActions && localFiringSide && roundTargets"
+            :model-value="roundTargets"
+            :preview="preview"
+            :player-id="localPlayerId"
+            :player-color="playerColor(localPlayerId)"
+            :enemy-color="playerColor(localEnemyId)"
+            :round-number="pendingRound"
+            :damage-by-ship-id="pendingDamage"
+            :disabled="resolving"
+            @update:model-value="emit('update:roundTargets', $event)"
+          />
 
           <section class="roll-log" aria-live="polite">
             <ul class="roll-list">
@@ -1286,25 +691,24 @@ onUnmounted(() => {
                 class="roll-entry"
                 :style="sideColorVars(entry.ownerId)"
                 :class="{
-                  'roll-entry--visible': i < revealedCount,
-                  'roll-entry--support': !!entry.supportRolls?.length,
+                  'roll-entry--visible': i < revealedCount || animationDone,
+                  'roll-entry--support': entry.distance > 0,
                 }"
               >
                 <span class="roll-label">{{ rollLabel(entry) }}</span>
                 <span class="roll-dice">
-                  <span v-for="(d, di) in rollValues(entry)" :key="di" class="die">{{ d }}</span>
+                  <span
+                    v-for="(d, di) in entry.dice"
+                    :key="di"
+                    class="die"
+                    :class="d.hit ? 'die--hit' : 'die--miss'"
+                    :title="dieTitle(d)"
+                  >
+                    {{ d.value }}
+                    <span class="die-target">{{ dieTargetShort(d) }}</span>
+                  </span>
                 </span>
-                <span class="roll-sum">= {{ entry.total }}</span>
-              </li>
-              <li
-                v-for="sh in shieldContributions"
-                :key="'shield-' + sh.shipId"
-                class="roll-entry roll-entry--shield roll-entry--visible"
-                :style="sideColorVars(sh.ownerId)"
-              >
-                <span class="roll-label">{{ shieldLabel(sh) }}</span>
-                <span class="roll-shield-badge">щит</span>
-                <span class="roll-sum">до {{ sh.absorbCapacity }}</span>
+                <span class="roll-sum">{{ entry.hits }} попад.</span>
               </li>
             </ul>
           </section>
@@ -1318,6 +722,7 @@ onUnmounted(() => {
               Не поддерживать
             </button>
             <button
+              v-if="supportSide !== 'attacker'"
               type="button"
               class="btn-side"
               :style="sideColorVars(preview.attackerId)"
@@ -1327,6 +732,7 @@ onUnmounted(() => {
               Поддержать {{ playerLabel(preview.attackerId) }}
             </button>
             <button
+              v-if="supportSide !== 'defender'"
               type="button"
               class="btn-side btn-side--emphasis"
               :style="sideColorVars(preview.defenderId)"
@@ -1334,6 +740,15 @@ onUnmounted(() => {
               @click="emit('supportSide', 'defender')"
             >
               Поддержать {{ playerLabel(preview.defenderId) }}
+            </button>
+            <button
+              v-if="supportSide"
+              type="button"
+              class="btn-primary"
+              :disabled="resolving"
+              @click="emit('supportReady', prepTargets)"
+            >
+              {{ tt.supportReady }}
             </button>
           </template>
           <button
@@ -1354,10 +769,19 @@ onUnmounted(() => {
             :disabled="resolving"
             @click="emit('cancelPrep')"
           >
-            {{ isBombardment ? 'Отменить обстрел' : 'Отменить бой' }}
+            {{ isBombardment ? 'Отменить обстрел' : siegeResponse ? 'Не нападать' : 'Отменить бой' }}
           </button>
           <button
-            v-if="!selfReady"
+            v-if="siegeAvailable && localPlayerId === preview.attackerId && !selfReady"
+            type="button"
+            class="btn-secondary"
+            :disabled="resolving || prepPhase === 'countdown'"
+            @click="emit('establishSiege')"
+          >
+            Осадить
+          </button>
+          <button
+            v-if="!selfReady && !(assaultBlocked && isLocalAttacker)"
             type="button"
             class="btn-primary"
             :disabled="resolving || prepPhase === 'countdown'"
@@ -1366,7 +790,7 @@ onUnmounted(() => {
             {{ resolving ? 'Отправка…' : 'Готов' }}
           </button>
           <button
-            v-else
+            v-else-if="selfReady"
             type="button"
             class="btn-secondary"
             :disabled="resolving"
@@ -1376,47 +800,25 @@ onUnmounted(() => {
           </button>
         </template>
         <!-- «Начать бой» — только локальная игра: в онлайне бой запускает countdown -->
-        <button
-          v-else-if="phase === 'pre' && !isOnlinePrep"
-          type="button"
-          class="btn-primary"
-          :disabled="resolving"
-          @click="startBattle"
-        >
-          {{ resolving ? 'Разрешение…' : 'Начать бой' }}
-        </button>
-        <button
-          v-else-if="phase === 'post' && needsDestructionSelection && isLocalWinner"
-          type="button"
-          class="btn-primary"
-          :disabled="!destructionReviewReady || resolving"
-          @click="openDestructionPicker"
-        >
-          {{
-            destructionReviewReady
-              ? 'Выбрать уничтожение'
-              : 'Итог раунда…'
-          }}
-        </button>
-        <button
-          v-else-if="phase === 'destruction'"
-          type="button"
-          class="btn-primary"
-          :disabled="
-            resolving
-            || selectedDestructionCost > destructionBudget
-            || destructionSelectionErrors(selectedDestructionIds).length > 0
-          "
-          @click="confirmDestructionChoice"
-        >
-          {{
-            resolving
-              ? 'Применение…'
-              : canSkipDestructionSelection
-                ? 'Ничья / Продолжить без уничтожения'
-                : 'Подтвердить уничтожение'
-          }}
-        </button>
+        <template v-else-if="phase === 'pre' && !isOnlinePrep">
+          <button
+            v-if="siegeAvailable"
+            type="button"
+            class="btn-secondary"
+            :disabled="resolving"
+            @click="emit('establishSiege')"
+          >
+            Осадить
+          </button>
+          <button
+            type="button"
+            class="btn-primary"
+            :disabled="resolving"
+            @click="startBattle"
+          >
+            {{ resolving ? 'Разрешение…' : 'Начать бой' }}
+          </button>
+        </template>
         <template v-else-if="showModalContinueActions">
           <button
             type="button"
@@ -1424,9 +826,9 @@ onUnmounted(() => {
             :disabled="resolving"
             @click="emit('continueCombat')"
           >
-            Продолжить бой
+            {{ tt.fire }}
           </button>
-          <template v-if="retreatAllowed">
+          <template v-if="retreatAllowed && continueDecisionRole !== 'support'">
             <button
               v-for="coord in retreatDestinations ?? []"
               :key="`${coord.q},${coord.r}`"
@@ -1635,57 +1037,6 @@ onUnmounted(() => {
 .ship-card:disabled {
   opacity: 1;
 }
-.ship-card--interactive {
-  cursor: pointer;
-}
-.ship-card--interactive:hover {
-  transform: translateY(-2px);
-  border-color: rgba(251, 191, 36, 0.7);
-  background: rgba(120, 53, 15, 0.25);
-}
-.ship-card--interactive:active {
-  transform: translateY(0);
-}
-.ship-card--pulse {
-  animation: skip-pulse 1.1s ease-in-out infinite;
-}
-.ship-card--dim:disabled,
-.ship-card--dim {
-  opacity: 0.38;
-  filter: grayscale(0.45);
-}
-.ship-card--attackable:not(.ship-card--skipped) {
-  border-color: rgba(74, 222, 128, 0.55);
-}
-.ship-card--primary-target:not(.ship-card--skipped) {
-  border-color: rgba(74, 222, 128, 0.85);
-  box-shadow: 0 0 0 1px rgba(74, 222, 128, 0.35);
-}
-.ship-card--skipped {
-  border-color: rgba(251, 191, 36, 0.75);
-  background: rgba(120, 53, 15, 0.35);
-}
-.ship-card--skipped .ship-card-glyph {
-  opacity: 0.55;
-  filter: grayscale(0.35);
-}
-.target-badge {
-  position: absolute;
-  top: 0.2rem;
-  left: 0.2rem;
-  font-size: 0.52rem;
-  font-weight: 800;
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
-  color: #052e16;
-  background: #4ade80;
-  border-radius: 3px;
-  padding: 0 0.2rem;
-  line-height: 1.25;
-}
-.ship-card--mine:not(.ship-card--interactive) {
-  border-style: dashed;
-}
 .ship-card--support {
   border-color: color-mix(in srgb, var(--side-color, #a78bfa) 55%, transparent);
   background: color-mix(in srgb, var(--side-color, #a78bfa) 20%, rgba(2, 6, 23, 0.45));
@@ -1721,19 +1072,6 @@ onUnmounted(() => {
   font-variant-numeric: tabular-nums;
 }
 .meta-dice { color: #fbbf24; }
-.meta-cost::before { content: '¤'; margin-right: 0.05rem; opacity: 0.7; }
-.skip-badge {
-  position: absolute;
-  bottom: 0.15rem;
-  left: 0.2rem;
-  font-size: 0.58rem;
-  font-weight: 800;
-  color: #0f172a;
-  background: #fbbf24;
-  border-radius: 3px;
-  padding: 0 0.2rem;
-  line-height: 1.2;
-}
 .fleet-empty {
   margin: 0.35rem 0 0;
   font-size: 0.72rem;
@@ -1772,331 +1110,6 @@ onUnmounted(() => {
 .prep-odds-pct {
   font-variant-numeric: tabular-nums;
   color: #64748b;
-}
-.skip-cue {
-  margin: 0;
-  text-align: center;
-  font-size: 0.72rem;
-  color: #94a3b8;
-  line-height: 1.35;
-}
-.skip-cue em {
-  font-style: normal;
-  color: #fde68a;
-}
-.skip-cue strong {
-  color: #fbbf24;
-  font-weight: 700;
-}
-.skip-cue-count {
-  color: #fbbf24;
-  font-weight: 700;
-}
-.attackable-cue {
-  margin: 0;
-  text-align: center;
-  font-size: 0.74rem;
-  color: #86efac;
-  line-height: 1.35;
-}
-.attackable-cue strong {
-  color: #bbf7d0;
-  font-weight: 700;
-}
-.attackable-cue-primary {
-  color: #4ade80;
-}
-.priority-rail {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: center;
-  gap: 0.15rem;
-  margin: 0 0 0.55rem;
-  padding: 0.35rem 0.45rem;
-  list-style: none;
-  border-radius: 8px;
-  background: rgba(2, 6, 23, 0.4);
-  border: 1px solid rgba(51, 65, 85, 0.8);
-}
-.priority-rail-item {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.2rem;
-  opacity: 0.9;
-}
-.priority-rail-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.2rem;
-  margin: 0;
-  padding: 0.15rem 0.25rem;
-  border: 1px solid transparent;
-  border-radius: 6px;
-  background: transparent;
-  color: inherit;
-  cursor: pointer;
-}
-.priority-rail-btn:disabled {
-  cursor: default;
-}
-.priority-rail-item--enemy-skip {
-  opacity: 1;
-}
-.priority-rail-item--enemy-skip .priority-rail-label {
-  text-decoration: line-through;
-  color: #fde68a;
-}
-.priority-rail-item--skippable .priority-rail-btn {
-  animation: skip-pulse 1.1s ease-in-out infinite;
-  border-color: rgba(251, 191, 36, 0.65);
-  background: rgba(120, 53, 15, 0.32);
-}
-.priority-rail-item--primary .priority-rail-label {
-  color: #86efac;
-  font-weight: 700;
-}
-.priority-rail-item--locked {
-  opacity: 0.32;
-  filter: grayscale(0.4);
-}
-.priority-rail-arrow {
-  color: #475569;
-  font-size: 0.7rem;
-  margin-right: 0.15rem;
-}
-.priority-rail-glyph {
-  width: 1.35rem;
-  height: 1.35rem;
-  overflow: visible;
-}
-.priority-rail-label {
-  font-size: 0.65rem;
-  color: #cbd5e1;
-}
-@keyframes skip-pulse {
-  0%, 100% {
-    box-shadow: 0 0 0 0 rgba(251, 191, 36, 0.25);
-    filter: brightness(1);
-  }
-  50% {
-    box-shadow:
-      0 0 0 5px rgba(251, 191, 36, 0.45),
-      0 0 14px 2px rgba(251, 191, 36, 0.28);
-    filter: brightness(1.2);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .ship-card--pulse,
-  .priority-rail-item--skippable .priority-rail-btn {
-    animation: none;
-  }
-}
-.shield-chips {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: center;
-  gap: 0.35rem;
-  margin: 0 0 0.5rem;
-}
-.shield-side-label {
-  font-size: 0.68rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: #94a3b8;
-  margin-left: 0.35rem;
-}
-.shield-empty {
-  margin: 0 0 0.5rem;
-  text-align: center;
-  font-size: 0.78rem;
-}
-.shield-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.15rem;
-  padding: 0.15rem 0.4rem 0.15rem 0.2rem;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--side-color, #4ade80) 22%, rgba(15, 23, 42, 0.85));
-  border: 1px solid color-mix(in srgb, var(--side-color, #4ade80) 45%, transparent);
-  font-size: 0.72rem;
-  font-weight: 700;
-  color: color-mix(in srgb, var(--side-color, #bbf7d0) 65%, #fff);
-  font-variant-numeric: tabular-nums;
-}
-.shield-chip-glyph {
-  width: 1.1rem;
-  height: 1.1rem;
-  overflow: visible;
-}
-.shield-chip-total {
-  font-size: 0.68rem;
-  color: #86efac;
-}
-.destruction-budget {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 0.2rem 0.75rem;
-  align-items: baseline;
-  margin: 0 0 0.65rem;
-  padding: 0.55rem 0.7rem;
-  border-radius: 10px;
-  background: rgba(15, 23, 42, 0.65);
-  border: 1px solid rgba(71, 85, 105, 0.7);
-}
-.destruction-budget__label {
-  font-size: 0.72rem;
-  color: #94a3b8;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-.destruction-budget__value {
-  font-size: 1rem;
-  color: #e2e8f0;
-  font-variant-numeric: tabular-nums;
-}
-.destruction-budget__value strong {
-  color: #fca5a5;
-  font-size: 1.15rem;
-}
-.destruction-budget__sep {
-  margin: 0 0.15rem;
-  color: #64748b;
-}
-.destruction-budget__bar {
-  grid-column: 1 / -1;
-  height: 6px;
-  border-radius: 999px;
-  background: rgba(51, 65, 85, 0.9);
-  overflow: hidden;
-}
-.destruction-budget__fill {
-  height: 100%;
-  border-radius: inherit;
-  background: linear-gradient(90deg, #f87171, #fb923c);
-  transition: width 0.2s ease;
-}
-.destruction-list {
-  margin: 0.55rem 0 0;
-  padding: 0;
-  list-style: none;
-  display: flex;
-  flex-direction: column;
-  gap: 0.4rem;
-}
-.destruction-card {
-  width: 100%;
-  display: grid;
-  grid-template-columns: auto auto 1fr auto;
-  align-items: center;
-  gap: 0.55rem;
-  padding: 0.55rem 0.65rem;
-  border-radius: 12px;
-  border: 1px solid rgba(71, 85, 105, 0.75);
-  background: rgba(30, 41, 59, 0.72);
-  color: #e2e8f0;
-  text-align: left;
-  cursor: pointer;
-  transition:
-    border-color 0.15s ease,
-    background 0.15s ease,
-    transform 0.12s ease,
-    opacity 0.15s ease;
-}
-.destruction-card:hover:not(:disabled) {
-  border-color: rgba(148, 163, 184, 0.85);
-  background: rgba(51, 65, 85, 0.85);
-}
-.destruction-card:focus-visible {
-  outline: 2px solid #93c5fd;
-  outline-offset: 2px;
-}
-.destruction-card--immediate:not(.destruction-card--selected) {
-  border-color: rgba(250, 204, 21, 0.55);
-  background: rgba(120, 53, 15, 0.22);
-  box-shadow: inset 0 0 0 1px rgba(250, 204, 21, 0.12);
-}
-.destruction-card--selected {
-  border-color: rgba(248, 113, 113, 0.75);
-  background: linear-gradient(135deg, rgba(127, 29, 29, 0.45), rgba(69, 10, 10, 0.55));
-  box-shadow: 0 0 0 1px rgba(248, 113, 113, 0.2);
-}
-.destruction-card--locked {
-  opacity: 0.48;
-  cursor: not-allowed;
-  filter: grayscale(0.25);
-}
-.destruction-check {
-  width: 1.35rem;
-  height: 1.35rem;
-  border-radius: 7px;
-  border: 2px solid rgba(148, 163, 184, 0.75);
-  background: rgba(15, 23, 42, 0.55);
-  display: grid;
-  place-items: center;
-  flex-shrink: 0;
-  transition:
-    border-color 0.15s ease,
-    background 0.15s ease,
-    transform 0.12s ease;
-}
-.destruction-check--on {
-  border-color: #f87171;
-  background: #dc2626;
-  color: #fff;
-  transform: scale(1.05);
-}
-.destruction-check__icon {
-  width: 0.85rem;
-  height: 0.85rem;
-}
-.destruction-card__glyph {
-  width: 1.75rem;
-  height: 1.75rem;
-  display: grid;
-  place-items: center;
-}
-.destruction-card__meta {
-  display: flex;
-  flex-direction: column;
-  gap: 0.1rem;
-  min-width: 0;
-}
-.destruction-card__meta strong {
-  font-size: 0.88rem;
-  font-weight: 700;
-  letter-spacing: 0.01em;
-}
-.destruction-card__cost {
-  font-size: 0.75rem;
-  color: #fca5a5;
-  font-variant-numeric: tabular-nums;
-}
-.destruction-card__cost-unit {
-  color: #94a3b8;
-  margin-left: 0.15rem;
-}
-.destruction-badge {
-  font-size: 0.62rem;
-  font-weight: 700;
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
-  padding: 0.2rem 0.4rem;
-  border-radius: 999px;
-  white-space: nowrap;
-}
-.destruction-badge--ready {
-  background: rgba(250, 204, 21, 0.2);
-  color: #fde68a;
-  border: 1px solid rgba(250, 204, 21, 0.35);
-}
-.destruction-badge--blocked {
-  background: rgba(71, 85, 105, 0.45);
-  color: #94a3b8;
-  border: 1px solid rgba(100, 116, 139, 0.45);
 }
 .totals-bar {
   display: flex;
@@ -2217,35 +1230,6 @@ onUnmounted(() => {
   opacity: 1;
   transform: translateY(0);
 }
-.roll-entry--shield {
-  font-style: normal;
-}
-.roll-shield-badge {
-  font-size: 0.72rem;
-  color: color-mix(in srgb, var(--side-color, #86efac) 65%, #fff);
-  font-style: italic;
-}
-.shield-roster {
-  margin-bottom: 0.65rem;
-}
-.shield-roster h3 {
-  margin: 0 0 0.35rem;
-  font-size: 0.82rem;
-  color: #86efac;
-}
-.shield-roster-list {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  font-size: 0.78rem;
-}
-.shield-roster-item {
-  margin-bottom: 0.25rem;
-  padding: 0.3rem 0.45rem;
-  border-radius: 6px;
-  background: rgba(20, 83, 45, 0.35);
-  border-left: 3px solid #4ade80;
-}
 .roll-label {
   min-width: 9rem;
   color: #e2e8f0;
@@ -2273,72 +1257,11 @@ onUnmounted(() => {
   font-weight: 600;
   color: #cbd5e1;
 }
-.round-summary {
-  margin: 0.35rem 0 0;
-  padding: 0.35rem 0.5rem;
-  border-radius: 6px;
-  background: rgba(51, 65, 85, 0.45);
-  border: 1px solid rgba(148, 163, 184, 0.35);
-  font-size: 0.82rem;
-  color: #e2e8f0;
-  font-weight: 600;
-}
-.round-winner {
-  margin: 0.35rem 0 0.65rem;
-  padding: 0.35rem 0.5rem;
-  border-radius: 6px;
-  background: rgba(234, 179, 8, 0.15);
-  border: 1px solid rgba(234, 179, 8, 0.4);
-  font-size: 0.82rem;
-  color: #fde68a;
-  font-weight: 600;
-}
-.rolling-hint {
-  margin: 0.35rem 0 0.65rem;
-  font-size: 0.78rem;
-  color: #94a3b8;
-}
-.post-log {
-  margin: 0;
-  padding-left: 1.1rem;
-  font-size: 0.8rem;
-  line-height: 1.45;
-}
-.round-outcome {
-  display: grid;
-  gap: 0.28rem;
-  margin: 0 0 0.65rem;
-  padding: 0.55rem 0.65rem;
-  border: 1px solid rgba(148, 163, 184, 0.4);
-  border-radius: 8px;
-  background: rgba(51, 65, 85, 0.35);
-  font-size: 0.8rem;
-  line-height: 1.35;
-}
-.round-outcome strong {
-  font-size: 0.88rem;
-}
-.round-outcome--draw {
-  border-color: rgba(251, 191, 36, 0.55);
-  background: rgba(120, 53, 15, 0.22);
-  color: #fde68a;
-}
-.round-outcome--win {
-  border-color: rgba(74, 222, 128, 0.5);
-  background: rgba(20, 83, 45, 0.25);
-  color: #bbf7d0;
-}
-.round-outcome--loss {
-  border-color: rgba(248, 113, 113, 0.5);
-  background: rgba(127, 29, 29, 0.25);
-  color: #fecaca;
-}
-.post-win { color: #86efac; }
-.post-loss { color: #fca5a5; }
 .battle-foot {
   padding: 0.65rem 1rem;
   border-top: 1px solid #334155;
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
   gap: 0.5rem;
 }
@@ -2451,5 +1374,61 @@ onUnmounted(() => {
   font-size: 0.8rem;
   color: #fca5a5;
   align-self: center;
+}
+
+.fleet-firepower {
+  margin: 0.4rem 0 0;
+  font-size: 0.7rem;
+  color: #94a3b8;
+  font-variant-numeric: tabular-nums;
+}
+.hull-pips {
+  display: inline-flex;
+  gap: 0.15rem;
+}
+.hull-pip {
+  width: 0.45rem;
+  height: 0.45rem;
+  border-radius: 50%;
+  background: #4ade80;
+}
+.hull-pip--lost {
+  background: #7f1d1d;
+}
+.bonus-badge {
+  position: absolute;
+  top: 0.2rem;
+  right: 0.25rem;
+  font-size: 0.58rem;
+  font-weight: 800;
+  color: #0f172a;
+  background: #a78bfa;
+  border-radius: 3px;
+  padding: 0 0.2rem;
+  line-height: 1.2;
+}
+.die {
+  position: relative;
+}
+.die--hit {
+  border-color: #4ade80;
+  color: #bbf7d0;
+  background: rgba(20, 83, 45, 0.55);
+}
+.die--miss {
+  opacity: 0.55;
+}
+.die-target {
+  position: absolute;
+  bottom: -0.85rem;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 0.5rem;
+  font-weight: 600;
+  color: #94a3b8;
+  white-space: nowrap;
+}
+.roll-entry {
+  padding-bottom: 0.9rem;
 }
 </style>

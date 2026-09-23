@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import {
-  applyDestroyerColonization,
-  applyProductionHexClaims,
-  maybeApplyProductionHexClaims,
+  applyTurnEndClaims,
+  autoResolveClaimPicks,
+  claimPicksRemaining,
+  computeClaimLimit,
+  executeClaimPicks,
+  maybeApplyTurnEndClaims,
   transferControlIfEnemyOwned,
 } from './claim.js'
 import { createEmptyMap } from './map.js'
@@ -78,49 +81,25 @@ describe('transferControlIfEnemyOwned', () => {
 })
 
 describe('production hex claims', () => {
-  it('destroyers do not claim neutral hexes at end of turn', () => {
+  it('a destroyer claims a neutral hex like any other class', () => {
     const map = claimMap()
     const game = gameSnapshotFromMap(map)
     addShip(game, 1, 0, 'player-1', 'destroyer', 'dd-n')
-    applyProductionHexClaims(game)
-    expect(game.cells.find((c) => c.coord.q === 1 && c.coord.r === 0)!.controlOwnerId).toBeNull()
-  })
-
-  it('destroyer sacrifice claims a neutral hex immediately', () => {
-    const map = claimMap()
-    const game = gameSnapshotFromMap(map)
-    const dest = game.cells.find((c) => c.coord.q === 1 && c.coord.r === 0)!
-    expect(applyDestroyerColonization(game, dest, 'player-1')).toBe(true)
-    expect(dest.controlOwnerId).toBe('player-1')
+    applyTurnEndClaims(game, map.id)
+    // Деления на колонизаторов и прочих больше нет: тормозом служит лимит захвата.
+    expect(game.cells.find((c) => c.coord.q === 1 && c.coord.r === 0)!.controlOwnerId).toBe(
+      'player-1',
+    )
   })
 
   it('cruiser claims a neutral hex', () => {
     const map = claimMap()
     const game = gameSnapshotFromMap(map)
     addShip(game, 1, 0, 'player-1', 'cruiser', 'cr-n')
-    applyProductionHexClaims(game)
+    applyTurnEndClaims(game, map.id)
     expect(game.cells.find((c) => c.coord.q === 1 && c.coord.r === 0)!.controlOwnerId).toBe(
       'player-1',
     )
-  })
-
-  it('destroyers raid enemy control without enemy ships and remove production marker', () => {
-    const map = claimMap()
-    const game = gameSnapshotFromMap(map)
-    const dest = game.cells.find((c) => c.coord.q === 0 && c.coord.r === 1)!
-    dest.controlOwnerId = 'player-2'
-    dest.productionMarkerId = 'pm-2'
-    game.productionMarkers.push({
-      id: 'pm-2',
-      ownerId: 'player-2',
-      coord: { q: 0, r: 1 },
-      targetRegionId: 'r2',
-    })
-    addShip(game, 0, 1, 'player-1', 'destroyer', 'dd-raid')
-    applyProductionHexClaims(game)
-    expect(dest.controlOwnerId).toBe('player-1')
-    expect(dest.productionMarkerId).toBeNull()
-    expect(game.productionMarkers).toHaveLength(0)
   })
 
   it('does not claim a hex with enemy ships', () => {
@@ -129,7 +108,7 @@ describe('production hex claims', () => {
     const dest = game.cells.find((c) => c.coord.q === 1 && c.coord.r === 0)!
     addShip(game, 1, 0, 'player-1', 'cruiser', 'cr-1')
     addShip(game, 1, 0, 'player-2', 'destroyer', 'dd-2')
-    applyProductionHexClaims(game)
+    applyTurnEndClaims(game, map.id)
     expect(dest.controlOwnerId).toBeNull()
   })
 
@@ -148,23 +127,67 @@ describe('production hex claims', () => {
     )
   })
 
-  it('destroyer on neutral is not claimed when the turn ends after actions', () => {
-    const map = claimMap()
+  it('claim limit caps how much a player takes in one turn', () => {
+    const map = createEmptyMap('claim-limit', 'Claim limit')
+    map.cells = [
+      { q: 0, r: 0, startPlayer: 1, isPowerCenter: true },
+      { q: 1, r: 0 },
+      { q: 2, r: 0 },
+      { q: 3, r: 0 },
+      { q: 4, r: 0 },
+    ]
     const game = gameSnapshotFromMap(map)
-    addShip(game, 1, 0, 'player-1', 'destroyer', 'dd-n')
-    game.phase = 'actions'
-    game.activePlayerId = 'player-1'
-    game.participatingPlayerIds = ['player-1']
-    game.actionMarkers = []
-    expect(advanceGameSnapshot(game, map.id)).toEqual([])
-    expect(game.cells.find((c) => c.coord.q === 1 && c.coord.r === 0)!.controlOwnerId).toBeNull()
+    for (const q of [1, 2, 3, 4]) addShip(game, q, 0, 'player-1', 'destroyer', `dd-${q}`)
+
+    // Один центр власти → лимит два, а подходящих клеток четыре.
+    expect(computeClaimLimit(game, 'player-1')).toBe(2)
+    applyTurnEndClaims(game, map.id)
+    expect(claimPicksRemaining(game, 'player-1')).toBe(2)
+    expect(game.cells.filter((c) => c.controlOwnerId === 'player-1')).toHaveLength(1)
+  })
+
+  it('player picks which cells to take, within the limit', () => {
+    const map = createEmptyMap('claim-pick', 'Claim pick')
+    map.cells = [
+      { q: 0, r: 0, startPlayer: 1, isPowerCenter: true },
+      { q: 1, r: 0 },
+      { q: 2, r: 0 },
+      { q: 3, r: 0 },
+    ]
+    const game = gameSnapshotFromMap(map)
+    for (const q of [1, 2, 3]) addShip(game, q, 0, 'player-1', 'destroyer', `dd-${q}`)
+    applyTurnEndClaims(game, map.id)
+    expect(claimPicksRemaining(game, 'player-1')).toBe(2)
+
+    expect(executeClaimPicks(game, map.id, 'player-1', [{ q: 3, r: 0 }])).toEqual([])
+    expect(game.cells.find((c) => c.coord.q === 3)!.controlOwnerId).toBe('player-1')
+    expect(claimPicksRemaining(game, 'player-1')).toBe(1)
+  })
+
+  it('auto-resolve prefers power centers, then valuable tokens', () => {
+    const map = createEmptyMap('claim-auto', 'Claim auto')
+    map.cells = [
+      { q: 0, r: 0, startPlayer: 1, isPowerCenter: true },
+      { q: 1, r: 0, resourceToken: { type: 'credits', value: 2, faceUp: true } },
+      { q: 2, r: 0, resourceToken: { type: 'credits', value: 9, faceUp: true } },
+      { q: 3, r: 0, isPowerCenter: true },
+    ]
+    const game = gameSnapshotFromMap(map)
+    for (const q of [1, 2, 3]) addShip(game, q, 0, 'player-1', 'destroyer', `dd-${q}`)
+    applyTurnEndClaims(game, map.id)
+
+    expect(autoResolveClaimPicks(game, map.id, 'player-1')).toBe(2)
+    // Центр власти первым, затем дорогая фишка; дешёвая остаётся нейтральной.
+    expect(game.cells.find((c) => c.coord.q === 3)!.controlOwnerId).toBe('player-1')
+    expect(game.cells.find((c) => c.coord.q === 2)!.controlOwnerId).toBe('player-1')
+    expect(game.cells.find((c) => c.coord.q === 1)!.controlOwnerId).toBeNull()
   })
 
   it('does not claim again while wrapping actions', () => {
     const map = claimMap()
     const game = gameSnapshotFromMap(map)
     game.phase = 'events'
-    maybeApplyProductionHexClaims(game, 'actions')
+    maybeApplyTurnEndClaims(game, 'actions', map.id)
     expect(game.eventLog.some((e) => e.type === 'claim')).toBe(false)
   })
 })

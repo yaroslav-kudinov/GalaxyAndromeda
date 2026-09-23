@@ -184,7 +184,6 @@ import { getShipMoveRange, getShipProductionCost, canBuildShipInRegionSize, getS
 import { MAX_FLEET_SIZE_PER_PLAYER, SHIP_LABELS } from './constants.js'
 import { trimGameEventLog } from './event-log.js'
 import { advanceGamePhase, advanceGameSnapshot, activePlayerOrder, turnQueueForSnapshot } from './turn.js'
-import { isTurnEventResolved } from './events.js'
 import { renderAsciiMapFromDefinition } from './observation/index.js'
 
 describe('hex map', () => {
@@ -492,6 +491,14 @@ describe('galaxy save file', () => {
     expect(validateGalaxySave(parsed)).toEqual([])
   })
 
+  it('rejects a save from an older rules version with a readable message', () => {
+    const map = createEmptyMap('old', 'Old')
+    const stale = { ...galaxySaveFromMap(map), version: 1 }
+
+    expect(() => parseGalaxySave(stale)).toThrow(/Сохранение версии 1 не поддерживается/)
+    // Карты остаются импортируемыми: у них нет поля format вовсе.
+    expect(parseGalaxySave(map).map.id).toBe('old')
+  })
   it('parses legacy MapDefinition JSON', () => {
     const map = createEmptyMap('legacy', 'Legacy')
     const parsed = parseGalaxySave(map)
@@ -533,6 +540,18 @@ describe('galaxy save file', () => {
       id: 'act-4',
       ownerId: 'player-1',
       coord: { q: 4, r: 0 },
+      placedInPhase: 'planning',
+    })
+    game.actionMarkers.push({
+      id: 'act-5',
+      ownerId: 'player-1',
+      coord: { q: 5, r: 0 },
+      placedInPhase: 'planning',
+    })
+    game.actionMarkers.push({
+      id: 'act-6',
+      ownerId: 'player-1',
+      coord: { q: 6, r: 0 },
       placedInPhase: 'planning',
     })
     const save = { ...galaxySaveFromMap(map), game }
@@ -623,10 +642,10 @@ describe('galaxy save file', () => {
     expect(game.pendingCombat).toBeUndefined()
   })
 
-  it('gameSnapshotFromObservation clears turnEvent when server sends null', () => {
+  it('gameSnapshotFromObservation clears doctrineChoice when server sends null', () => {
     const map = createEmptyMap()
     const preserve = gameSnapshotFromMap(map)
-    preserve.turnEvent = { eventId: 'magnetic-storm', turnNumber: 1, resolvedAt: '2026-01-01' }
+    preserve.doctrineChoice = { windowStart: 1, picks: { 'player-1': 'attack' } }
 
     const game = gameSnapshotFromObservation(
       {
@@ -637,11 +656,11 @@ describe('galaxy save file', () => {
         cells: preserve.cells,
         actionMarkers: [],
         productionMarkers: [],
-        turnEvent: null,
-      } as Parameters<typeof gameSnapshotFromObservation>[0] & { turnEvent: null },
+        doctrineChoice: null,
+      } as Parameters<typeof gameSnapshotFromObservation>[0] & { doctrineChoice: null },
       preserve,
     )
-    expect(game.turnEvent).toBeUndefined()
+    expect(game.doctrineChoice).toBeUndefined()
   })
 
   it('gameSnapshotFromObservation replaces eventLog when server sends it', () => {
@@ -669,14 +688,13 @@ describe('galaxy save file', () => {
   it('buildObservation forwards explicit nulls for cleared snapshot fields', () => {
     const map = createEmptyMap()
     const game = gameSnapshotFromMap(map)
-    game.turnEvent = { eventId: 'magnetic-storm', turnNumber: 1 }
-
+    game.doctrineChoice = { windowStart: 1, picks: {} }
     const obs = buildObservation(
       {
         ...gameStateFromSnapshot(game, map.id),
         actionMarkers: game.actionMarkers,
         productionMarkers: game.productionMarkers,
-        turnEvent: null,
+        doctrineChoice: null,
         pendingCombat: null,
         gameOver: null,
         lastCombatResult: null,
@@ -687,36 +705,37 @@ describe('galaxy save file', () => {
     )
 
     const mech = obs.mechanics as Record<string, unknown>
-    expect(mech.turnEvent).toBeNull()
+    expect(mech.doctrineChoice).toBeNull()
     expect(mech.pendingCombat).toBeNull()
     expect(mech.gameOver).toBeNull()
     expect(mech.lastCombatResult).toBeNull()
     expect(mech.observationRevision).toBe(3)
   })
 
-  it('buildObservation forwards resourceRechargeTurnsRemaining', () => {
+  it('buildObservation forwards rechargePicksRemainingByPlayer', () => {
     const map = createEmptyMap()
     const game = gameSnapshotFromMap(map)
-    game.resourceRechargeTurnsRemaining = 2
 
     const obs = buildObservation(
       {
         ...gameStateFromSnapshot(game, map.id),
         actionMarkers: game.actionMarkers,
         productionMarkers: game.productionMarkers,
-        resourceRechargeTurnsRemaining: 2,
+        rechargePicksRemainingByPlayer: { 'player-1': 2 },
       } as Parameters<typeof buildObservation>[0] & Record<string, unknown>,
       [],
       { geometry: false },
     )
 
-    expect((obs.mechanics as Record<string, unknown>).resourceRechargeTurnsRemaining).toBe(2)
+    expect((obs.mechanics as Record<string, unknown>).rechargePicksRemainingByPlayer).toEqual({
+      'player-1': 2,
+    })
   })
 
-  it('gameSnapshotFromObservation syncs resourceRechargeTurnsRemaining from server', () => {
+  it('gameSnapshotFromObservation syncs rechargePicksRemainingByPlayer from server', () => {
     const map = createEmptyMap()
     const local = gameSnapshotFromMap(map)
-    local.resourceRechargeTurnsRemaining = 3
+    local.rechargePicksRemainingByPlayer = { 'player-1': 3 }
 
     const synced = gameSnapshotFromObservation(
       {
@@ -727,13 +746,13 @@ describe('galaxy save file', () => {
         cells: local.cells,
         actionMarkers: local.actionMarkers,
         productionMarkers: local.productionMarkers,
-        resourceRechargeTurnsRemaining: 1,
+        rechargePicksRemainingByPlayer: { 'player-1': 1 },
       } as Parameters<typeof gameSnapshotFromObservation>[0] & Record<string, unknown>,
       local,
       map,
     )
 
-    expect(synced.resourceRechargeTurnsRemaining).toBe(1)
+    expect(synced.rechargePicksRemainingByPlayer).toEqual({ 'player-1': 1 })
   })
 
   it('ensurePlayerSlots pads players up to slot count', () => {
@@ -1226,6 +1245,30 @@ describe('turn flow', () => {
     expect(seen.has('player-2,player-1')).toBe(true)
   })
 
+  it('turn order follows the match seed, not only the map', () => {
+    const map = createEmptyMap()
+    map.cells = [
+      { q: 0, r: 0, startPlayer: 1 },
+      { q: 1, r: 0, startPlayer: 2 },
+    ]
+    const state = gameStateFromMap(map, ['P1', 'P2'])
+    const sequence = (matchSeed?: number) =>
+      Array.from({ length: 24 }, (_, i) =>
+        activePlayerOrder(state.players, null, {
+          state: { ...state, turnNumber: i + 1, matchSeed },
+          phase: 'planning',
+        }).join(','),
+      ).join(' ')
+
+    // Без сида партии порядок привязан к карте — как рассчитывают обучающие сценарии.
+    expect(sequence()).toEqual(sequence())
+    // С сидом партии очередь своя в каждой партии, иначе одно место систематически
+    // оказывалось в выгодной позиции во всех партиях на карте.
+    expect(sequence(1)).toEqual(sequence(1))
+    const distinct = new Set([1, 2, 3, 4, 5, 6].map((seed) => sequence(seed)))
+    expect(distinct.size).toBeGreaterThan(1)
+  })
+
   it('turnQueueForSnapshot numbers players in turn order', () => {
     const map = createEmptyMap()
     const game = gameSnapshotFromGameState(gameStateFromMap(map, ['P1', 'P2', 'P3']))
@@ -1284,7 +1327,7 @@ describe('turn flow', () => {
     expect(state.activePlayerId).toBe(actionsOrder[1])
 
     expect(advanceGamePhase(state)).toEqual([])
-    expect(state.phase).toBe('events')
+    expect(state.phase).toBe('planning')
     expect(state.turnNumber).toBe(2)
   })
 
@@ -1318,7 +1361,7 @@ describe('turn flow', () => {
     expect(game.turnNumber).toBe(2)
   })
 
-  it('starts new turn with events after actions end', () => {
+  it('starts new turn with planning after actions end', () => {
     const state = gameStateFromMap(createEmptyMap(), ['P1', 'P2', 'P3'])
     state.phase = 'actions'
     state.turnNumber = 1
@@ -1326,14 +1369,14 @@ describe('turn flow', () => {
     state.activePlayerId = actionsOrder[actionsOrder.length - 1]!
 
     expect(advanceGamePhase(state)).toEqual([])
-    expect(state.phase).toBe('events')
+    expect(state.phase).toBe('planning')
     expect(state.turnNumber).toBe(2)
     expect(state.activePlayerId).toBe(
-      activePlayerOrder(state.players, null, { state, phase: 'events' })[0],
+      activePlayerOrder(state.players, null, { state, phase: 'planning' })[0],
     )
   })
 
-  it('auto-applies the turn event and enters planning after actions', () => {
+  it('after actions the next turn starts straight with planning', () => {
     const map = createEmptyMap()
     const base = gameStateFromMap(map, ['P1', 'P2'])
     base.phase = 'actions'
@@ -1341,13 +1384,10 @@ describe('turn flow', () => {
     const actionsOrder = activePlayerOrder(base.players, null, { state: base, phase: 'actions' })
     base.activePlayerId = actionsOrder[actionsOrder.length - 1]!
     const game = gameSnapshotFromGameState(base)
-    game.eventDeck = ['empty-void', 'magnetic-storm']
 
     expect(advanceGameSnapshot(game, map.id)).toEqual([])
     expect(game.phase).toBe('planning')
     expect(game.turnNumber).toBe(2)
-    expect(game.turnEvent?.eventId).toBe('empty-void')
-    expect(isTurnEventResolved(game)).toBe(true)
     expect(game.activePlayerId).toBe(
       activePlayerOrder(game.players, null, {
         state: gameStateFromSnapshot(game, map.id),
@@ -1356,22 +1396,20 @@ describe('turn flow', () => {
     )
   })
 
-  it('getLegalActionsForSnapshot auto-completes a leftover events phase', () => {
+  it('getLegalActionsForSnapshot moves an old save out of the removed events phase', () => {
     const map = createEmptyMap()
     const game = gameSnapshotFromMap(map)
     game.phase = 'events'
     game.turnNumber = 2
     game.activePlayerId = 'player-1'
-    game.eventDeck = ['magnetic-storm']
 
     const actions = getLegalActionsForSnapshot(game, map.id, 'player-1')
     expect(game.phase).toBe('planning')
-    expect(isTurnEventResolved(game)).toBe(true)
-    expect(game.turnEvent?.eventId).toBe('magnetic-storm')
+    expect(game.turnNumber).toBe(2)
     expect(actions.some((a) => a.id === 'advance-phase')).toBe(true)
   })
 
-  it('events phase skips player rotation', () => {
+  it('an old save in the events phase goes straight to planning', () => {
     const state = gameStateFromMap(createEmptyMap(), ['P1', 'P2'])
     state.phase = 'events'
     state.activePlayerId = 'player-1'
@@ -2031,7 +2069,7 @@ describe('production', () => {
   })
 
   it('canBuildShipInRegionSize uses minimum region size only', () => {
-    expect(getShipProductionRegionMin('shield')).toBe(12)
+    expect(getShipProductionRegionMin('carrier')).toBe(12)
     expect(getShipProductionRegionMin('battleship')).toBe(18)
     expect(getShipProductionRegionMin('hyper')).toBe(21)
     expect(getShipProductionRegionMin('cruiser')).toBe(5)
@@ -2065,7 +2103,12 @@ describe('production', () => {
 
     const cell = game.cells.find((c) => c.coord.q === 0 && c.coord.r === 0)!
     expect(cell.ships.some((s) => s.type === 'destroyer' && s.ownerId === 'player-1')).toBe(true)
-    expect(cell.resourceTokens[0]?.faceUp).toBe(false)
+    // Автооплата подбирает наименьший пережог: за 2 кредита платит фишкой 2 с (1,0),
+    // а фишку 3 с (0,0) оставляет нетронутой.
+    expect(cell.resourceTokens[0]?.faceUp).toBe(true)
+    expect(game.cells.find((c) => c.coord.q === 1 && c.coord.r === 0)!.resourceTokens[0]?.faceUp).toBe(
+      false,
+    )
     expect(game.cells.find((c) => c.coord.q === 0 && c.coord.r === 1)!.resourceTokens[0]?.faceUp).toBe(
       false,
     )
@@ -2093,7 +2136,7 @@ describe('production', () => {
     })
     expect(errors).toEqual([])
     expect(game.actionMarkers.some((m) => m.id === secondId)).toBe(true)
-    expect(game.cells.find((c) => c.coord.q === 0 && c.coord.r === 0)!.resourceTokens[0]?.faceUp).toBe(
+    expect(game.cells.find((c) => c.coord.q === 1 && c.coord.r === 0)!.resourceTokens[0]?.faceUp).toBe(
       false,
     )
   })
@@ -2245,15 +2288,16 @@ describe('production', () => {
     placeProductionMarkerForTest(game, 'player-1', { q: 0, r: 0 }, map)
     const marker = game.actionMarkers[0]!
 
-    // Автоподбор взял бы кредиты 3 с (0,0); игрок платит кредитами 2 с (1,0)
+    // Автооплата берёт кредиты 2 с (1,0) как наименьший пережог; игрок сознательно
+    // платит кредитами 3 с (0,0), и движок обязан потратить именно его выбор.
     const auto = autoAllocateTokens(game, map.id, marker, 2, 2)!
-    expect(auto).toContainEqual({ coord: { q: 0, r: 0 }, tokenIndex: 0 })
+    expect(auto).toContainEqual({ coord: { q: 1, r: 0 }, tokenIndex: 0 })
 
     const { errors } = applyGameActionOnSnapshot(game, map, 'player-1', 'execute-production', {
       markerId: marker.id,
       ships: [{ type: 'destroyer', coord: { q: 0, r: 0 } }],
       spentTokens: [
-        { coord: { q: 1, r: 0 }, tokenIndex: 0 },
+        { coord: { q: 0, r: 0 }, tokenIndex: 0 },
         { coord: { q: 0, r: 1 }, tokenIndex: 0 },
       ],
     })
@@ -2261,10 +2305,37 @@ describe('production', () => {
 
     const cellAt = (q: number, r: number) =>
       game.cells.find((c) => c.coord.q === q && c.coord.r === r)!
-    expect(cellAt(0, 0).resourceTokens[0]?.faceUp).toBe(true)
-    expect(cellAt(1, 0).resourceTokens[0]?.faceUp).toBe(false)
+    expect(cellAt(0, 0).resourceTokens[0]?.faceUp).toBe(false)
+    expect(cellAt(1, 0).resourceTokens[0]?.faceUp).toBe(true)
     expect(cellAt(0, 1).resourceTokens[0]?.faceUp).toBe(false)
     expect(cellAt(0, 0).ships.some((sh) => sh.type === 'destroyer')).toBe(true)
+  })
+
+  it('autoAllocateTokens picks the least wasteful combination', () => {
+    const map = productionTestMap()
+    const game = gameSnapshotFromMap(map)
+    game.phase = 'actions'
+    game.activePlayerId = 'player-1'
+    placeProductionMarkerForTest(game, 'player-1', { q: 0, r: 0 }, map)
+    const marker = game.actionMarkers[0]!
+
+    // Кредиты в регионе: 3 на (0,0) и 2 на (1,0). За 2 кредита платим двойкой — пережог 0.
+    const exact = autoAllocateTokens(game, map.id, marker, 2, 0)!
+    expect(exact).toEqual([{ coord: { q: 1, r: 0 }, tokenIndex: 0 }])
+
+    // За 4 кредита одной фишки не хватает, поэтому берём обе: 3 + 2 = 5, пережог 1.
+    const both = autoAllocateTokens(game, map.id, marker, 4, 0)!
+    expect(both).toHaveLength(2)
+
+    // За 3 кредита точное попадание тройкой предпочтительнее двойки с добором.
+    const single = autoAllocateTokens(game, map.id, marker, 3, 0)!
+    expect(single).toEqual([{ coord: { q: 0, r: 0 }, tokenIndex: 0 }])
+
+    // Больше, чем есть в регионе, подобрать нельзя.
+    expect(autoAllocateTokens(game, map.id, marker, 99, 0)).toBeNull()
+
+    // Нулевая потребность не переворачивает ничего.
+    expect(autoAllocateTokens(game, map.id, marker, 0, 0)).toEqual([])
   })
 
   it('execute-production rejects a token pick that does not cover the cost', () => {

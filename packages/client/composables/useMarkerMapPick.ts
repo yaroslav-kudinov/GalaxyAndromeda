@@ -421,7 +421,7 @@ export function useMarkerMapPick(
     hasPendingCombat: orderDraft.hasPendingCombat,
     shipOptions,
     combatPreview: orderDraft.orderCombatPreview,
-    roundOneOdds: orderDraft.roundOneOdds,
+    battleOdds: orderDraft.battleOdds,
     start,
     cancel,
     afterBattleModalClosed,

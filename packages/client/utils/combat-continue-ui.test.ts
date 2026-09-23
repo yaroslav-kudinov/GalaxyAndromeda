@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
-import type { CombatResolutionResult, PendingCombat, ShipType } from '@galaxy/rules'
+import type { CombatResolutionResult, CombatRoundResult, PendingCombat, ShipType } from '@galaxy/rules'
 import {
   combatContinueDecisionRole,
   combatContinueUiExpectation,
@@ -27,6 +27,26 @@ function awaitingContinue(
   }
 }
 
+function round(values: number[]): CombatRoundResult {
+  return {
+    attackerHits: values.filter((v) => v >= 6).length,
+    defenderHits: 0,
+    damageByShipId: {},
+    destroyedShipIds: [],
+    shipRolls: [
+      {
+        shipId: 'att-dd',
+        shipType: 'destroyer' as ShipType,
+        ownerId: 'p-att',
+        side: 'attacker',
+        distance: 0,
+        dice: values.map((value) => ({ value, threshold: 6, targetShipId: 'def-dd', hit: value >= 6 })),
+        hits: values.filter((v) => v >= 6).length,
+      },
+    ],
+  }
+}
+
 function resultWithRolls(extra?: Partial<CombatResolutionResult>): CombatResolutionResult {
   return {
     coord: { q: 1, r: 0 },
@@ -35,36 +55,38 @@ function resultWithRolls(extra?: Partial<CombatResolutionResult>): CombatResolut
     log: [],
     destroyedShipIds: extra?.destroyedShipIds ?? [],
     stub: false,
-    needsDestructionSelection: extra?.needsDestructionSelection,
-    roundOne: {
-      attackerTotal: 5,
-      defenderTotal: 3,
-      winner: 'attacker',
-      shipRolls: [
-        {
-          shipId: 'att-dd',
-          shipType: 'destroyer' as ShipType,
-          ownerId: 'p-att',
-          side: 'attacker',
-          combatRolls: [3, 2],
-          total: 5,
-        },
-      ],
-    },
+    roundOne: round([3, 2]),
     ...extra,
   }
 }
 
 describe('combatContinueDecisionRole', () => {
-  it('attacker decides first', () => {
-    const pending = awaitingContinue({ continueDecisions: {} })
+  it('after the first loss the attacker decides first', () => {
+    const pending = awaitingContinue({ continueDecisions: {}, shipsDestroyedInCombat: true })
     assert.equal(combatContinueDecisionRole(pending, 'p-att'), 'attacker')
     assert.equal(combatContinueDecisionRole(pending, 'p-def'), null)
     assert.equal(combatContinueDecisionRole(pending, 'p-other'), null)
   })
 
+  it('before any loss both sides pick targets at once', () => {
+    const pending = awaitingContinue({ continueDecisions: {}, shipsDestroyedInCombat: false })
+    assert.equal(combatContinueDecisionRole(pending, 'p-att'), 'attacker')
+    assert.equal(combatContinueDecisionRole(pending, 'p-def'), 'defender')
+    const defenderDone = awaitingContinue({ continueDecisions: { defender: true } })
+    assert.equal(combatContinueDecisionRole(defenderDone, 'p-def'), null)
+    assert.equal(combatContinueDecisionRole(defenderDone, 'p-att'), 'attacker')
+  })
+
+  it('supporter picks targets until confirmed', () => {
+    const pending = awaitingContinue({ continueDecisions: {} })
+    assert.equal(combatContinueDecisionRole(pending, 'p-sup'), null)
+    assert.equal(combatContinueDecisionRole(pending, 'p-sup', { supporterAwaited: true }), 'support')
+    const confirmed = awaitingContinue({ continueDecisions: {}, supportReady: { 'p-sup': true } })
+    assert.equal(combatContinueDecisionRole(confirmed, 'p-sup', { supporterAwaited: true }), null)
+  })
+
   it('defender decides only after attacker continued', () => {
-    const pending = awaitingContinue({ continueDecisions: { attacker: true } })
+    const pending = awaitingContinue({ continueDecisions: { attacker: true }, shipsDestroyedInCombat: true })
     assert.equal(combatContinueDecisionRole(pending, 'p-att'), null)
     assert.equal(combatContinueDecisionRole(pending, 'p-def'), 'defender')
     assert.equal(
@@ -78,57 +100,17 @@ describe('combatContinueDecisionRole', () => {
     assert.equal(combatContinueDecisionRole(pending, 'p-def'), 'defender')
   })
 
-  it('falls back to roundState.defenderId when defenderIds omit the player', () => {
-    const pending = awaitingContinue({
+  it('prep defender counts as defender before defenderIds are known', () => {
+    const pending: PendingCombat = {
+      phase: 'prep',
+      cellKey: '1,0',
+      attackerId: 'p-att',
       defenderIds: [],
-      continueDecisions: { attacker: true },
-      roundState: {
-        rounds: [],
-        shieldAbsorbed: 0,
-        rawDamage: 1,
-        remainingDamage: 0,
-        winnerId: 'p-att',
-        attackerWon: true,
-        defenderId: 'p-def',
-        combatOptions: {},
-        incomingAttackerShipIds: [],
-        attackerSkipTypes: [],
-        defenderSkipTypes: [],
-        trigger: 'movement',
-      },
-    })
+      roundNumber: 1,
+      prep: { phase: 'prep', defenderId: 'p-def', readyBy: {}, combatOptions: {} },
+    }
     assert.equal(isCombatDefender(pending, 'p-def'), true)
-    assert.equal(combatContinueDecisionRole(pending, 'p-def'), 'defender')
-  })
-
-  it('returns null outside awaiting-continue', () => {
-    assert.equal(
-      combatContinueDecisionRole(
-        {
-          phase: 'awaiting-destruction',
-          cellKey: '1,0',
-          attackerId: 'p-att',
-          defenderIds: ['p-def'],
-          roundNumber: 1,
-          roundState: {
-            rounds: [],
-            shieldAbsorbed: 0,
-            rawDamage: 1,
-            remainingDamage: 1,
-            winnerId: 'p-att',
-            attackerWon: true,
-            defenderId: 'p-def',
-            combatOptions: {},
-            incomingAttackerShipIds: [],
-            attackerSkipTypes: [],
-            defenderSkipTypes: [],
-            trigger: 'movement',
-          },
-        },
-        'p-att',
-      ),
-      null,
-    )
+    assert.equal(combatContinueDecisionRole(pending, 'p-def'), null)
   })
 })
 
@@ -163,15 +145,15 @@ describe('combat continue banners after closing results', () => {
     )
   })
 
-  it('keeps dismiss when destruction changes fingerprint but rolls are the same', () => {
-    const before = resultWithRolls({ needsDestructionSelection: true, destroyedShipIds: [] })
-    const after = resultWithRolls({ needsDestructionSelection: false, destroyedShipIds: ['def-dd'] })
+  it('keeps dismiss when fingerprint changes but rolls are the same', () => {
+    const before = resultWithRolls({ destroyedShipIds: [] })
+    const after = resultWithRolls({ destroyedShipIds: ['def-dd'] })
     const rollsKey = combatResultRollsKey(before)
     assert.equal(rollsKey, combatResultRollsKey(after))
     assert.equal(
       shouldKeepCombatResultDismiss({
-        previousFingerprint: 'old-needs-selection',
-        nextFingerprint: 'new-after-destruction',
+        previousFingerprint: 'old',
+        nextFingerprint: 'new',
         dismissedRollsKey: rollsKey,
         currentRollsKey: combatResultRollsKey(after),
       }),
@@ -182,24 +164,7 @@ describe('combat continue banners after closing results', () => {
   it('resets dismiss when a new round has different rolls', () => {
     const round1 = resultWithRolls()
     const round2 = resultWithRolls({
-      rounds: [
-        round1.roundOne!,
-        {
-          attackerTotal: 8,
-          defenderTotal: 2,
-          winner: 'attacker',
-          shipRolls: [
-            {
-              shipId: 'att-dd',
-              shipType: 'destroyer',
-              ownerId: 'p-att',
-              side: 'attacker',
-              combatRolls: [4, 4],
-              total: 8,
-            },
-          ],
-        },
-      ],
+      rounds: [round1.roundOne!, round([6, 4])],
     })
     assert.notEqual(combatResultRollsKey(round1), combatResultRollsKey(round2))
     assert.equal(
@@ -218,7 +183,6 @@ describe('combat continue banners after closing results', () => {
       combatContinueUiExpectation({
         hasPendingCombat: true,
         decisionRole: 'attacker',
-        isDestructionChooser: false,
         phase: 'awaiting-continue',
         isParticipant: true,
         battleModalOpen: false,
@@ -230,7 +194,6 @@ describe('combat continue banners after closing results', () => {
       combatContinueUiExpectation({
         hasPendingCombat: true,
         decisionRole: 'attacker',
-        isDestructionChooser: false,
         phase: 'awaiting-continue',
         isParticipant: true,
         battleModalOpen: true,
@@ -249,7 +212,6 @@ describe('combatRoundOutcome', () => {
         attackerId: 'p-att',
         defenderId: 'p-def',
         winnerId: 'p-att',
-        roundWinner: 'attacker',
       }),
       { kind: 'win', label: 'Победа' },
     )
@@ -259,22 +221,39 @@ describe('combatRoundOutcome', () => {
         attackerId: 'p-att',
         defenderId: 'p-def',
         winnerId: 'p-att',
-        roundWinner: 'attacker',
       }),
       { kind: 'loss', label: 'Поражение' },
     )
   })
 
-  it('shows a global label for spectators and a draw', () => {
+  it('shows a global label for spectators and rounds without outcome', () => {
     assert.deepEqual(
       combatRoundOutcome({
         localPlayerId: 'p-other',
         attackerId: 'p-att',
         defenderId: 'p-def',
         winnerId: 'p-def',
-        roundWinner: 'defender',
       }),
       { kind: 'defender-won', label: 'Победа защитника' },
+    )
+    assert.deepEqual(
+      combatRoundOutcome({
+        localPlayerId: 'p-att',
+        attackerId: 'p-att',
+        defenderId: 'p-def',
+        winnerId: null,
+      }),
+      { kind: 'draw', label: 'Раунд без исхода' },
+    )
+    assert.deepEqual(
+      combatRoundOutcome({
+        localPlayerId: 'p-att',
+        attackerId: 'p-att',
+        defenderId: 'p-def',
+        winnerId: null,
+        battleOver: true,
+      }).label,
+      'Взаимное уничтожение',
     )
     assert.equal(
       combatRoundOutcome({
@@ -282,41 +261,15 @@ describe('combatRoundOutcome', () => {
         attackerId: 'p-att',
         defenderId: 'p-def',
         winnerId: null,
-        roundWinner: 'draw',
-      }).kind,
-      'draw',
+        stalemate: true,
+      }).label,
+      'Бой не состоялся',
     )
   })
 })
 
 describe('combatDecisionStatusLine', () => {
-  it('uses combat role, not the map turn, for destruction and continue', () => {
-    assert.equal(
-      combatDecisionStatusLine({
-        pending: {
-          phase: 'awaiting-destruction',
-          cellKey: '1,0',
-          attackerId: 'p-att',
-          defenderIds: ['p-def'],
-          roundNumber: 1,
-          roundState: {
-            rounds: [],
-            shieldAbsorbed: 0,
-            rawDamage: 1,
-            remainingDamage: 1,
-            winnerId: 'p-att',
-            attackerWon: true,
-            defenderId: 'p-def',
-            combatOptions: {},
-            incomingAttackerShipIds: [],
-            attackerSkipTypes: [],
-            defenderSkipTypes: [],
-            trigger: 'movement',
-          },
-        },
-      }),
-      'Атакующий выбирает потери',
-    )
+  it('uses combat role, not the map turn, for continue', () => {
     assert.equal(
       combatDecisionStatusLine({
         pending: awaitingContinue({
@@ -324,7 +277,7 @@ describe('combatDecisionStatusLine', () => {
           shipsDestroyedInCombat: true,
         }),
       }),
-      'Защитник: продолжить или отступить',
+      'Защитник: цели и продолжить или отступить',
     )
     assert.equal(
       combatDecisionStatusLine({
@@ -333,7 +286,7 @@ describe('combatDecisionStatusLine', () => {
           shipsDestroyedInCombat: false,
         }),
       }),
-      'Атакующий подтверждает продолжение',
+      'Стороны выбирают цели на следующий раунд',
     )
   })
 

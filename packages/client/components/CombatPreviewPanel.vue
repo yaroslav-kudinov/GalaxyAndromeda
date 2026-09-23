@@ -1,11 +1,11 @@
 <script setup lang="ts">
-import type { CombatPreview, RoundOneOutcomeOdds, ShieldContribution } from '@galaxy/rules'
-import { SHIP_LABELS, formatShieldContributionLabel, getShieldAbsorbCapacity } from '@galaxy/rules'
+import type { BattleOutcomeOdds, CombatParticipant, CombatPreview } from '@galaxy/rules'
+import { SHIP_LABELS } from '@galaxy/rules'
 
 const props = defineProps<{
   preview: CombatPreview
   playerNames?: Record<string, string>
-  roundOneOdds?: RoundOneOutcomeOdds | null
+  battleOdds?: BattleOutcomeOdds | null
   /** Показать кнопку «Разрешение боя» (после подтверждения действия) */
   showBattleAction?: boolean
 }>()
@@ -16,9 +16,9 @@ const panelTitle = computed(() =>
 
 const leadText = computed(() => {
   if (props.preview.trigger === 'bombardment') {
-    return 'Обстрел этой цели добавлен в действие. Защитник не бросает кубики: очки уничтожения равны сумме обстрела.'
+    return 'Обстрел по цели добавлен в действие. Защитник не отвечает; каждая клетка расстояния прибавляет 1 к нужному значению.'
   }
-  return 'Ход на эту клетку добавлен в действие. Ниже — черновик первого раунда по правилам.'
+  return 'Ход на эту клетку добавлен в действие. Бой идёт раундами, урон копится до конца боя.'
 })
 
 const isBombardment = computed(() => props.preview.trigger === 'bombardment')
@@ -41,14 +41,22 @@ const {
 
 onMounted(() => {
   if (import.meta.client) {
-    collapsed.value = sessionStorage.getItem(COLLAPSED_STORAGE_KEY) === '1'
+    try {
+      collapsed.value = sessionStorage.getItem(COLLAPSED_STORAGE_KEY) === '1'
+    } catch {
+      collapsed.value = false
+    }
   }
 })
 
 function toggleCollapsed() {
   collapsed.value = !collapsed.value
   if (import.meta.client) {
-    sessionStorage.setItem(COLLAPSED_STORAGE_KEY, collapsed.value ? '1' : '0')
+    try {
+      sessionStorage.setItem(COLLAPSED_STORAGE_KEY, collapsed.value ? '1' : '0')
+    } catch {
+      // Хранилище недоступно — свёрнутость просто не запомнится.
+    }
   }
 }
 
@@ -60,25 +68,20 @@ function pct(value: number): string {
   return `${Math.round(value * 100)}%`
 }
 
-function shieldOnCellLabel(shipId: string): string | null {
-  const sh = props.preview.shieldContributions.find((c) => c.shipId === shipId && c.scope === 'self')
-  if (!sh) return null
-  return formatShieldContributionLabel(sh)
-}
-
-function neighborShieldEntries(): ShieldContribution[] {
-  return props.preview.shieldContributions.filter((c) => c.scope === 'neighbor')
+function shipLine(ship: CombatParticipant): string {
+  const stats = ship.dice && ship.threshold != null ? `${ship.dice}к на ${ship.threshold}+` : 'не стреляет'
+  return `${SHIP_LABELS[ship.type]} · ${stats} · прочность ${ship.hull}`
 }
 
 const oddsSummaryParts = computed(() => {
-  const odds = props.roundOneOdds
+  const odds = props.battleOdds
   if (!odds) return null
   if (isBombardment.value) {
-    return [{ label: 'Урон', value: 'сумма обстрела', tone: 'win' as const }]
+    return [{ label: 'Попаданий ожидаемо', value: props.preview.attacker.expectedHits.toFixed(1), tone: 'win' as const }]
   }
   return [
     { label: 'Победа', value: pct(odds.win), tone: 'win' as const },
-    { label: 'Ничья', value: pct(odds.draw), tone: 'draw' as const },
+    { label: 'Взаимно', value: pct(odds.draw), tone: 'draw' as const },
     { label: 'Поражение', value: pct(odds.defeat), tone: 'defeat' as const },
   ]
 })
@@ -129,7 +132,7 @@ const oddsSummaryParts = computed(() => {
       </template>
     </p>
     <p v-else-if="collapsed" class="combat-preview__compact combat-preview__compact--muted">
-      Оценка 1-го раунда недоступна
+      Оценка боя недоступна
     </p>
 
     <template v-if="!collapsed">
@@ -137,32 +140,32 @@ const oddsSummaryParts = computed(() => {
         {{ leadText }}
       </p>
 
-      <section v-if="roundOneOdds && preview.trigger !== 'bombardment'" class="round-odds">
-        <h4>1-й раунд (оценка)</h4>
+      <section v-if="battleOdds && preview.trigger !== 'bombardment'" class="round-odds">
+        <h4>Исход боя до конца (оценка)</h4>
         <div class="odds-bars">
           <div class="odds-row">
             <span class="odds-label odds-label--win">Победа</span>
             <div class="odds-track">
-              <div class="odds-fill odds-fill--win" :style="{ width: pct(roundOneOdds.win) }" />
+              <div class="odds-fill odds-fill--win" :style="{ width: pct(battleOdds.win) }" />
             </div>
-            <span class="odds-pct">{{ pct(roundOneOdds.win) }}</span>
+            <span class="odds-pct">{{ pct(battleOdds.win) }}</span>
           </div>
           <div class="odds-row">
-            <span class="odds-label odds-label--draw">Ничья</span>
+            <span class="odds-label odds-label--draw">Взаимно</span>
             <div class="odds-track">
-              <div class="odds-fill odds-fill--draw" :style="{ width: pct(roundOneOdds.draw) }" />
+              <div class="odds-fill odds-fill--draw" :style="{ width: pct(battleOdds.draw) }" />
             </div>
-            <span class="odds-pct">{{ pct(roundOneOdds.draw) }}</span>
+            <span class="odds-pct">{{ pct(battleOdds.draw) }}</span>
           </div>
           <div class="odds-row">
             <span class="odds-label odds-label--defeat">Поражение</span>
             <div class="odds-track">
-              <div class="odds-fill odds-fill--defeat" :style="{ width: pct(roundOneOdds.defeat) }" />
+              <div class="odds-fill odds-fill--defeat" :style="{ width: pct(battleOdds.defeat) }" />
             </div>
-            <span class="odds-pct">{{ pct(roundOneOdds.defeat) }}</span>
+            <span class="odds-pct">{{ pct(battleOdds.defeat) }}</span>
           </div>
         </div>
-        <p class="odds-note">Monte-Carlo через rollCombatRound (по кораблю); щиты не учтены.</p>
+        <p class="odds-note">Симуляция боя до конца, без отступлений.</p>
       </section>
 
       <div class="combat-preview__sides">
@@ -170,25 +173,20 @@ const oddsSummaryParts = computed(() => {
           <h4>Атакующий · {{ playerLabel(preview.attackerId) }}</h4>
           <ul class="ship-chips">
             <li v-for="s in preview.attacker.ships" :key="s.shipId">
-              {{ SHIP_LABELS[s.type] }}
+              {{ shipLine(s) }}
             </li>
             <li v-if="!preview.attacker.ships.length" class="muted">
               {{ preview.trigger === 'bombardment' ? 'корабли обстрела' : 'корабли из хода' }}
             </li>
           </ul>
           <p class="dice-line">
-            <template v-if="preview.trigger === 'bombardment'">
-              Кубики обстрела: {{ preview.attacker.supportDiceTotal }}d6
-            </template>
-            <template v-else>
-              Кубики: {{ preview.attacker.combatDiceTotal }} боевых
-              <span v-if="preview.attacker.supportDiceTotal"> + {{ preview.attacker.supportDiceTotal }} поддержки</span>
-            </template>
+            Кубиков: {{ preview.attacker.diceTotal }} · ожидаемо попаданий
+            {{ preview.attacker.expectedHits.toFixed(1) }}
           </p>
           <ul v-if="preview.attacker.supportingShips.length" class="support-list">
             <li v-for="sup in preview.attacker.supportingShips" :key="sup.shipId">
               {{ preview.trigger === 'bombardment' ? 'Обстрел' : 'Поддержка' }}:
-              {{ SHIP_LABELS[sup.type] }} · +{{ sup.supportDice }}d6
+              {{ SHIP_LABELS[sup.type] }} · {{ sup.dice }}к на {{ sup.threshold }}+
               <span class="muted">({{ sup.fromCoord.q }}, {{ sup.fromCoord.r }})</span>
             </li>
           </ul>
@@ -197,69 +195,27 @@ const oddsSummaryParts = computed(() => {
         <section class="side side--defender">
           <h4>Защитник · {{ playerLabel(preview.defenderId) }}</h4>
           <ul class="ship-chips">
-            <li
-              v-for="s in preview.defender.ships"
-              :key="s.shipId"
-              :class="{ 'ship-chip--shield': s.type === 'shield' }"
-            >
-              <template v-if="s.type === 'shield'">
-                {{ shieldOnCellLabel(s.shipId) ?? `щит · до ${getShieldAbsorbCapacity('self')} на клетке` }}
-              </template>
-              <template v-else>
-                {{ SHIP_LABELS[s.type] }}
-              </template>
-            </li>
-          </ul>
-          <ul v-if="neighborShieldEntries().length" class="support-list support-list--shield">
-            <li v-for="sh in neighborShieldEntries()" :key="sh.shipId">
-              {{ formatShieldContributionLabel(sh) }}
-              <span class="muted">({{ sh.fromCoord.q }}, {{ sh.fromCoord.r }})</span>
+            <li v-for="s in preview.defender.ships" :key="s.shipId">
+              {{ shipLine(s) }}
             </li>
           </ul>
           <p v-if="preview.trigger === 'bombardment'" class="dice-line muted">
-            Не бросает кубики (обстрел) — только щиты и цели уничтожения
+            Не отвечает на обстрел
           </p>
           <template v-else>
             <p class="dice-line">
-              Кубики: {{ preview.defender.combatDiceTotal }} боевых
-              <span v-if="preview.defender.supportDiceTotal"> + {{ preview.defender.supportDiceTotal }} поддержки</span>
+              Кубиков: {{ preview.defender.diceTotal }} · ожидаемо попаданий
+              {{ preview.defender.expectedHits.toFixed(1) }}
             </p>
             <ul v-if="preview.defender.supportingShips.length" class="support-list">
               <li v-for="sup in preview.defender.supportingShips" :key="sup.shipId">
-                Поддержка: {{ SHIP_LABELS[sup.type] }} · +{{ sup.supportDice }}d6
+                Поддержка: {{ SHIP_LABELS[sup.type] }} · {{ sup.dice }}к на {{ sup.threshold }}+
                 <span class="muted">({{ sup.fromCoord.q }}, {{ sup.fromCoord.r }})</span>
               </li>
             </ul>
           </template>
         </section>
       </div>
-
-      <section v-if="preview.shieldContributions.length" class="shields">
-        <h4>Щиты</h4>
-        <ul class="shield-list">
-          <li v-for="sh in preview.shieldContributions" :key="sh.shipId">
-            <span class="shield-pips" :title="`Поглощение до ${sh.absorbCapacity}`">
-              <span
-                v-for="n in sh.absorbCapacity"
-                :key="n"
-                class="pip"
-                :class="{ 'pip--neighbor': sh.scope === 'neighbor' }"
-              />
-            </span>
-            {{ formatShieldContributionLabel(sh) }}
-            <span class="muted">({{ sh.fromCoord.q }}, {{ sh.fromCoord.r }})</span>
-          </li>
-        </ul>
-        <p class="shield-total">Суммарно до {{ preview.shieldAbsorbTotal }} (пример 6+3)</p>
-      </section>
-
-      <section class="priority">
-        <h4>Приоритет уничтожения</h4>
-        <p class="priority-order">{{ preview.destructionOrder.map((t) => SHIP_LABELS[t]).join(' → ') }}</p>
-        <p class="priority-note">
-          Priority skip — бесплатное объявление по типу корабля (все экземпляры на гексе). Атакующий и защитник выбирают skip в модалке боя.
-        </p>
-      </section>
 
       <footer v-if="showBattleAction" class="combat-preview__actions">
         <button type="button" class="btn-battle" @click="emit('showBattle')">
@@ -407,13 +363,6 @@ const oddsSummaryParts = computed(() => {
 .ship-chips li {
   margin-bottom: 0.1rem;
 }
-.ship-chip--shield {
-  color: #86efac;
-  font-weight: 600;
-}
-.support-list--shield {
-  color: #86efac;
-}
 .dice-line {
   margin: 0;
   font-size: 0.72rem;
@@ -428,64 +377,6 @@ const oddsSummaryParts = computed(() => {
 }
 .support-list li {
   margin-bottom: 0.1rem;
-}
-.shields,
-.priority {
-  margin-bottom: 0.5rem;
-  font-size: 0.76rem;
-}
-.shields h4,
-.priority h4 {
-  margin: 0 0 0.25rem;
-  font-size: 0.72rem;
-  color: #fff;
-}
-.shield-list {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-.shield-list li {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 0.25rem;
-  margin-bottom: 0.2rem;
-}
-.shield-pips {
-  display: inline-flex;
-  gap: 2px;
-}
-.pip {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: #4ade80;
-  box-shadow: 0 0 4px rgba(74, 222, 128, 0.6);
-}
-.pip--neighbor {
-  background: #86efac;
-  opacity: 0.85;
-}
-.shield-total {
-  margin: 0.25rem 0 0;
-  font-size: 0.72rem;
-  color: #bbf7d0;
-}
-.priority-order {
-  margin: 0 0 0.2rem;
-  font-size: 0.72rem;
-  line-height: 1.3;
-}
-.priority-skip {
-  margin: 0;
-  font-size: 0.72rem;
-}
-.priority-note {
-  margin: 0.25rem 0 0;
-  font-size: 0.68rem;
-  color: #94a3b8;
-  line-height: 1.3;
 }
 .muted {
   color: #94a3b8;

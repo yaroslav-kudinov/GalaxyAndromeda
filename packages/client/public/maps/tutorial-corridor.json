@@ -92,13 +92,7 @@
     {
       "q": 4,
       "r": 0,
-      "startPlayer": 2,
-      "startingShips": [
-        {
-          "type": "shield",
-          "player": 2
-        }
-      ]
+      "startPlayer": 2
     },
     {
       "q": 5,
@@ -131,10 +125,6 @@
       "r": 1,
       "startPlayer": 1,
       "startingShips": [
-        {
-          "type": "shield",
-          "player": 1
-        },
         {
           "type": "carrier",
           "player": 1

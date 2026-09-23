@@ -1,0 +1,60 @@
+{
+  "label": "before-mirror-duel",
+  "seed": 101,
+  "games": 80,
+  "options": {
+    "maxTurns": 50,
+    "maxSteps": 250000,
+    "maxCombatRounds": 3,
+    "handicapCells": 0
+  },
+  "summaries": {
+    "duel": {
+      "games": 80,
+      "errors": 0,
+      "turns": {
+        "mean": 21.7875,
+        "p10": 16,
+        "median": 21,
+        "p90": 27
+      },
+      "hitTurnCapShare": 0,
+      "winRateBySeat": {
+        "player-2": 0.3375,
+        "player-1": 0.6625
+      },
+      "winRateByOrderPosition": {
+        "0": 0.3625,
+        "1": 0.6375
+      },
+      "meanLeadChanges": 3.075,
+      "pointOfNoReturn": {
+        "mean": 16.9,
+        "meanShareOfGame": 0.7713238523563106
+      },
+      "giniByTurn": {
+        "5": 0.036048856114645554,
+        "10": 0.05262929025252907,
+        "15": 0.06043608210902385
+      },
+      "wasteRatio": 1.0414299242424243,
+      "firstUnlockTurn": {
+        "destroyer": 1,
+        "cruiser": 3.525,
+        "shield": 8.773333333333333,
+        "carrier": 8.773333333333333,
+        "battleship": 11.657534246575343,
+        "hyper": 12.928571428571429
+      },
+      "claimUtilisationAt3Plus": 0.4752307412203254,
+      "meanEliminationTurn": null,
+      "victoryReasons": {
+        "power_centers": 80
+      },
+      "handicap": {
+        "winRate": null,
+        "amplification": null
+      }
+    }
+  }
+}

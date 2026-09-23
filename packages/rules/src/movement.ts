@@ -1,6 +1,6 @@
 import { MAX_SHIPS_PER_CELL, MAX_SHIPS_PER_CELL_PER_PLAYER, SHIP_LABELS } from './constants.js'
 import { trimGameEventLog } from './event-log.js'
-import { getCellKeys, HEX_DIRECTIONS } from './map.js'
+import { getCellKeys, HEX_DIRECTIONS, hexDistance } from './map.js'
 import {
   ACTION_MARKER_ALREADY_RESOLVED_MSG,
   ACTION_MARKER_MUST_RESOLVE_BEFORE_ADVANCE_MSG,
@@ -12,8 +12,13 @@ import {
   toggleMarkerAtCell,
   type MarkerKind,
 } from './markers.js'
-import { transferControlIfEnemyOwned } from './claim.js'
-import { executeDestroyerSacrifice } from './destroyer-sacrifice.js'
+import {
+  autoResolveClaimPicks,
+  claimPicksRemaining,
+  executeClaimPicks,
+  transferControlIfEnemyOwned,
+  CLAIM_PICK_ERRORS,
+} from './claim.js'
 import type { GameSnapshot, RuntimeCellState } from './save-file.js'
 import { gameStateFromSnapshot } from './save-file.js'
 import {
@@ -25,7 +30,6 @@ import {
   type TokenSpendRef,
 } from './production.js'
 import {
-  continueBombardmentQueueOrFinalize,
   executeMarkerBombardment,
   type BombardmentPlan,
 } from './bombardment.js'
@@ -34,36 +38,66 @@ import {
   applyCombatResultToSnapshot,
   beginOrAwaitCombatContinuation,
   buildCombatPreview,
+  isBattleUnresolvable,
+  UNRESOLVABLE_BATTLE_MSG,
   buildCombatPreviewFromPending,
+  combatSupportersAwaited,
+  isCombatRetreatAllowed,
   combatPrepOf,
-  combatRoundStateOf,
-  confirmCombatDestruction,
   continuePendingCombat,
   getCombatDestinationKeys,
   getCombatDestinationKeysFromMoves,
   isCombatDestination,
   resolveCombatAtCell,
   removeOrphanedActionMarkersAt,
-  setupPendingCombatDestruction,
+  setupCombatPrepForAssault,
   setupCombatPrepForMovement,
   stopPendingCombat,
   syncEliminatedCombatAutomation,
   updateCombatPrep,
   cancelCombatPrep,
+  finishCombatRerolls,
+  rerollCombatDie,
   validateCombatOptions,
   validatePendingCombatPrepOptions,
   validateSingleCombatDestination,
   type CombatOptions,
   type CombatResolutionResult,
 } from './combat.js'
-import { getEffectiveMoveRange, isMovementIntoCellBlocked } from './events.js'
+import {
+  chooseDoctrine,
+  doctrineChoiceOwed,
+  DOCTRINES,
+  effectiveMoveRange,
+} from './doctrines.js'
 import { getShipMoveRange } from './ships.js'
-import { advanceGameSnapshot, completeEventsPhaseIfActive } from './turn.js'
+import { advanceGameSnapshot, grantBudgetsAfterDoctrines, leaveLegacyEventsPhase } from './turn.js'
 import type { HexCoord, LegalAction, MapDefinition, ShipType, ShipUnit } from './types.js'
 import { hexKey } from './types.js'
 import { getLegalActions } from './game.js'
+import {
+  autoResolveRechargePicks,
+  executeRechargePicks,
+  rechargePicksRemaining,
+  RECHARGE_PICK_ERRORS,
+} from './resource-recharge.js'
+import type { ResourceTokenRef } from './resource-recharge.js'
 import { applyVictoryAndDefeatChecks } from './victory.js'
 import { surrenderPlayer } from './surrender.js'
+import {
+  autoResolveSiegeLosses,
+  establishSiegeRecord,
+  executeSiegeLosses,
+  siegeLossesOwedBy,
+  SIEGE_LOSS_ERRORS,
+  SIEGE_CONTINUATION_ERRORS,
+  openSiegeContinuationChoice,
+  resolveSiegeContinuation,
+  siegeContestKey,
+  siegeWithdrawDestinations,
+  syncSieges,
+  validateGarrisonDeparture,
+} from './siege.js'
 
 export interface ShipMovePlan {
   shipId: string
@@ -156,7 +190,7 @@ export function getReachableHexKeys(
   game?: GameSnapshot,
   playerId?: string,
 ): string[] {
-  const range = game ? getEffectiveMoveRange(game, shipType) : getShipMoveRange(shipType)
+  const range = game ? effectiveMoveRange(game, shipType, playerId) : getShipMoveRange(shipType)
   const fromKey = hexKey(from.q, from.r)
 
   const candidateKeys = new Set(
@@ -253,7 +287,7 @@ export function validateDestinationForMove(
   const toKey = hexKey(to.q, to.r)
   if (fromKey === toKey) return ['Выберите другую клетку назначения']
 
-  const range = game ? getEffectiveMoveRange(game, ship.type) : getShipMoveRange(ship.type)
+  const range = game ? effectiveMoveRange(game, ship.type, playerId) : getShipMoveRange(ship.type)
   const existingKeys = new Set(game.cells.map((c) => hexKey(c.coord.q, c.coord.r)))
   const pathDist = hexPathDistance(existingKeys, from, to, range, {
     blocksTransit: (key) => blocksMovementTransit(game, playerId, key),
@@ -263,10 +297,6 @@ export function validateDestinationForMove(
   }
   if (pathDist > range) {
     return [`Дальность ${range}, путь ${pathDist}`]
-  }
-
-  if (game && isMovementIntoCellBlocked(game, dest, fromKey, toKey)) {
-    return ['Местная самооборона: нельзя входить в клетку с ресурсами или центром власти']
   }
 
   if (effectiveControlOwnerId(game, dest.controlOwnerId) != null
@@ -319,7 +349,7 @@ export function getMovableShipsAtMarker(
   return fromCell.ships
     .filter((s) => s.ownerId === playerId)
     .map((ship) => {
-      const moveRange = getEffectiveMoveRange(game, ship.type)
+      const moveRange = effectiveMoveRange(game, ship.type, playerId)
       const rangeCandidates = getReachableHexKeys(map, from, ship.type, game, playerId)
       const reachableKeys = rangeCandidates.filter((key) => {
         const [q, r] = key.split(',').map(Number)
@@ -401,6 +431,7 @@ export function validateMarkerMovement(
   }
 
   errors.push(...validateSingleCombatDestination(game, moves, playerId))
+  errors.push(...validateGarrisonDeparture(game, playerId, from, moves, hexDistance))
 
   return errors
 }
@@ -465,37 +496,6 @@ function finishPendingMovementPlans(
   return summaries
 }
 
-export function completePendingCombatMovement(
-  game: GameSnapshot,
-  mapId: string,
-): string[] {
-  const pending = combatRoundStateOf(game.pendingCombat)
-  if (!pending?.movementFrom || !pending.movementPlans?.length) return []
-
-  const combatKey = game.pendingCombat!.cellKey
-  const summaries = finishPendingMovementPlans(
-    game,
-    game.pendingCombat!.attackerId,
-    pending.movementFrom,
-    pending.movementPlans,
-    null,
-    combatKey,
-  )
-
-  const combatNote = pending.attackerWon ? 'атакующий победил' : 'защитник победил'
-  game.eventLog.push({
-    id: `evt-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-    turn: game.turnNumber,
-    phase: game.phase,
-    type: 'movement',
-    message: `Движение с (${pending.movementFrom.q},${pending.movementFrom.r}): ${summaries.join('; ') || '—'}; бой: ${combatNote}`,
-    timestamp: Date.now(),
-  })
-  trimGameEventLog(game)
-  applyVictoryAndDefeatChecks(game, mapId)
-  return summaries
-}
-
 export function executeMarkerMovement(
   game: GameSnapshot,
   map: MapDefinition,
@@ -527,6 +527,7 @@ export function executeMarkerMovement(
     }
     const preview = buildCombatPreview(game, combatCoord, playerId, incomingShips, previewOptions)
     if (preview) {
+      if (combatOptions && isBattleUnresolvable(preview)) return { errors: [UNRESOLVABLE_BATTLE_MSG] }
       if (!combatOptions) {
         const prepErrors = setupCombatPrepForMovement(
           game,
@@ -555,31 +556,20 @@ export function executeMarkerMovement(
         combatOptions,
         Math.random,
         preview,
-      )
-
-      if (combatResult.needsDestructionSelection) {
-        const skipTypes = {
-          attacker: (combatOptions?.attacker?.prioritySkips ?? []).map((p) => p.shipType),
-          defender: (combatOptions?.defender?.prioritySkips ?? []).map((p) => p.shipType),
-        }
-        setupPendingCombatDestruction(
-          game,
-          combatCoord,
-          playerId,
-          preview.defenderId,
-          combatResult,
-          combatOptions ?? {},
-          skipTypes,
-          'movement',
-          {
-            incomingAttackerShipIds: incomingShips.map((s) => s.id),
-            movementFrom: from,
-            movementPlans: moves,
-            shipsDestroyedInCombat: false,
+        {},
+        1,
+        {
+          trigger: 'movement',
+          continuation: {
+            movementFrom: { ...from },
+            movementPlans: moves.map((move) => ({ ...move, to: { ...move.to } })),
+            incomingAttackerShipIds: incomingShips.map((ship) => ship.id),
           },
-        )
-        return { errors: [], combatResult }
-      }
+          combatOptions,
+        },
+      )
+      // Гарнизон перебрасывает промахи — раунд доиграется после его решений.
+      if (combatResult.paused) return { errors: [] }
 
       applyCombatResultToSnapshot(
         game,
@@ -601,11 +591,13 @@ export function executeMarkerMovement(
         },
         combatOptions,
         shipsDestroyedInCombat: combatResult.destroyedShipIds.length > 0,
+        damageByShipId: combatResult.damageByShipId,
+        seedCombatResult: combatResult,
       })
       if (followUp.errors.length) {
         return { errors: followUp.errors, combatResult: combatResult ?? undefined }
       }
-      // Бой ещё идёт (prep/destruction/continue) — движение откладываем.
+      // Бой ещё идёт — движение откладываем.
       if (game.pendingCombat) {
         return {
           errors: [],
@@ -674,6 +666,7 @@ export function resolveCombatPrep(
   const pending = game.pendingCombat
   const prep = combatPrepOf(pending)
   if (!pending || !prep) return { errors: ['Нет подготовки к бою'] }
+  const contestKey = siegeContestKey(game)
 
   const validationErrors = validatePendingCombatPrepOptions(game)
   if (validationErrors.length) {
@@ -693,7 +686,8 @@ export function resolveCombatPrep(
   const queuedBombardmentPlans = prep.queuedBombardmentPlans ?? []
 
   const isBombardment = trigger === 'bombardment' && bombardmentFrom && bombardmentPlans
-  if (!isBombardment && !(movementFrom && movementPlans)) {
+  const assaultFrom = prep.assaultFrom
+  if (!isBombardment && !assaultFrom && !(movementFrom && movementPlans)) {
     return { errors: ['Некорректное состояние подготовки боя'] }
   }
 
@@ -701,7 +695,11 @@ export function resolveCombatPrep(
   // оставил бы игроков без экрана боя и без возможности повторить.
   game.pendingCombat = undefined
 
-  const result = isBombardment
+  const result = assaultFrom
+    ? executeAssaultOnSharedCell(game, map, attackerId, assaultFrom, opts ?? {}, {
+        consumeMarker: !prep.siegeResponse,
+      })
+    : isBombardment
     ? executeMarkerBombardment(
         game,
         map,
@@ -720,7 +718,119 @@ export function resolveCombatPrep(
     prep.readyBy = {}
   }
 
+  settleSieges(game, map.id)
+  if (contestKey && !game.pendingCombat) openSiegeContinuationChoice(game, contestKey)
   return result
+}
+
+/**
+ * Бой на клетке, где уже стоят корабли обеих сторон: вылазка осаждённого, штурм осады или ответ
+ * осаждённого. Маркер действия тратится в момент начала боя — корабли никуда не летят, дожимать
+ * после боя нечего.
+ */
+export function executeAssaultOnSharedCell(
+  game: GameSnapshot,
+  map: MapDefinition,
+  playerId: string,
+  coord: HexCoord,
+  combatOptions: CombatOptions,
+  options: { consumeMarker: boolean },
+): MarkerActionExecution {
+  const cell = cellAt(game, coord)
+  const attackers = cell?.ships.filter((ship) => ship.ownerId === playerId) ?? []
+  const preview = buildCombatPreview(game, coord, playerId, attackers, {
+    supportSides: combatOptions.supportSides,
+  })
+  if (!cell || !preview) return { errors: ['На клетке нет противника'] }
+
+  if (options.consumeMarker) {
+    const marker = game.actionMarkers.find(
+      (m) => m.ownerId === playerId && hexKey(m.coord.q, m.coord.r) === hexKey(coord.q, coord.r),
+    )
+    if (marker) removeActionMarker(game, marker.id, playerId)
+    markActionMarkerResolvedThisTurn(game)
+  }
+
+  const first = resolveCombatAtCell(game, coord, playerId, attackers, combatOptions, Math.random, preview, {}, 1, {
+    trigger: 'stack',
+    combatOptions,
+  })
+  if (first.paused) {
+    applyVictoryAndDefeatChecks(game, map.id)
+    return { errors: [] }
+  }
+  applyCombatResultToSnapshot(game, first, playerId, preview.defenderId)
+  const followUp = beginOrAwaitCombatContinuation(game, {
+    coord,
+    attackerId: playerId,
+    completedRoundNumber: 1,
+    trigger: 'stack',
+    combatOptions,
+    shipsDestroyedInCombat: first.destroyedShipIds.length > 0,
+    damageByShipId: first.damageByShipId,
+    seedCombatResult: first,
+  })
+  applyVictoryAndDefeatChecks(game, map.id)
+  return { errors: followUp.errors, combatResult: followUp.combatResult ?? first }
+}
+
+/** Маркер на клетке с кораблями противника: атаковать их, не двигаясь. */
+export function executeMarkerAssault(
+  game: GameSnapshot,
+  map: MapDefinition,
+  playerId: string,
+  from: HexCoord,
+  combatOptions?: CombatOptions,
+): MarkerActionExecution {
+  if (game.phase !== 'actions') return { errors: ['Атаковать можно только в фазе «Действия»'] }
+  if (game.activePlayerId !== playerId) return { errors: ['Сейчас ход другого игрока'] }
+  if (game.actionMarkerResolvedThisTurn) return { errors: [ACTION_MARKER_ALREADY_RESOLVED_MSG] }
+  const marker = game.actionMarkers.find(
+    (m) => m.ownerId === playerId && hexKey(m.coord.q, m.coord.r) === hexKey(from.q, from.r),
+  )
+  if (!marker) return { errors: ['На клетке нет вашего маркера действия'] }
+  const cell = cellAt(game, from)
+  if (!cell?.ships.some((ship) => ship.ownerId === playerId)) {
+    return { errors: ['На клетке нет ваших кораблей'] }
+  }
+  if (!cell.ships.some((ship) => ship.ownerId !== playerId)) {
+    return { errors: ['На клетке нет кораблей противника'] }
+  }
+  if (!combatOptions) return { errors: setupCombatPrepForAssault(game, playerId, from) }
+  return executeAssaultOnSharedCell(game, map, playerId, from, combatOptions, { consumeMarker: true })
+}
+
+/**
+ * Вместо штурма осадить центр власти: корабли входят на клетку, боя нет, маркер исполнен.
+ * Осаждённого сразу спрашивают, не нападёт ли он немедленно.
+ */
+export function establishSiege(game: GameSnapshot, map: MapDefinition, playerId: string): string[] {
+  const pending = game.pendingCombat
+  const prep = combatPrepOf(pending)
+  if (!pending || !prep) return ['Нет подготовки к бою']
+  if (pending.attackerId !== playerId) return ['Осадить может только атакующий']
+  if (!prep.siegeAvailable || !prep.movementFrom || !prep.movementPlans) {
+    return ['Эту клетку осадить нельзя']
+  }
+  const [q, r] = pending.cellKey.split(',').map(Number)
+  const coord = { q: q!, r: r! }
+  const besiegedId = prep.defenderId
+
+  game.pendingCombat = undefined
+  finishPendingMovementPlans(
+    game,
+    playerId,
+    prep.movementFrom,
+    prep.movementPlans,
+    { attackerWon: true },
+    pending.cellKey,
+  )
+  establishSiegeRecord(game, coord, playerId, besiegedId)
+
+  // Ответ необязателен: если гарнизону нечем стрелять, спрашивать не о чем.
+  askGarrisonToRespond(game, coord, besiegedId)
+  applyVictoryAndDefeatChecks(game, map.id)
+  return []
 }
 
 function parseHexKeyFromCellKey(key: string): HexCoord {
@@ -733,9 +843,58 @@ export function getLegalActionsForSnapshot(
   mapId: string,
   playerId: string,
 ): LegalAction[] {
-  completeEventsPhaseIfActive(game, mapId)
+  leaveLegacyEventsPhase(game, mapId)
   const state = gameStateFromSnapshot(game, mapId)
   const actions = getLegalActions(state, playerId)
+
+  const owedClaims = claimPicksRemaining(game, playerId)
+  if (game.phase === 'planning' && owedClaims > 0 && !game.gameOver) {
+    actions.push({
+      id: 'execute-claim-picks',
+      type: 'claimPicks',
+      description: `Занять клетки (осталось ${owedClaims}); без выбора займутся лучшие`,
+      params: { remaining: owedClaims },
+    })
+  }
+
+  if (game.phase === 'planning' && doctrineChoiceOwed(game, playerId) && !game.gameOver) {
+    actions.push({
+      id: 'choose-doctrine',
+      type: 'doctrine',
+      description: 'Выбрать доктрину на это окно ходов; соперники увидят её, когда выберут все',
+      params: { options: DOCTRINES.map((doctrine) => doctrine.id) },
+    })
+  }
+
+  const continuation = game.siegeContinuationChoice
+  if (continuation?.playerId === playerId && !game.gameOver) {
+    actions.push({
+      id: 'resolve-siege-continuation',
+      type: 'siegeContinuation',
+      description: 'Бой за осаждённый центр выигран: продолжить осаду или отойти',
+      params: { destinations: siegeWithdrawDestinations(game, playerId, continuation.cellKey) },
+    })
+  }
+
+  const owedSiege = siegeLossesOwedBy(game, playerId)
+  if (game.phase === 'planning' && owedSiege.length > 0 && !game.gameOver) {
+    actions.push({
+      id: 'execute-siege-losses',
+      type: 'siegeLosses',
+      description: `Осада: выбрать, какой корабль гарнизона погибнет (клеток ${owedSiege.length}); без выбора ход не передаётся`,
+      params: { cells: owedSiege },
+    })
+  }
+
+  const owedPicks = rechargePicksRemaining(game, playerId)
+  if (game.phase === 'planning' && owedPicks > 0 && !game.gameOver) {
+    actions.push({
+      id: 'execute-recharge-picks',
+      type: 'rechargePicks',
+      description: `Перезарядка: выбрать фишки (осталось ${owedPicks}); без выбора поднимутся самые крупные`,
+      params: { remaining: owedPicks },
+    })
+  }
 
   const me = game.players.find((p) => p.id === playerId)
   if (!game.gameOver && me && !me.eliminated) {
@@ -806,38 +965,101 @@ function appendCombatParticipantActions(
       type: 'combat',
       description: 'Готовность к бою',
     })
+    if (isAttacker && prep.siegeAvailable) {
+      pushUnique({
+        id: 'establish-siege',
+        type: 'combat',
+        description: 'Осадить центр власти вместо штурма',
+      })
+    }
+    if (isAttacker && prep.siegeResponse) {
+      pushUnique({
+        id: 'cancel-combat-prep',
+        type: 'combat',
+        description: 'Не нападать на осаждающих',
+      })
+    }
     return
   }
 
-  if (pending.phase === 'awaiting-destruction') {
-    if (pending.roundState.winnerId === playerId) {
-      pushUnique({
-        id: 'confirm-combat-destruction',
-        type: 'combat',
-        description: 'Подтвердить уничтожение',
-      })
-    }
+  if (pending.phase === 'awaiting-rerolls') {
+    if (pending.rolledRound.rerolls?.playerId !== playerId) return
+    pushUnique({ id: 'reroll-combat-die', type: 'combat', description: 'Перебросить промах гарнизона' })
+    pushUnique({ id: 'finish-combat-rerolls', type: 'combat', description: 'Закончить перебросы' })
     return
   }
 
   if (pending.phase === 'awaiting-continue') {
     const isAttacker = pending.attackerId === playerId
     const isDefender = pending.defenderIds.includes(playerId)
-    if (!isAttacker && !isDefender) return
+    if (!isAttacker && !isDefender) {
+      // Поддерживающий выбирает цели своих кораблей на раунд.
+      const awaited = combatSupportersAwaited(game, buildCombatPreviewFromPending(game))
+      if (awaited.includes(playerId) && pending.supportReady?.[playerId] !== true) {
+        pushUnique({ id: 'continue-combat', type: 'combat', description: 'Подтвердить цели поддержки' })
+      }
+      return
+    }
     pushUnique({
       id: 'continue-combat',
       type: 'combat',
-      description: 'Продолжить бой',
+      description: 'Выбрать цели и продолжить бой',
     })
-    pushUnique({
-      id: 'stop-combat',
-      type: 'combat',
-      description: 'Отступить',
-    })
+    if (isCombatRetreatAllowed(pending)) {
+      pushUnique({
+        id: 'stop-combat',
+        type: 'combat',
+        description: 'Отступить',
+      })
+    }
   }
 }
 
+/**
+ * Привести осады в соответствие доске и, если что-то изменилось, перепроверить победу:
+ * гибель или уход гарнизона передаёт центр власти осаждающему.
+ */
+export function settleSieges(game: GameSnapshot, mapId: string): void {
+  if (!game.sieges || game.gameOver) return
+  const before = JSON.stringify(game.sieges)
+  syncSieges(game)
+  if (JSON.stringify(game.sieges ?? null) !== before) applyVictoryAndDefeatChecks(game, mapId)
+}
+
 export function applyGameActionOnSnapshot(
+  game: GameSnapshot,
+  map: MapDefinition,
+  playerId: string,
+  actionId: string,
+  params?: Record<string, unknown>,
+): { errors: string[]; combatResult?: CombatResolutionResult } {
+  const contestKey = siegeContestKey(game)
+  const siegesBefore = { ...(game.sieges ?? {}) }
+  const result = dispatchGameAction(game, map, playerId, actionId, params)
+  settleSieges(game, map.id)
+  // Бой за осаждённую клетку мог и начаться, и кончиться в этом же действии (без подготовки).
+  const foughtKey = result.combatResult ? hexKey(result.combatResult.coord.q, result.combatResult.coord.r) : null
+  const foughtSiege = foughtKey ? siegesBefore[foughtKey] : undefined
+  const inlineContest = foughtSiege && playerId !== foughtSiege.besiegerId && playerId !== foughtSiege.besiegedId
+    ? foughtKey
+    : null
+  const finishedContest = contestKey ?? inlineContest
+  if (finishedContest && !game.pendingCombat) openSiegeContinuationChoice(game, finishedContest)
+  return result
+}
+
+/** Спросить гарнизон, нападёт ли он на осаждающих; если стрелять нечем — не спрашивать. */
+function askGarrisonToRespond(game: GameSnapshot, coord: HexCoord, besiegedId: string): void {
+  const besieged = game.players.find((player) => player.id === besiegedId)
+  if (!besieged || besieged.eliminated) return
+  const responseErrors = setupCombatPrepForAssault(game, besiegedId, coord, { siegeResponse: true })
+  if (!responseErrors.length) {
+    const preview = buildCombatPreviewFromPending(game)
+    if (!preview || preview.attacker.diceTotal === 0) game.pendingCombat = undefined
+  }
+}
+
+function dispatchGameAction(
   game: GameSnapshot,
   map: MapDefinition,
   playerId: string,
@@ -852,16 +1074,67 @@ export function applyGameActionOnSnapshot(
     return { errors }
   }
 
-  const isPrepAction = actionId === 'update-combat-prep' || actionId === 'cancel-combat-prep'
+  const isPrepAction =
+    actionId === 'update-combat-prep'
+    || actionId === 'cancel-combat-prep'
+    || actionId === 'establish-siege'
   if (game.pendingCombat?.phase === 'prep' && !isPrepAction && actionId !== 'abort-combat') {
     return { errors: ['Ожидается подготовка к бою'] }
   }
+  if (actionId === 'resolve-siege-continuation') {
+    const retreatTo = params?.retreatTo as HexCoord | undefined
+    const outcome = resolveSiegeContinuation(game, playerId, {
+      continue: params?.continue === true,
+      ...(retreatTo ? { retreatTo } : {}),
+    })
+    if (outcome.errors.length) return { errors: outcome.errors }
+    if (outcome.withdrawnTo) {
+      const destination = cellAt(game, outcome.withdrawnTo)
+      if (destination) transferControlIfEnemyOwned(game, destination, playerId)
+    }
+    if (outcome.continued) askGarrisonToRespond(game, outcome.continued.coord, outcome.continued.besiegedId)
+    applyVictoryAndDefeatChecks(game, map.id)
+    return { errors: [] }
+  }
+  if (game.siegeContinuationChoice && actionId !== 'surrender') {
+    return { errors: [SIEGE_CONTINUATION_ERRORS.waiting] }
+  }
+  const isRerollAction = actionId === 'reroll-combat-die' || actionId === 'finish-combat-rerolls'
+  if (game.pendingCombat?.phase === 'awaiting-rerolls' && !isRerollAction && actionId !== 'abort-combat') {
+    return { errors: ['Осаждённый перебрасывает промахи — дождитесь конца раунда'] }
+  }
+  if (isRerollAction) {
+    const pending = game.pendingCombat
+    const continuation = pending?.continuation
+    const combatKey = pending?.cellKey
+    const attackerId = pending?.attackerId
+    const result = actionId === 'reroll-combat-die'
+      ? rerollCombatDie(game, playerId, params?.dieIndex)
+      : finishCombatRerolls(game, playerId, { auto: params?.auto === true })
+    if (!result.errors.length && !game.pendingCombat && continuation && combatKey && attackerId) {
+      finishPendingMovementPlans(
+        game,
+        attackerId,
+        continuation.movementFrom,
+        continuation.movementPlans,
+        result.combatResult ?? null,
+        combatKey,
+      )
+    }
+    applyVictoryAndDefeatChecks(game, map.id)
+    return result
+  }
   // Боевые решения может делать участник боя (победитель / attacker / defender),
   // а не только activePlayer текущей фазы.
+  // Доктрину выбирают все одновременно, не дожидаясь своей очереди.
+  if (actionId === 'choose-doctrine') {
+    const { errors, revealed } = chooseDoctrine(game, playerId, params?.doctrineId)
+    if (!errors.length) grantBudgetsAfterDoctrines(game, revealed)
+    return { errors }
+  }
   const isCombatDecisionAction =
     actionId === 'continue-combat'
     || actionId === 'stop-combat'
-    || actionId === 'confirm-combat-destruction'
     || actionId === 'abort-combat'
   if (!isPrepAction && !isCombatDecisionAction && game.activePlayerId !== playerId) {
     return { errors: ['Сейчас ход другого игрока'] }
@@ -874,89 +1147,12 @@ export function applyGameActionOnSnapshot(
   ) {
     return { errors: ['Сначала завершите или продолжите текущий бой'] }
   }
-  if (
-    game.pendingCombat?.phase === 'awaiting-destruction'
-    && actionId !== 'confirm-combat-destruction'
-    && actionId !== 'abort-combat'
-  ) {
-    return { errors: ['Сначала подтвердите выбор уничтожения в бою'] }
-  }
-
-  if (actionId === 'confirm-combat-destruction') {
-    const destructionSelection = params?.destructionSelection as string[] | undefined
-    if (!Array.isArray(destructionSelection)) {
-      return { errors: ['Не удалось передать выбор потерь — обновите страницу и попробуйте снова'] }
-    }
-    const priorRoundState = combatRoundStateOf(game.pendingCombat)
-    const movementFrom = priorRoundState?.movementFrom
-    const movementPlans = priorRoundState?.movementPlans
-    const bombardmentFrom = priorRoundState?.bombardmentFrom
-    const bombardmentPlans = priorRoundState?.bombardmentPlans
-    const queuedBombardmentPlans = priorRoundState?.queuedBombardmentPlans
-    const combatTrigger = priorRoundState?.trigger ?? game.pendingCombat?.trigger
-    const combatKey = game.pendingCombat?.cellKey
-    const attackerId = game.pendingCombat?.attackerId
-
-    const result = confirmCombatDestruction(game, playerId, destructionSelection)
-    if (result.errors.length) return result
-
-    // Если бой испарился, результата нет, но отложенное движение всё равно нужно
-    // дожать — иначе корабли залипают на исходной клетке вместе с маркером.
-    const combatSettled = !!result.combatResult || !!result.combatVanished
-
-    if (
-      !game.pendingCombat
-      && movementFrom
-      && movementPlans?.length
-      && attackerId
-      && combatSettled
-    ) {
-      finishPendingMovementPlans(
-        game,
-        attackerId,
-        movementFrom,
-        movementPlans,
-        result.combatResult ?? null,
-        combatKey,
-      )
-      game.eventLog.push({
-        id: `evt-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-        turn: game.turnNumber,
-        phase: game.phase,
-        type: 'movement',
-        message: `Движение с (${movementFrom.q},${movementFrom.r}) после боя`,
-        timestamp: Date.now(),
-      })
-      trimGameEventLog(game)
-    } else if (
-      combatTrigger === 'bombardment'
-      && bombardmentFrom
-      && bombardmentPlans?.length
-      && attackerId
-      && combatSettled
-    ) {
-      const queueResult = continueBombardmentQueueOrFinalize(
-        game,
-        attackerId,
-        bombardmentFrom,
-        bombardmentPlans,
-        queuedBombardmentPlans,
-        result.combatResult,
-      )
-      if (queueResult.errors.length) return { errors: queueResult.errors, combatResult: result.combatResult }
-    }
-
-    applyVictoryAndDefeatChecks(game, map.id)
-    return result
-  }
-
   if (actionId === 'continue-combat') {
     const pending = game.pendingCombat
     const continuation = pending?.continuation
     const combatKey = pending?.cellKey
     const attackerId = pending?.attackerId
-    const combatOptions = params?.combatOptions as CombatOptions | undefined
-    const result = continuePendingCombat(game, playerId, combatOptions)
+    const result = continuePendingCombat(game, playerId, { diceTargets: params?.diceTargets })
     if (
       result.errors.length === 0
       && (result.combatResult || result.combatVanished)
@@ -1021,9 +1217,17 @@ export function applyGameActionOnSnapshot(
     return { errors }
   }
 
+  if (actionId === 'establish-siege') {
+    return { errors: establishSiege(game, map, playerId) }
+  }
+
   if (actionId === 'update-combat-prep') {
     const ready = params?.ready
-    const prioritySkips = params?.prioritySkips as import('./combat.js').CombatPrioritySkipPlan[] | undefined
+    const rawPriority = params?.targetPriority
+    if (rawPriority != null && (!Array.isArray(rawPriority) || rawPriority.some((id) => typeof id !== 'string'))) {
+      return { errors: ['Некорректный порядок целей'] }
+    }
+    const targetPriority = rawPriority as string[] | undefined
     const supportSide = params?.supportSide as 'attacker' | 'defender' | null | undefined
     if (typeof ready !== 'boolean') {
       return { errors: ['Не удалось передать готовность к бою — обновите страницу и попробуйте снова'] }
@@ -1031,7 +1235,7 @@ export function applyGameActionOnSnapshot(
     if (supportSide != null && supportSide !== 'attacker' && supportSide !== 'defender') {
       return { errors: ['Некорректная сторона поддержки'] }
     }
-    return updateCombatPrep(game, playerId, ready, prioritySkips, supportSide)
+    return updateCombatPrep(game, playerId, ready, targetPriority, supportSide, params?.diceTargets)
   }
 
   if (actionId === 'cancel-combat-prep') {
@@ -1039,11 +1243,11 @@ export function applyGameActionOnSnapshot(
   }
 
   if (actionId === 'advance-phase') {
+    // Потерю в осаде выбирает сам осаждённый — без выбора ход не передаётся.
+    if (game.phase === 'planning' && siegeLossesOwedBy(game, playerId).length > 0) {
+      return { errors: [SIEGE_LOSS_ERRORS.chooseFirst] }
+    }
     return { errors: advanceGameSnapshot(game, map.id) }
-  }
-
-  if (actionId === 'resolve-event') {
-    return { errors: completeEventsPhaseIfActive(game, map.id) }
   }
 
   if (actionId === 'execute-marker-movement') {
@@ -1055,11 +1259,27 @@ export function applyGameActionOnSnapshot(
     return { errors: result.errors, combatResult: result.combatResult }
   }
 
-  if (actionId === 'execute-destroyer-sacrifice') {
+  if (actionId === 'execute-marker-assault') {
     const from = params?.from as HexCoord | undefined
-    const shipId = params?.shipId as string | undefined
-    if (!from || !shipId) return { errors: ['Не удалось выполнить действие — обновите страницу и попробуйте снова'] }
-    return executeDestroyerSacrifice(game, map, playerId, from, shipId)
+    const combatOptions = params?.combatOptions as CombatOptions | undefined
+    if (!from) return { errors: ['Не удалось выполнить действие — обновите страницу и попробуйте снова'] }
+    const result = executeMarkerAssault(game, map, playerId, from, combatOptions)
+    return { errors: result.errors, combatResult: result.combatResult }
+  }
+
+  if (actionId === 'execute-siege-losses') {
+    const shipIds = params?.shipIds
+    if (shipIds == null) {
+      autoResolveSiegeLosses(game, playerId)
+      applyVictoryAndDefeatChecks(game, map.id)
+      return { errors: [] }
+    }
+    if (!Array.isArray(shipIds) || shipIds.some((id) => typeof id !== 'string')) {
+      return { errors: ['Не удалось выполнить действие — обновите страницу и попробуйте снова'] }
+    }
+    const errors = executeSiegeLosses(game, playerId, shipIds as string[])
+    if (!errors.length) applyVictoryAndDefeatChecks(game, map.id)
+    return { errors }
   }
 
   if (actionId === 'execute-marker-bombardment') {
@@ -1101,6 +1321,36 @@ export function applyGameActionOnSnapshot(
     const markerId = params?.markerId as string | undefined
     if (!markerId) return { errors: ['Не удалось выполнить действие — обновите страницу и попробуйте снова'] }
     return { errors: executeProductionRecharge(game, map.id, playerId, { markerId }) }
+  }
+
+  if (actionId === 'execute-claim-picks') {
+    if (claimPicksRemaining(game, playerId) <= 0) {
+      return { errors: [CLAIM_PICK_ERRORS.nothingOwed] }
+    }
+    const picks = params?.picks as HexCoord[] | undefined
+    // Без списка клеток — законный пропуск выбора: движок берёт по приоритету,
+    // центры власти и дорогие фишки первыми.
+    if (picks === undefined || (Array.isArray(picks) && picks.length === 0)) {
+      autoResolveClaimPicks(game, map.id, playerId)
+      return { errors: [] }
+    }
+    if (!Array.isArray(picks)) return { errors: ['Не удалось выполнить действие — обновите страницу и попробуйте снова'] }
+    return { errors: executeClaimPicks(game, map.id, playerId, picks) }
+  }
+
+  if (actionId === 'execute-recharge-picks') {
+    if (rechargePicksRemaining(game, playerId) <= 0) {
+      return { errors: [RECHARGE_PICK_ERRORS.nothingOwed] }
+    }
+    const picks = params?.picks as ResourceTokenRef[] | undefined
+    // Без списка фишек — это пропуск выбора: движок поднимает самые крупные номиналы.
+    // Так действие безопасно для ботов, таймаутов и простых клиентов.
+    if (picks === undefined || (Array.isArray(picks) && picks.length === 0)) {
+      autoResolveRechargePicks(game, playerId)
+      return { errors: [] }
+    }
+    if (!Array.isArray(picks)) return { errors: ['Не удалось выполнить действие — обновите страницу и попробуйте снова'] }
+    return { errors: executeRechargePicks(game, playerId, picks) }
   }
 
   if (actionId === 'toggle-marker') {

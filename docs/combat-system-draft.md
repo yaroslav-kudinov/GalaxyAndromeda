@@ -1,6 +1,6 @@
 # Боевая система Galaxy Andromeda — черновик
 
-> Статус: **MVP реализован** в `@galaxy/rules/src/combat.ts`, интеграция в `movement.ts` / `bombardment.ts`, UI `BattleModal`.
+> Статус: **устарело.** Бой на разнице сумм, щиты и приоритет уничтожения заменены боем на попаданиях — см. [ADR 018](./decisions/018-hit-based-combat.md). Документ оставлен как история прежней модели.
 > Источники: [rulebook.md](./rulebook.md) § «Combat and bombardment», [ships.yaml](../packages/rules/data/ships.yaml).
 
 ## 1. Когда начинается бой

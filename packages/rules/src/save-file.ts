@@ -9,7 +9,6 @@ import {
   productionMarkerLimitForPlayer,
 } from './marker-pools.js'
 import { syncActionMarkerTurnTracking, syncProductionMarkerTurnTracking } from './markers.js'
-import { migrateResourceRechargeSchedule, normalizeResourceRechargeTurns } from './resource-recharge.js'
 import type {
   CellState,
   GameEvent,
@@ -24,7 +23,12 @@ import { hexKey, parseHexKey } from './types.js'
 
 
 export const GALAXY_SAVE_FORMAT = 'galaxy-save' as const
-export const GALAXY_SAVE_VERSION = 1 as const
+/**
+ * Версия 2 — пересборка ядра: бюджет перезарядки вместо интервала, порог победы из карты,
+ * постоянные маркеры действия, осада, доктрины, бой на попаданиях. Партии версии 1 по новым
+ * правилам неиграбельны, поэтому миграции нет — они отклоняются с явным сообщением.
+ */
+export const GALAXY_SAVE_VERSION = 2 as const
 
 const WINDOWS_ILLEGAL_FILENAME_CHARS = /[\\/:*?"<>|]/g
 const MAX_GALAXY_SAVE_DOWNLOAD_BASE_LEN = 120
@@ -75,18 +79,18 @@ export interface PendingEvent {
   resolved?: boolean
 }
 
-import type { CombatOptions, CombatPrepState, PendingCombatRoundState } from './combat.js'
-import { migrateLegacyEventId, type EventCardId, type TurnEventState } from './events.js'
+import type { CombatOptions, CombatPrepState, CombatRoundResult, RolledCombatRound } from './combat.js'
+import type { SiegeState } from './siege.js'
+import type { ActiveDoctrine, DoctrineChoiceState } from './doctrines.js'
 import type { GameOverState } from './victory.js'
 
-export type { TurnEventState, GameOverState }
+export type { GameOverState }
 
 /**
- * Фаза боя между запросами. `rolling` и `finished` не сохраняются: бросок кубов
- * происходит синхронно внутри одного вызова, а завершённый бой — это
- * `pendingCombat === undefined`.
+ * Фаза боя между запросами. Бросок кубов происходит синхронно внутри одного вызова,
+ * а завершённый бой — это `pendingCombat === undefined`.
  */
-export type PendingCombatPhase = 'prep' | 'awaiting-destruction' | 'awaiting-continue'
+export type PendingCombatPhase = 'prep' | 'awaiting-continue' | 'awaiting-rerolls'
 
 interface PendingCombatBase {
   cellKey: string
@@ -100,6 +104,13 @@ interface PendingCombatBase {
    * Пока false — отступление запрещено, стороны обязаны продолжать.
    */
   shipsDestroyedInCombat?: boolean
+  /**
+   * Урон, полученный кораблями в этом бою. Живёт ровно столько, сколько бой: кончился бой —
+   * исчез pendingCombat, а с ним и урон. Межходовой убыли нет.
+   */
+  damageByShipId?: Record<string, number>
+  /** Последний сыгранный раунд — чтобы наблюдатели видели броски. */
+  lastRound?: CombatRoundResult
   /**
    * Контекст боя, начатого перемещением. Атакующие остаются на исходной клетке
    * до окончательного исхода боя, чтобы могли выбрать корректное отступление.
@@ -117,42 +128,64 @@ export interface PendingCombatPrep extends PendingCombatBase {
   prep: CombatPrepState
 }
 
-/** Победитель раунда выбирает корабли для уничтожения */
-export interface PendingCombatAwaitingDestruction extends PendingCombatBase {
-  phase: 'awaiting-destruction'
-  roundState: PendingCombatRoundState
-}
-
-/** Стороны решают, продолжать бой или отступать */
+/**
+ * Перед каждым раундом, кроме первого: стороны выбирают цели и решают, продолжать ли бой.
+ * Первый раунд готовится в фазе `prep`.
+ */
 export interface PendingCombatAwaitingContinue extends PendingCombatBase {
   phase: 'awaiting-continue'
-  /** Решения продолжать бой; сначала атакующий, затем защитник. */
+  /**
+   * Решения продолжать бой. Пока в бою никто не уничтожен, отступать нельзя и стороны
+   * подтверждают цели в любом порядке; после первого уничтожения сначала решает атакующий.
+   */
   continueDecisions: Partial<Record<'attacker' | 'defender', boolean>>
-  roundState?: PendingCombatRoundState
+  /** Третьи игроки, чьи корабли поддерживают бой, подтвердили цели на этот раунд. */
+  supportReady?: Record<string, boolean>
+}
+
+/**
+ * Раунд брошен, гарнизон осаждённой клетки перебрасывает промахи — по одному, видя каждый
+ * результат (ADR 019). Попадания применятся, когда перебросы кончатся или осаждённый закончит.
+ */
+export interface PendingCombatAwaitingRerolls extends PendingCombatBase {
+  phase: 'awaiting-rerolls'
+  /** Брошенные кубики раунда и оставшиеся перебросы. `damageByShipId` — урон до раунда. */
+  rolledRound: RolledCombatRound
 }
 
 /**
  * Дискриминированное объединение: поля, осмысленные только в одной фазе,
- * существуют только в её варианте. Комбинации вроде «prep и roundState
- * одновременно» больше не представимы в типах.
+ * существуют только в её варианте.
  */
 export type PendingCombat =
   | PendingCombatPrep
-  | PendingCombatAwaitingDestruction
   | PendingCombatAwaitingContinue
+  | PendingCombatAwaitingRerolls
+
+function cloneCombatOptions(options: CombatOptions): CombatOptions {
+  const side = (s: CombatOptions['attacker']) =>
+    s
+      ? {
+          ...s,
+          targetPriority: s.targetPriority ? [...s.targetPriority] : undefined,
+          diceTargets: s.diceTargets
+            ? Object.fromEntries(Object.entries(s.diceTargets).map(([k, v]) => [k, [...v]]))
+            : undefined,
+        }
+      : undefined
+  return {
+    ...options,
+    attacker: side(options.attacker),
+    defender: side(options.defender),
+    supportSides: options.supportSides ? { ...options.supportSides } : undefined,
+  }
+}
 
 function cloneCombatPrep(prep: CombatPrepState): CombatPrepState {
   return {
     ...prep,
     readyBy: { ...prep.readyBy },
-    combatOptions: {
-      ...prep.combatOptions,
-      attacker: prep.combatOptions.attacker ? { ...prep.combatOptions.attacker } : undefined,
-      defender: prep.combatOptions.defender ? { ...prep.combatOptions.defender } : undefined,
-      supportSides: prep.combatOptions.supportSides
-        ? { ...prep.combatOptions.supportSides }
-        : undefined,
-    },
+    combatOptions: cloneCombatOptions(prep.combatOptions),
     movementFrom: prep.movementFrom ? { ...prep.movementFrom } : undefined,
     movementPlans: prep.movementPlans?.map((m) => ({ ...m, to: { ...m.to } })),
     bombardmentFrom: prep.bombardmentFrom ? { ...prep.bombardmentFrom } : undefined,
@@ -167,22 +200,12 @@ function cloneCombatPrep(prep: CombatPrepState): CombatPrepState {
   }
 }
 
-function cloneRoundState(rs: PendingCombatRoundState): PendingCombatRoundState {
+function cloneCombatRound(round: CombatRoundResult): CombatRoundResult {
   return {
-    ...rs,
-    rounds: rs.rounds.map((r) => ({ ...r, shipRolls: r.shipRolls.map((sr) => ({ ...sr })) })),
-    combatOptions: { ...rs.combatOptions },
-    incomingAttackerShipIds: [...rs.incomingAttackerShipIds],
-    attackerSkipTypes: [...rs.attackerSkipTypes],
-    defenderSkipTypes: [...rs.defenderSkipTypes],
-    movementFrom: rs.movementFrom ? { ...rs.movementFrom } : undefined,
-    movementPlans: rs.movementPlans?.map((m) => ({ ...m, to: { ...m.to } })),
-    bombardmentFrom: rs.bombardmentFrom ? { ...rs.bombardmentFrom } : undefined,
-    bombardmentPlans: rs.bombardmentPlans?.map((p) => ({ ...p, target: { ...p.target } })),
-    queuedBombardmentPlans: rs.queuedBombardmentPlans?.map((p) => ({
-      ...p,
-      target: { ...p.target },
-    })),
+    ...round,
+    shipRolls: round.shipRolls.map((log) => ({ ...log, dice: log.dice.map((d) => ({ ...d })) })),
+    damageByShipId: { ...round.damageByShipId },
+    destroyedShipIds: [...round.destroyedShipIds],
   }
 }
 
@@ -194,8 +217,10 @@ export function clonePendingCombat(pending: PendingCombat | undefined): PendingC
     defenderIds: [...pending.defenderIds],
     roundNumber: pending.roundNumber,
     trigger: pending.trigger,
-    combatOptions: pending.combatOptions ? { ...pending.combatOptions } : undefined,
+    combatOptions: pending.combatOptions ? cloneCombatOptions(pending.combatOptions) : undefined,
     shipsDestroyedInCombat: pending.shipsDestroyedInCombat,
+    damageByShipId: pending.damageByShipId ? { ...pending.damageByShipId } : undefined,
+    lastRound: pending.lastRound ? cloneCombatRound(pending.lastRound) : undefined,
     continuation: pending.continuation
       ? {
           movementFrom: { ...pending.continuation.movementFrom },
@@ -208,63 +233,35 @@ export function clonePendingCombat(pending: PendingCombat | undefined): PendingC
   switch (pending.phase) {
     case 'prep':
       return { ...base, phase: 'prep', prep: cloneCombatPrep(pending.prep) }
-    case 'awaiting-destruction':
-      return {
-        ...base,
-        phase: 'awaiting-destruction',
-        roundState: cloneRoundState(pending.roundState),
-      }
     case 'awaiting-continue':
       return {
         ...base,
         phase: 'awaiting-continue',
         continueDecisions: { ...pending.continueDecisions },
-        roundState: pending.roundState ? cloneRoundState(pending.roundState) : undefined,
+        ...(pending.supportReady ? { supportReady: { ...pending.supportReady } } : {}),
+      }
+    case 'awaiting-rerolls':
+      return {
+        ...base,
+        phase: 'awaiting-rerolls',
+        rolledRound: {
+          dice: pending.rolledRound.dice.map((die) => ({ ...die, history: [...die.history] })),
+          rerolls: pending.rolledRound.rerolls ? { ...pending.rolledRound.rerolls } : null,
+        },
       }
   }
 }
 
 /**
- * Сохранения до введения `phase` кодировали фазу тремя независимыми флагами.
- * Выводим дискриминатор из них, чтобы старые файлы и комнаты открывались.
+ * Бой без распознаваемой фазы восстановить нельзя — безопаснее снять его, чем оставить игроков
+ * в заблокированном состоянии. Сюда же попадает снятая фаза выбора жертв победителем.
  */
 export function migrateLegacyPendingCombat(raw: unknown): PendingCombat | undefined {
   if (!raw || typeof raw !== 'object') return undefined
-  const legacy = raw as Record<string, unknown>
-  if (typeof legacy.phase === 'string') return raw as PendingCombat
-
-  const base = {
-    cellKey: String(legacy.cellKey ?? ''),
-    attackerId: String(legacy.attackerId ?? ''),
-    defenderIds: Array.isArray(legacy.defenderIds) ? (legacy.defenderIds as string[]) : [],
-    roundNumber: typeof legacy.roundNumber === 'number' ? legacy.roundNumber : 1,
-    trigger: legacy.trigger as PendingCombat['trigger'],
-    combatOptions: legacy.combatOptions as PendingCombat['combatOptions'],
-    shipsDestroyedInCombat: legacy.shipsDestroyedInCombat === true,
-    continuation: legacy.continuation as PendingCombat['continuation'],
+  const phase = (raw as Record<string, unknown>).phase
+  if (phase === 'prep' || phase === 'awaiting-continue' || phase === 'awaiting-rerolls') {
+    return raw as PendingCombat
   }
-
-  if (legacy.prep) {
-    return { ...base, phase: 'prep', prep: legacy.prep as CombatPrepState }
-  }
-  if (legacy.awaitingDestruction && legacy.roundState) {
-    return {
-      ...base,
-      phase: 'awaiting-destruction',
-      roundState: legacy.roundState as PendingCombatRoundState,
-    }
-  }
-  if (legacy.awaitingContinue) {
-    return {
-      ...base,
-      phase: 'awaiting-continue',
-      continueDecisions:
-        (legacy.continueDecisions as PendingCombatAwaitingContinue['continueDecisions']) ?? {},
-      roundState: legacy.roundState as PendingCombatRoundState | undefined,
-    }
-  }
-  // Бой без распознаваемой фазы восстановить нельзя — безопаснее снять его,
-  // чем оставить игроков в заблокированном состоянии.
   return undefined
 }
 
@@ -305,13 +302,56 @@ export interface GameSnapshot {
   productionMarkerBoughtByPlayerThisTurn?: Record<string, boolean>
   /** Кто реально в игре (остальные слоты карты пропускаются в очереди хода) */
   participatingPlayerIds?: string[]
-  /** Глобальное событие текущего хода (одно на всех игроков) */
-  turnEvent?: TurnEventState
   /**
-   * Оставшиеся карты событий (верх колоды — индекс 0).
-   * Пустая / отсутствующая колода при следующей вытяжке перетасовывается заново.
+   * Порог победы по центрам власти, скопированный из карты при старте партии.
+   *
+   * Хранится в снимке, а не читается из карты каждый раз: карту можно отредактировать
+   * между партиями, и начатая партия обязана доиграться со своим порогом. Заодно до
+   * проверки победы доезжает только `mapId`, а не сама карта.
    */
-  eventDeck?: EventCardId[]
+  victoryPowerCenters?: number
+  /** Жёсткий лимит ходов; по его достижении победитель определяется цепочкой тай-брейков. */
+  turnLimit?: number
+  /** Сид партии: разрешает ничьи и прочие броски, одинаковые при повторной загрузке сейва. */
+  matchSeed?: number
+  /**
+   * Сколько фишек игроку ещё предстоит поднять в этом ходу.
+   *
+   * Поле появляется, только когда перевёрнутых фишек больше бюджета: если выбирать не из
+   * чего, фишки поднимаются молча и долг не заводится.
+   */
+  rechargePicksRemainingByPlayer?: Record<string, number>
+  /**
+   * Сколько клеток игроку ещё предстоит занять по итогам прошлого хода.
+   *
+   * Заводится, только когда подходящих клеток больше лимита захвата: если выбирать не из
+   * чего, клетки занимаются сразу в конце хода.
+   */
+  claimPicksRemainingByPlayer?: Record<string, number>
+  /** Осаждённые центры власти по ключу клетки (ADR 019). */
+  sieges?: Record<string, SiegeState>
+  /**
+   * Клетки, где осаждённому предстоит выбрать, какой корабль гарнизона потерять. Заводится,
+   * только когда в гарнизоне корабли разных классов.
+   */
+  siegeLossesOwedByPlayer?: Record<string, string[]>
+  /** Ход, в котором тик осады уже прошёл: тик идемпотентен. */
+  siegeTickTurn?: number
+  /**
+   * Бой за осаждённую клетку кончился, гарнизон жив: победитель решает — продолжать осаду или
+   * отойти на соседнюю клетку (ADR 019). Пока решение не принято, партия ждёт.
+   */
+  siegeContinuationChoice?: { cellKey: string; playerId: string }
+  /**
+   * Длина окна доктрин в ходах (ADR 020). Нет поля — доктрин в партии нет (обучение).
+   */
+  doctrineWindow?: number
+  /** Доктрины, вступившие в силу: какая и с какого хода. */
+  doctrineByPlayer?: Record<string, ActiveDoctrine>
+  /** Незакрытый выбор доктрин на новое окно. Чужие выборы до вскрытия не показываются. */
+  doctrineChoice?: DoctrineChoiceState
+  /** Обучение: все кубики в боях выпадают этим значением (см. `ScenarioScript`). */
+  scriptedDiceValue?: number
   /** Игра завершена */
   gameOver?: GameOverState
   /** Незавершённый многoroundовый бой */
@@ -324,10 +364,6 @@ export interface GameSnapshot {
   actionMarkerLimitByPlayer?: Record<string, number>
   /** Купленный лимит маркеров производства (устарело; миграция очищает PM) */
   productionMarkerLimitByPlayer?: Record<string, number>
-  /** Полных ходов до следующей автоперезарядки (1 — в конце текущего) */
-  resourceRechargeTurnsRemaining?: 1 | 2 | 3
-  /** @deprecated миграция; см. resourceRechargeTurnsRemaining */
-  resourceRechargeInterval?: 1 | 2 | 3
   /** Прогресс обучающего сценария */
   scenarioProgress?: import('./scenario.js').ScenarioProgress
 }
@@ -394,6 +430,8 @@ export function gameSnapshotFromGameState(state: GameState): GameSnapshot {
     productionMarkers: [],
     actionMarkerResolvedThisTurn: false,
     productionMarkerResolvedThisTurn: false,
+    victoryPowerCenters: state.victoryPowerCenters,
+    turnLimit: state.turnLimit,
   }
   ensureMarkerLimits(snapshot)
   return snapshot
@@ -459,12 +497,22 @@ export function gameStateFromSnapshot(snapshot: GameSnapshot, mapId: string): Ga
     players: snapshot.players,
     cells: snapshot.cells.map(({ actionMarkerId: _a, productionMarkerId: _p, ...cell }) => cell),
     eventLog: snapshot.eventLog,
+    victoryPowerCenters: snapshot.victoryPowerCenters,
+    turnLimit: snapshot.turnLimit,
+    matchSeed: snapshot.matchSeed,
   }
 }
 
 export function parseGalaxySave(raw: unknown): GalaxySaveFile {
   if (isGalaxySaveFile(raw)) {
     return normalizeGalaxySave(raw)
+  }
+  if (isRecord(raw) && raw.format === GALAXY_SAVE_FORMAT) {
+    throw new Error(
+      `Сохранение версии ${String(raw.version)} не поддерживается: правила игры изменились, `
+        + `нужна версия ${GALAXY_SAVE_VERSION}. Старую партию продолжить нельзя, начните новую. `
+        + `Карты (.galaxy.json) по-прежнему открываются.`,
+    )
   }
   if (isLegacyMapDefinition(raw)) {
     return galaxySaveFromMap(normalizeMapDefinition(raw))
@@ -521,14 +569,20 @@ function normalizeGameSnapshot(game: GameSnapshot, _map?: MapDefinition): GameSn
     participatingPlayerIds: game.participatingPlayerIds
       ? [...game.participatingPlayerIds]
       : undefined,
-    turnEvent: game.turnEvent
-      ? {
-          ...game.turnEvent,
-          eventId: migrateLegacyEventId(String(game.turnEvent.eventId)),
-        }
+    victoryPowerCenters: game.victoryPowerCenters,
+    turnLimit: game.turnLimit,
+    matchSeed: game.matchSeed,
+    doctrineWindow: game.doctrineWindow,
+    scriptedDiceValue: game.scriptedDiceValue,
+    doctrineByPlayer: game.doctrineByPlayer
+      ? Object.fromEntries(Object.entries(game.doctrineByPlayer).map(([id, d]) => [id, { ...d }]))
       : undefined,
-    eventDeck: Array.isArray(game.eventDeck)
-      ? game.eventDeck.map((id) => migrateLegacyEventId(String(id)))
+    doctrineChoice: game.doctrineChoice
+      ? {
+          windowStart: game.doctrineChoice.windowStart,
+          picks: { ...game.doctrineChoice.picks },
+          ...(game.doctrineChoice.pickedBy ? { pickedBy: [...game.doctrineChoice.pickedBy] } : {}),
+        }
       : undefined,
     gameOver: game.gameOver ? { ...game.gameOver } : undefined,
     pendingCombat: clonePendingCombat(migrateLegacyPendingCombat(game.pendingCombat)),
@@ -547,14 +601,25 @@ function normalizeGameSnapshot(game: GameSnapshot, _map?: MapDefinition): GameSn
     productionMarkerLimitByPlayer: game.productionMarkerLimitByPlayer
       ? { ...game.productionMarkerLimitByPlayer }
       : undefined,
-    resourceRechargeTurnsRemaining:
-      normalizeResourceRechargeTurns(game.resourceRechargeTurnsRemaining)
-      ?? normalizeResourceRechargeTurns(game.resourceRechargeInterval)
-      ?? undefined,
+    rechargePicksRemainingByPlayer: game.rechargePicksRemainingByPlayer
+      ? { ...game.rechargePicksRemainingByPlayer }
+      : undefined,
+    claimPicksRemainingByPlayer: game.claimPicksRemainingByPlayer
+      ? { ...game.claimPicksRemainingByPlayer }
+      : undefined,
+    sieges: game.sieges
+      ? Object.fromEntries(Object.entries(game.sieges).map(([key, siege]) => [key, { ...siege }]))
+      : undefined,
+    siegeLossesOwedByPlayer: game.siegeLossesOwedByPlayer
+      ? Object.fromEntries(
+          Object.entries(game.siegeLossesOwedByPlayer).map(([key, cells]) => [key, [...cells]]),
+        )
+      : undefined,
+    siegeTickTurn: game.siegeTickTurn,
+    siegeContinuationChoice: game.siegeContinuationChoice ? { ...game.siegeContinuationChoice } : undefined,
   }
 
   ensureMarkerLimits(normalized)
-  migrateResourceRechargeSchedule(normalized)
   return normalized
 }
 
@@ -754,8 +819,16 @@ export function gameSnapshotFromObservation(
       ? (fromObservationField(mech, 'participatingPlayerIds', preserve?.participatingPlayerIds)
         ?? preserve?.participatingPlayerIds)
       : preserve?.participatingPlayerIds,
-    turnEvent: fromObservationField(mech, 'turnEvent', preserve?.turnEvent),
-    eventDeck: fromObservationField(mech, 'eventDeck', preserve?.eventDeck),
+    victoryPowerCenters: fromObservationField(
+      mech,
+      'victoryPowerCenters',
+      preserve?.victoryPowerCenters,
+    ),
+    turnLimit: fromObservationField(mech, 'turnLimit', preserve?.turnLimit),
+    matchSeed: fromObservationField(mech, 'matchSeed', preserve?.matchSeed),
+    doctrineWindow: fromObservationField(mech, 'doctrineWindow', preserve?.doctrineWindow),
+    doctrineByPlayer: fromObservationField(mech, 'doctrineByPlayer', preserve?.doctrineByPlayer),
+    doctrineChoice: fromObservationField(mech, 'doctrineChoice', preserve?.doctrineChoice),
     productionTokensSpentThisTurn: fromObservationField(
       mech,
       'productionTokensSpentThisTurn',
@@ -783,10 +856,27 @@ export function gameSnapshotFromObservation(
       'productionMarkerLimitByPlayer',
       preserve?.productionMarkerLimitByPlayer,
     ),
-    resourceRechargeTurnsRemaining: fromObservationField(
+    rechargePicksRemainingByPlayer: fromObservationField(
       mech,
-      'resourceRechargeTurnsRemaining',
-      preserve?.resourceRechargeTurnsRemaining,
+      'rechargePicksRemainingByPlayer',
+      preserve?.rechargePicksRemainingByPlayer,
+    ),
+    claimPicksRemainingByPlayer: fromObservationField(
+      mech,
+      'claimPicksRemainingByPlayer',
+      preserve?.claimPicksRemainingByPlayer,
+    ),
+    sieges: fromObservationField(mech, 'sieges', preserve?.sieges),
+    siegeLossesOwedByPlayer: fromObservationField(
+      mech,
+      'siegeLossesOwedByPlayer',
+      preserve?.siegeLossesOwedByPlayer,
+    ),
+    siegeTickTurn: fromObservationField(mech, 'siegeTickTurn', preserve?.siegeTickTurn),
+    siegeContinuationChoice: fromObservationField(
+      mech,
+      'siegeContinuationChoice',
+      preserve?.siegeContinuationChoice,
     ),
   }, map)
 

@@ -44,7 +44,6 @@ describe('tutorial corridor', () => {
     expect(scenario.mapId).toBe('tutorial-corridor')
     expect(scenario.bots?.map((bot) => bot.playerId)).toEqual(['player-2', 'player-3'])
     expect(scenario.steps.length).toBeGreaterThanOrEqual(12)
-    expect(scenario.eventDeck?.[0]).toBe('empty-void')
     const markerStep = scenario.steps.find((step) => step.id === 'marker-cruisers')
     expect(markerStep?.allowedActions?.[0]).toMatchObject({
       actionId: 'toggle-marker',
@@ -71,6 +70,8 @@ describe('tutorial corridor', () => {
     game.phase = 'actions'
     game.activePlayerId = 'player-1'
     game.participatingPlayerIds = ['player-1', 'player-2', 'player-3']
+    // Раунд без потерь теперь ждёт выбора целей — кубики как в обучении, бой кончается в первом раунде.
+    game.scriptedDiceValue = 6
 
     const source = game.cells.find((cell) => cell.coord.q === -3 && cell.coord.r === 0)!
     const home = game.cells.find((cell) => cell.coord.q === -5 && cell.coord.r === 0)!

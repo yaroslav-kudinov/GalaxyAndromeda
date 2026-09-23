@@ -1,22 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import {
-  PRIORITY_SKIP_DESTROY_SURCHARGE,
-  applyShieldAbsorption,
   buildBombardmentPreview,
-  computeRoundDamage,
   getBombardmentTargetKeys,
-  getDestroyCost,
-  getDestroyCostWithPrioritySkip,
   getEffectiveFireRangeBounds,
   getFireRangeBounds,
   groupBombardmentPlansByTarget,
   rollCombatRound,
-  selectShipsToDestroy,
-  SHIELD_ABSORB_NEIGHBOR,
-  SHIELD_ABSORB_SELF,
-  SHIP_COMBAT_DICE,
-  SHIP_COMBAT_DIE_FACES,
-  SHIP_SUPPORT_DIE_FACES,
+  SHIP_DICE,
+  SHIP_HIT_THRESHOLD,
+  SHIP_HULL,
   validateBombardmentTarget,
   validateMarkerBombardment,
 } from './index.js'
@@ -39,83 +31,21 @@ function addShip(
   if (!cell.controlOwnerId) cell.controlOwnerId = ownerId
 }
 
-describe('По правилам (PDF / rulebook compliance)', () => {
-  it('щиты поглощают 6 на клетке + 3 с соседа', () => {
-    expect(
-      applyShieldAbsorption(8, [
-        {
-          shipId: 'sh-self',
-          ownerId: 'p2',
-          absorbCapacity: SHIELD_ABSORB_SELF,
-          scope: 'self',
-          fromCoord: { q: 1, r: 0 },
-        },
-        {
-          shipId: 'sh-nei',
-          ownerId: 'p2',
-          absorbCapacity: SHIELD_ABSORB_NEIGHBOR,
-          scope: 'neighbor',
-          fromCoord: { q: 0, r: 0 },
-        },
-      ]),
-    ).toEqual({ remainingDamage: 0, absorbed: 8 })
-    expect(
-      applyShieldAbsorption(12, [
-        {
-          shipId: 'sh-self',
-          ownerId: 'p2',
-          absorbCapacity: SHIELD_ABSORB_SELF,
-          scope: 'self',
-          fromCoord: { q: 1, r: 0 },
-        },
-        {
-          shipId: 'sh-nei',
-          ownerId: 'p2',
-          absorbCapacity: SHIELD_ABSORB_NEIGHBOR,
-          scope: 'neighbor',
-          fromCoord: { q: 0, r: 0 },
-        },
-      ]),
-    ).toEqual({ remainingDamage: 3, absorbed: 9 })
+describe('По правилам (ADR 018: бой на попаданиях)', () => {
+  it('таблица классов: кубики, попадание, прочность', () => {
+    expect(SHIP_DICE).toEqual({ destroyer: 1, cruiser: 2, battleship: 3, carrier: 0, hyper: 3 })
+    expect(SHIP_HIT_THRESHOLD).toEqual({ destroyer: 6, cruiser: 5, battleship: 4, hyper: 3 })
+    expect(SHIP_HULL).toEqual({ destroyer: 1, cruiser: 2, battleship: 3, carrier: 2, hyper: 2 })
   })
 
-  it('очки уничтожения = |разница сумм|, не полная сумма победителя', () => {
-    expect(
-      computeRoundDamage({ attackerTotal: 15, defenderTotal: 7, winner: 'attacker' }),
-    ).toBe(8)
+  it('дальность = 6 − порог: эсминец 0, крейсер 1, линкор 2, гиперорудие 3', () => {
+    expect(getFireRangeBounds('destroyer').max).toBe(0)
+    expect(getFireRangeBounds('cruiser').max).toBe(1)
+    expect(getFireRangeBounds('battleship').max).toBe(2)
+    expect(getFireRangeBounds('hyper').max).toBe(3)
   })
 
-  it('priority skip: destroyCost +1 (линкор 9→10), без фишек', () => {
-    expect(PRIORITY_SKIP_DESTROY_SURCHARGE).toBe(1)
-    expect(getDestroyCost('battleship')).toBe(9)
-    expect(getDestroyCostWithPrioritySkip('battleship', new Set(['battleship']))).toBe(10)
-    expect(getDestroyCostWithPrioritySkip('battleship', new Set())).toBe(9)
-
-    const ships = [
-      { id: 'bb', type: 'battleship' as ShipType, ownerId: 'p2' },
-      { id: 'dd', type: 'destroyer' as ShipType, ownerId: 'p2' },
-    ]
-    // Бюджет 10: без skip хватает на dd(4)+bb(9)=13 → только dd; со skip bb=10 → только dd
-    expect(selectShipsToDestroy(ships, 10, new Set(['battleship']))).toEqual(['dd'])
-    // Бюджет 10 без skip: dd(4) затем bb(9) — после dd остаётся 6 < 9 → только dd
-    expect(selectShipsToDestroy(ships, 10, new Set())).toEqual(['dd'])
-    // Бюджет 13 со skip bb: dd(4)+bb(10)=14 → только dd; бюджет 14 → оба
-    expect(selectShipsToDestroy(ships, 14, new Set(['battleship']))).toEqual(['dd', 'bb'])
-  })
-
-  it('баланс: destroyCost эсминца 3 (дуэль 1d4), support d4; крейсер в бою 2d6', () => {
-    expect(getDestroyCost('destroyer')).toBe(3)
-    expect(SHIP_SUPPORT_DIE_FACES).toMatchObject({
-      cruiser: 4,
-      battleship: 4,
-      hyper: 4,
-    })
-    expect(SHIP_COMBAT_DIE_FACES.cruiser).toBe(6)
-    expect(SHIP_COMBAT_DIE_FACES.destroyer).toBe(4)
-    expect(SHIP_COMBAT_DICE.cruiser).toBe(2)
-  })
-
-  it('гиперпространственное орудие fireRange 2–3: соседняя клетка запрещена', () => {
+  it('гиперорудие: дальность 2–3, соседняя клетка запрещена', () => {
     expect(getFireRangeBounds('hyper')).toEqual({ min: 2, max: 3 })
 
     const map = createEmptyMap('hyper-range', 'Hyper')
@@ -153,7 +83,7 @@ describe('По правилам (PDF / rulebook compliance)', () => {
     expect(boundsGap.max).toBe(3)
   })
 
-  it('обстрел: защитник не бросает; урон = сумма обстрела', () => {
+  it('обстрел: защитник не отвечает; крейсер с соседней клетки бьёт на 6+', () => {
     const map = createEmptyMap('bomb-dice', 'Bomb')
     map.cells.push({ q: 0, r: 0 }, { q: 1, r: 0 })
     const game = gameSnapshotFromMap(map)
@@ -169,14 +99,13 @@ describe('По правилам (PDF / rulebook compliance)', () => {
       { q: 0, r: 0 },
     )
     expect(preview).not.toBeNull()
-    expect(preview!.defender.combatDiceTotal).toBe(0)
-    expect(preview!.defender.supportingShips).toEqual([])
+    expect(preview!.defender.diceTotal).toBe(0)
+    expect(preview!.attacker.supportingShips[0]?.threshold).toBe(6)
 
-    const round = rollCombatRound(preview!, () => 0.99)
-    expect(round.defenderTotal).toBe(0)
+    const round = rollCombatRound(preview!, {}, {}, () => 0.99)
+    expect(round.defenderHits).toBe(0)
     expect(round.shipRolls.every((r) => r.side === 'attacker')).toBe(true)
-    expect(round.winner).toBe('attacker')
-    expect(computeRoundDamage(round)).toBe(round.attackerTotal)
+    expect(round.destroyedShipIds).toEqual(['def-dd'])
   })
 
   it('несколько целей обстрела за маркер — группировка и валидация', () => {

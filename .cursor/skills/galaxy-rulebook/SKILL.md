@@ -18,8 +18,10 @@ When changing rules:
 
 Key examples to test:
 
-- Shield absorb 6+3 points
-- Priority skip: battleship cost 9+1=10
-- Production by region size
-- Hyper fireRange [2, 3] (not adjacent)
+- Hit-based combat: each ship rolls its dice at its class threshold; hits apply simultaneously (ADR 018)
+- Targets are chosen before every round (`diceTargets`); unassigned dice are auto-allocated
+- Range from accuracy: +1 needed per hex, nothing above 6; hyper fires at 2–3 hexes only
+- Hyper hull: 1 in battle on its cell, 2 under bombardment
+- Siege: garrison rerolls misses one by one; tick loses one ship per turn (ADR 019)
+- Doctrines: 3-turn windows, values in `packages/rules/src/doctrines.ts` (ADR 020)
 - Bombardment: defender does not roll

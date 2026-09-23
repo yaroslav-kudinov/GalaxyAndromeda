@@ -1,4 +1,4 @@
-export * from './events.js'
+export * from './doctrines.js'
 export * from './event-log.js'
 export * from './types.js'
 export * from './constants.js'
@@ -7,6 +7,8 @@ export * from './map.js'
 export * from './observation/index.js'
 export * from './game.js'
 export * from './combat.js'
+export * from './combat-hits.js'
+export * from './siege.js'
 export * from './bombardment.js'
 export * from './production.js'
 export * from './turn.js'
@@ -20,7 +22,6 @@ export * from './ships.js'
 export * from './movement.js'
 export * from './regions.js'
 export * from './supply-chains.js'
-export * from './destroyer-sacrifice.js'
 export * from './claim.js'
 export * from './resource-recharge.js'
 export * from './surrender.js'
@@ -31,7 +32,7 @@ export {
   START_PRODUCTION_MARKER_LIMIT,
   MAX_PRODUCTION_MARKERS_PER_PLAYER,
   PRODUCTION_MARKER_EXPAND_COST,
-  ACTION_MARKER_LIMIT_BASE,
+  ACTION_MARKER_LIMIT,
   countControlledPowerCenters,
   computeActionMarkerLimit,
   actionMarkerLimitForPlayer,
@@ -42,3 +43,4 @@ export {
   trimExcessActionMarkers,
   syncActionMarkerLimits,
 } from './marker-pools.js'
+export * from './combat-targets.js'

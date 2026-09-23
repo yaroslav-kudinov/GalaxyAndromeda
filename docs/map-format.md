@@ -27,6 +27,7 @@ Axial hex coordinates `(q, r)`, flat-top layout.
 | `id` | Unique map identifier |
 | `name` | Display name |
 | `playerCount` | Optional intended player count **1–6** (`MAX_LOBBY_PLAYERS`). Independent of editor symmetry mode. If omitted, inferred from `startPlayer` / `startingShips` slots (default **2** when none) |
+| `victoryPowerCenters` | Optional number of power centers needed to win. Copied into the snapshot when a match starts, so editing the map later does not change a game already in progress. If omitted, the legacy rule applies: strictly more than half of all power centers on the map |
 | `cells` | Hex cell definitions |
 
 ## Fields per cell
@@ -47,7 +48,7 @@ Axial hex coordinates `(q, r)`, flat-top layout.
 
 ## Ships (`startingShips`)
 
-Types: `destroyer`, `cruiser`, `battleship`, `shield`, `hyper`. Unknown types (including legacy `supply`) are dropped on normalize.  
+Types: `destroyer`, `cruiser`, `battleship`, `carrier`, `hyper`. Unknown types (including legacy `supply` and `shield`, removed in ADR 018) are dropped on normalize.  
 Max **4 ships per player** and **8 total** in one hex (e.g. two players in battle).
 
 ## Legacy

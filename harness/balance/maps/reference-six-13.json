@@ -1,0 +1,1496 @@
+{
+  "id": "reference-six-13",
+  "name": "Шестиконечный путь, 13 центров",
+  "playerCount": 6,
+  "cells": [
+    {
+      "q": 0,
+      "r": -9,
+      "resourceToken": {
+        "type": "credits",
+        "value": 3,
+        "faceUp": true
+      }
+    },
+    {
+      "q": 1,
+      "r": -9
+    },
+    {
+      "q": 2,
+      "r": -9
+    },
+    {
+      "q": 3,
+      "r": -9
+    },
+    {
+      "q": 6,
+      "r": -9
+    },
+    {
+      "q": 7,
+      "r": -9
+    },
+    {
+      "q": 8,
+      "r": -9
+    },
+    {
+      "q": 9,
+      "r": -9,
+      "resourceToken": {
+        "type": "credits",
+        "value": 3,
+        "faceUp": true
+      }
+    },
+    {
+      "q": -1,
+      "r": -8
+    },
+    {
+      "q": 0,
+      "r": -8
+    },
+    {
+      "q": 1,
+      "r": -8
+    },
+    {
+      "q": 2,
+      "r": -8
+    },
+    {
+      "q": 3,
+      "r": -8,
+      "startPlayer": null,
+      "resourceToken": {
+        "type": "credits",
+        "value": 6,
+        "faceUp": true
+      }
+    },
+    {
+      "q": 4,
+      "r": -8,
+      "startPlayer": null,
+      "resourceToken": {
+        "type": "production",
+        "value": 5,
+        "faceUp": true
+      }
+    },
+    {
+      "q": 5,
+      "r": -8
+    },
+    {
+      "q": 6,
+      "r": -8
+    },
+    {
+      "q": 7,
+      "r": -8,
+      "startPlayer": null
+    },
+    {
+      "q": 8,
+      "r": -8
+    },
+    {
+      "q": 9,
+      "r": -8
+    },
+    {
+      "q": -2,
+      "r": -7
+    },
+    {
+      "q": -1,
+      "r": -7,
+      "startPlayer": null
+    },
+    {
+      "q": 0,
+      "r": -7,
+      "resourceToken": {
+        "type": "production",
+        "value": 2,
+        "faceUp": true
+      }
+    },
+    {
+      "q": 1,
+      "r": -7
+    },
+    {
+      "q": 2,
+      "r": -7
+    },
+    {
+      "q": 3,
+      "r": -7
+    },
+    {
+      "q": 4,
+      "r": -7
+    },
+    {
+      "q": 5,
+      "r": -7,
+      "resourceToken": {
+        "type": "production",
+        "value": 2,
+        "faceUp": true
+      }
+    },
+    {
+      "q": 6,
+      "r": -7,
+      "isPowerCenter": true,
+      "startPlayer": 6,
+      "startingShips": [
+        {
+          "type": "destroyer",
+          "player": 6
+        },
+        {
+          "type": "destroyer",
+          "player": 6
+        }
+      ]
+    },
+    {
+      "q": 7,
+      "r": -7,
+      "resourceToken": {
+        "type": "production",
+        "value": 2,
+        "faceUp": true
+      }
+    },
+    {
+      "q": 8,
+      "r": -7
+    },
+    {
+      "q": 9,
+      "r": -7
+    },
+    {
+      "q": -3,
+      "r": -6
+    },
+    {
+      "q": -2,
+      "r": -6
+    },
+    {
+      "q": -1,
+      "r": -6,
+      "isPowerCenter": true,
+      "startPlayer": 5,
+      "startingShips": [
+        {
+          "type": "destroyer",
+          "player": 5
+        },
+        {
+          "type": "destroyer",
+          "player": 5
+        }
+      ]
+    },
+    {
+      "q": 0,
+      "r": -6,
+      "startPlayer": 5,
+      "resourceToken": {
+        "type": "production",
+        "value": 5,
+        "faceUp": true
+      },
+      "startingShips": [
+        {
+          "type": "cruiser",
+          "player": 5
+        }
+      ]
+    },
+    {
+      "q": 5,
+      "r": -6,
+      "startPlayer": 6,
+      "resourceToken": {
+        "type": "credits",
+        "value": 7,
+        "faceUp": true
+      },
+      "startingShips": [
+        {
+          "type": "cruiser",
+          "player": 6
+        }
+      ]
+    },
+    {
+      "q": 6,
+      "r": -6,
+      "startPlayer": 6,
+      "resourceToken": {
+        "type": "production",
+        "value": 5,
+        "faceUp": true
+      },
+      "startingShips": [
+        {
+          "type": "cruiser",
+          "player": 6
+        }
+      ]
+    },
+    {
+      "q": 7,
+      "r": -6
+    },
+    {
+      "q": 8,
+      "r": -6
+    },
+    {
+      "q": 9,
+      "r": -6
+    },
+    {
+      "q": -3,
+      "r": -5
+    },
+    {
+      "q": -2,
+      "r": -5,
+      "resourceToken": {
+        "type": "production",
+        "value": 2,
+        "faceUp": true
+      }
+    },
+    {
+      "q": -1,
+      "r": -5,
+      "startPlayer": 5,
+      "resourceToken": {
+        "type": "credits",
+        "value": 7,
+        "faceUp": true
+      },
+      "startingShips": [
+        {
+          "type": "cruiser",
+          "player": 5
+        }
+      ]
+    },
+    {
+      "q": 0,
+      "r": -5,
+      "startPlayer": 5,
+      "startingShips": [
+        {
+          "type": "destroyer",
+          "player": 5
+        },
+        {
+          "type": "destroyer",
+          "player": 5
+        }
+      ]
+    },
+    {
+      "q": 2,
+      "r": -5,
+      "startPlayer": null
+    },
+    {
+      "q": 5,
+      "r": -5,
+      "startPlayer": 6,
+      "startingShips": [
+        {
+          "type": "destroyer",
+          "player": 6
+        },
+        {
+          "type": "destroyer",
+          "player": 6
+        }
+      ]
+    },
+    {
+      "q": 7,
+      "r": -5
+    },
+    {
+      "q": 8,
+      "r": -5,
+      "startPlayer": null,
+      "resourceToken": {
+        "type": "credits",
+        "value": 6,
+        "faceUp": true
+      }
+    },
+    {
+      "q": -4,
+      "r": -4,
+      "startPlayer": null,
+      "resourceToken": {
+        "type": "production",
+        "value": 5,
+        "faceUp": true
+      }
+    },
+    {
+      "q": -3,
+      "r": -4
+    },
+    {
+      "q": 0,
+      "r": -4
+    },
+    {
+      "q": 1,
+      "r": -4,
+      "resourceToken": {
+        "type": "credits",
+        "value": 2,
+        "faceUp": true
+      }
+    },
+    {
+      "q": 3,
+      "r": -4,
+      "resourceToken": {
+        "type": "credits",
+        "value": 2,
+        "faceUp": true
+      }
+    },
+    {
+      "q": 4,
+      "r": -4
+    },
+    {
+      "q": 7,
+      "r": -4
+    },
+    {
+      "q": 8,
+      "r": -4,
+      "startPlayer": null,
+      "resourceToken": {
+        "type": "production",
+        "value": 5,
+        "faceUp": true
+      }
+    },
+    {
+      "q": -6,
+      "r": -3
+    },
+    {
+      "q": -5,
+      "r": -3,
+      "startPlayer": null,
+      "resourceToken": {
+        "type": "credits",
+        "value": 6,
+        "faceUp": true
+      }
+    },
+    {
+      "q": -4,
+      "r": -3
+    },
+    {
+      "q": -1,
+      "r": -3,
+      "resourceToken": {
+        "type": "credits",
+        "value": 2,
+        "faceUp": true
+      }
+    },
+    {
+      "q": 0,
+      "r": -3,
+      "isPowerCenter": true
+    },
+    {
+      "q": 3,
+      "r": -3,
+      "isPowerCenter": true
+    },
+    {
+      "q": 4,
+      "r": -3,
+      "resourceToken": {
+        "type": "credits",
+        "value": 2,
+        "faceUp": true
+      }
+    },
+    {
+      "q": 5,
+      "r": -3,
+      "startPlayer": null
+    },
+    {
+      "q": 7,
+      "r": -3
+    },
+    {
+      "q": 8,
+      "r": -3
+    },
+    {
+      "q": 9,
+      "r": -3
+    },
+    {
+      "q": -7,
+      "r": -2
+    },
+    {
+      "q": -6,
+      "r": -2
+    },
+    {
+      "q": -5,
+      "r": -2
+    },
+    {
+      "q": -3,
+      "r": -2,
+      "startPlayer": null
+    },
+    {
+      "q": 0,
+      "r": -2,
+      "startPlayer": null,
+      "resourceToken": {
+        "type": "credits",
+        "value": 4,
+        "faceUp": true
+      }
+    },
+    {
+      "q": 2,
+      "r": -2,
+      "startPlayer": null,
+      "resourceToken": {
+        "type": "credits",
+        "value": 4,
+        "faceUp": true
+      }
+    },
+    {
+      "q": 7,
+      "r": -2,
+      "resourceToken": {
+        "type": "production",
+        "value": 2,
+        "faceUp": true
+      }
+    },
+    {
+      "q": 8,
+      "r": -2
+    },
+    {
+      "q": 9,
+      "r": -2
+    },
+    {
+      "q": -8,
+      "r": -1
+    },
+    {
+      "q": -7,
+      "r": -1
+    },
+    {
+      "q": -6,
+      "r": -1
+    },
+    {
+      "q": -3,
+      "r": -1,
+      "resourceToken": {
+        "type": "credits",
+        "value": 2,
+        "faceUp": true
+      }
+    },
+    {
+      "q": 0,
+      "r": -1,
+      "startPlayer": null,
+      "resourceToken": {
+        "type": "production",
+        "value": 2,
+        "faceUp": true
+      }
+    },
+    {
+      "q": 1,
+      "r": -1,
+      "startPlayer": null,
+      "resourceToken": {
+        "type": "production",
+        "value": 2,
+        "faceUp": true
+      }
+    },
+    {
+      "q": 4,
+      "r": -1,
+      "resourceToken": {
+        "type": "credits",
+        "value": 2,
+        "faceUp": true
+      }
+    },
+    {
+      "q": 6,
+      "r": -1,
+      "startPlayer": 1,
+      "resourceToken": {
+        "type": "credits",
+        "value": 7,
+        "faceUp": true
+      },
+      "startingShips": [
+        {
+          "type": "cruiser",
+          "player": 1
+        }
+      ]
+    },
+    {
+      "q": 7,
+      "r": -1,
+      "isPowerCenter": true,
+      "startPlayer": 1,
+      "startingShips": [
+        {
+          "type": "destroyer",
+          "player": 1
+        },
+        {
+          "type": "destroyer",
+          "player": 1
+        }
+      ]
+    },
+    {
+      "q": 8,
+      "r": -1,
+      "startPlayer": null
+    },
+    {
+      "q": 9,
+      "r": -1
+    },
+    {
+      "q": -9,
+      "r": 0,
+      "resourceToken": {
+        "type": "credits",
+        "value": 3,
+        "faceUp": true
+      }
+    },
+    {
+      "q": -8,
+      "r": 0
+    },
+    {
+      "q": -7,
+      "r": 0,
+      "resourceToken": {
+        "type": "production",
+        "value": 2,
+        "faceUp": true
+      }
+    },
+    {
+      "q": -6,
+      "r": 0,
+      "startPlayer": 4,
+      "resourceToken": {
+        "type": "production",
+        "value": 5,
+        "faceUp": true
+      },
+      "startingShips": [
+        {
+          "type": "cruiser",
+          "player": 4
+        }
+      ]
+    },
+    {
+      "q": -5,
+      "r": 0,
+      "startPlayer": 4,
+      "startingShips": [
+        {
+          "type": "destroyer",
+          "player": 4
+        },
+        {
+          "type": "destroyer",
+          "player": 4
+        }
+      ]
+    },
+    {
+      "q": -4,
+      "r": 0
+    },
+    {
+      "q": -3,
+      "r": 0,
+      "isPowerCenter": true
+    },
+    {
+      "q": -2,
+      "r": 0,
+      "resourceToken": {
+        "type": "credits",
+        "value": 4,
+        "faceUp": true
+      },
+      "startPlayer": null
+    },
+    {
+      "q": -1,
+      "r": 0,
+      "resourceToken": {
+        "type": "production",
+        "value": 2,
+        "faceUp": true
+      },
+      "startPlayer": null
+    },
+    {
+      "q": 0,
+      "r": 0,
+      "isPowerCenter": true,
+      "startPlayer": null
+    },
+    {
+      "q": 1,
+      "r": 0,
+      "startPlayer": null,
+      "resourceToken": {
+        "type": "production",
+        "value": 2,
+        "faceUp": true
+      }
+    },
+    {
+      "q": 2,
+      "r": 0,
+      "startPlayer": null,
+      "resourceToken": {
+        "type": "credits",
+        "value": 4,
+        "faceUp": true
+      }
+    },
+    {
+      "q": 3,
+      "r": 0,
+      "isPowerCenter": true
+    },
+    {
+      "q": 4,
+      "r": 0
+    },
+    {
+      "q": 5,
+      "r": 0,
+      "startPlayer": 1,
+      "startingShips": [
+        {
+          "type": "destroyer",
+          "player": 1
+        },
+        {
+          "type": "destroyer",
+          "player": 1
+        }
+      ]
+    },
+    {
+      "q": 6,
+      "r": 0,
+      "startPlayer": 1,
+      "resourceToken": {
+        "type": "production",
+        "value": 5,
+        "faceUp": true
+      },
+      "startingShips": [
+        {
+          "type": "cruiser",
+          "player": 1
+        }
+      ]
+    },
+    {
+      "q": 7,
+      "r": 0,
+      "resourceToken": {
+        "type": "production",
+        "value": 2,
+        "faceUp": true
+      }
+    },
+    {
+      "q": 8,
+      "r": 0
+    },
+    {
+      "q": 9,
+      "r": 0,
+      "resourceToken": {
+        "type": "credits",
+        "value": 3,
+        "faceUp": true
+      }
+    },
+    {
+      "q": -9,
+      "r": 1
+    },
+    {
+      "q": -8,
+      "r": 1,
+      "startPlayer": null
+    },
+    {
+      "q": -7,
+      "r": 1,
+      "isPowerCenter": true,
+      "startPlayer": 4,
+      "startingShips": [
+        {
+          "type": "destroyer",
+          "player": 4
+        },
+        {
+          "type": "destroyer",
+          "player": 4
+        }
+      ]
+    },
+    {
+      "q": -6,
+      "r": 1,
+      "startPlayer": 4,
+      "resourceToken": {
+        "type": "credits",
+        "value": 7,
+        "faceUp": true
+      },
+      "startingShips": [
+        {
+          "type": "cruiser",
+          "player": 4
+        }
+      ]
+    },
+    {
+      "q": -4,
+      "r": 1,
+      "resourceToken": {
+        "type": "credits",
+        "value": 2,
+        "faceUp": true
+      }
+    },
+    {
+      "q": -1,
+      "r": 1,
+      "startPlayer": null,
+      "resourceToken": {
+        "type": "production",
+        "value": 2,
+        "faceUp": true
+      }
+    },
+    {
+      "q": 0,
+      "r": 1,
+      "startPlayer": null,
+      "resourceToken": {
+        "type": "production",
+        "value": 2,
+        "faceUp": true
+      }
+    },
+    {
+      "q": 3,
+      "r": 1,
+      "resourceToken": {
+        "type": "credits",
+        "value": 2,
+        "faceUp": true
+      }
+    },
+    {
+      "q": 6,
+      "r": 1
+    },
+    {
+      "q": 7,
+      "r": 1
+    },
+    {
+      "q": 8,
+      "r": 1
+    },
+    {
+      "q": -9,
+      "r": 2
+    },
+    {
+      "q": -8,
+      "r": 2
+    },
+    {
+      "q": -7,
+      "r": 2,
+      "resourceToken": {
+        "type": "production",
+        "value": 2,
+        "faceUp": true
+      }
+    },
+    {
+      "q": -2,
+      "r": 2,
+      "startPlayer": null,
+      "resourceToken": {
+        "type": "credits",
+        "value": 4,
+        "faceUp": true
+      }
+    },
+    {
+      "q": 0,
+      "r": 2,
+      "startPlayer": null,
+      "resourceToken": {
+        "type": "credits",
+        "value": 4,
+        "faceUp": true
+      }
+    },
+    {
+      "q": 3,
+      "r": 2,
+      "startPlayer": null
+    },
+    {
+      "q": 5,
+      "r": 2
+    },
+    {
+      "q": 6,
+      "r": 2
+    },
+    {
+      "q": 7,
+      "r": 2
+    },
+    {
+      "q": -9,
+      "r": 3
+    },
+    {
+      "q": -8,
+      "r": 3
+    },
+    {
+      "q": -7,
+      "r": 3
+    },
+    {
+      "q": -5,
+      "r": 3,
+      "startPlayer": null
+    },
+    {
+      "q": -4,
+      "r": 3,
+      "resourceToken": {
+        "type": "credits",
+        "value": 2,
+        "faceUp": true
+      }
+    },
+    {
+      "q": -3,
+      "r": 3,
+      "isPowerCenter": true
+    },
+    {
+      "q": 0,
+      "r": 3,
+      "isPowerCenter": true
+    },
+    {
+      "q": 1,
+      "r": 3,
+      "resourceToken": {
+        "type": "credits",
+        "value": 2,
+        "faceUp": true
+      }
+    },
+    {
+      "q": 4,
+      "r": 3
+    },
+    {
+      "q": 5,
+      "r": 3,
+      "startPlayer": null,
+      "resourceToken": {
+        "type": "credits",
+        "value": 6,
+        "faceUp": true
+      }
+    },
+    {
+      "q": 6,
+      "r": 3
+    },
+    {
+      "q": -8,
+      "r": 4,
+      "resourceToken": {
+        "type": "production",
+        "value": 5,
+        "faceUp": true
+      },
+      "startPlayer": null
+    },
+    {
+      "q": -7,
+      "r": 4
+    },
+    {
+      "q": -4,
+      "r": 4
+    },
+    {
+      "q": -3,
+      "r": 4,
+      "resourceToken": {
+        "type": "credits",
+        "value": 2,
+        "faceUp": true
+      }
+    },
+    {
+      "q": -1,
+      "r": 4,
+      "resourceToken": {
+        "type": "credits",
+        "value": 2,
+        "faceUp": true
+      }
+    },
+    {
+      "q": 0,
+      "r": 4
+    },
+    {
+      "q": 3,
+      "r": 4
+    },
+    {
+      "q": 4,
+      "r": 4,
+      "startPlayer": null,
+      "resourceToken": {
+        "type": "production",
+        "value": 5,
+        "faceUp": true
+      }
+    },
+    {
+      "q": -8,
+      "r": 5,
+      "resourceToken": {
+        "type": "credits",
+        "value": 6,
+        "faceUp": true
+      },
+      "startPlayer": null
+    },
+    {
+      "q": -7,
+      "r": 5
+    },
+    {
+      "q": -5,
+      "r": 5,
+      "startPlayer": 3,
+      "startingShips": [
+        {
+          "type": "destroyer",
+          "player": 3
+        },
+        {
+          "type": "destroyer",
+          "player": 3
+        }
+      ]
+    },
+    {
+      "q": -2,
+      "r": 5,
+      "startPlayer": null
+    },
+    {
+      "q": 0,
+      "r": 5,
+      "startPlayer": 2,
+      "startingShips": [
+        {
+          "type": "destroyer",
+          "player": 2
+        },
+        {
+          "type": "destroyer",
+          "player": 2
+        }
+      ]
+    },
+    {
+      "q": 1,
+      "r": 5,
+      "startPlayer": 2,
+      "resourceToken": {
+        "type": "credits",
+        "value": 7,
+        "faceUp": true
+      },
+      "startingShips": [
+        {
+          "type": "cruiser",
+          "player": 2
+        }
+      ]
+    },
+    {
+      "q": 2,
+      "r": 5,
+      "resourceToken": {
+        "type": "production",
+        "value": 2,
+        "faceUp": true
+      }
+    },
+    {
+      "q": 3,
+      "r": 5
+    },
+    {
+      "q": -9,
+      "r": 6
+    },
+    {
+      "q": -8,
+      "r": 6
+    },
+    {
+      "q": -7,
+      "r": 6
+    },
+    {
+      "q": -6,
+      "r": 6,
+      "startPlayer": 3,
+      "resourceToken": {
+        "type": "production",
+        "value": 5,
+        "faceUp": true
+      },
+      "startingShips": [
+        {
+          "type": "cruiser",
+          "player": 3
+        }
+      ]
+    },
+    {
+      "q": -5,
+      "r": 6,
+      "startPlayer": 3,
+      "resourceToken": {
+        "type": "credits",
+        "value": 7,
+        "faceUp": true
+      },
+      "startingShips": [
+        {
+          "type": "cruiser",
+          "player": 3
+        }
+      ]
+    },
+    {
+      "q": 0,
+      "r": 6,
+      "startPlayer": 2,
+      "resourceToken": {
+        "type": "production",
+        "value": 5,
+        "faceUp": true
+      },
+      "startingShips": [
+        {
+          "type": "cruiser",
+          "player": 2
+        }
+      ]
+    },
+    {
+      "q": 1,
+      "r": 6,
+      "isPowerCenter": true,
+      "startPlayer": 2,
+      "startingShips": [
+        {
+          "type": "destroyer",
+          "player": 2
+        },
+        {
+          "type": "destroyer",
+          "player": 2
+        }
+      ]
+    },
+    {
+      "q": 2,
+      "r": 6
+    },
+    {
+      "q": 3,
+      "r": 6
+    },
+    {
+      "q": -9,
+      "r": 7
+    },
+    {
+      "q": -8,
+      "r": 7
+    },
+    {
+      "q": -7,
+      "r": 7,
+      "resourceToken": {
+        "type": "production",
+        "value": 2,
+        "faceUp": true
+      }
+    },
+    {
+      "q": -6,
+      "r": 7,
+      "isPowerCenter": true,
+      "startPlayer": 3,
+      "startingShips": [
+        {
+          "type": "destroyer",
+          "player": 3
+        },
+        {
+          "type": "destroyer",
+          "player": 3
+        }
+      ]
+    },
+    {
+      "q": -5,
+      "r": 7,
+      "resourceToken": {
+        "type": "production",
+        "value": 2,
+        "faceUp": true
+      }
+    },
+    {
+      "q": -4,
+      "r": 7
+    },
+    {
+      "q": -3,
+      "r": 7
+    },
+    {
+      "q": -2,
+      "r": 7
+    },
+    {
+      "q": -1,
+      "r": 7
+    },
+    {
+      "q": 0,
+      "r": 7,
+      "resourceToken": {
+        "type": "production",
+        "value": 2,
+        "faceUp": true
+      }
+    },
+    {
+      "q": 1,
+      "r": 7,
+      "startPlayer": null
+    },
+    {
+      "q": 2,
+      "r": 7
+    },
+    {
+      "q": -9,
+      "r": 8
+    },
+    {
+      "q": -8,
+      "r": 8
+    },
+    {
+      "q": -7,
+      "r": 8,
+      "startPlayer": null
+    },
+    {
+      "q": -6,
+      "r": 8
+    },
+    {
+      "q": -5,
+      "r": 8
+    },
+    {
+      "q": -4,
+      "r": 8,
+      "startPlayer": null,
+      "resourceToken": {
+        "type": "production",
+        "value": 5,
+        "faceUp": true
+      }
+    },
+    {
+      "q": -3,
+      "r": 8,
+      "startPlayer": null,
+      "resourceToken": {
+        "type": "credits",
+        "value": 6,
+        "faceUp": true
+      }
+    },
+    {
+      "q": -2,
+      "r": 8
+    },
+    {
+      "q": -1,
+      "r": 8
+    },
+    {
+      "q": 0,
+      "r": 8
+    },
+    {
+      "q": 1,
+      "r": 8
+    },
+    {
+      "q": -9,
+      "r": 9,
+      "resourceToken": {
+        "type": "credits",
+        "value": 3,
+        "faceUp": true
+      }
+    },
+    {
+      "q": -8,
+      "r": 9
+    },
+    {
+      "q": -7,
+      "r": 9
+    },
+    {
+      "q": -6,
+      "r": 9
+    },
+    {
+      "q": -3,
+      "r": 9
+    },
+    {
+      "q": -2,
+      "r": 9
+    },
+    {
+      "q": -1,
+      "r": 9
+    },
+    {
+      "q": 0,
+      "r": 9,
+      "resourceToken": {
+        "type": "credits",
+        "value": 3,
+        "faceUp": true
+      }
+    },
+    {
+      "q": -3,
+      "r": 6
+    },
+    {
+      "q": -6,
+      "r": 3
+    },
+    {
+      "q": -3,
+      "r": -3
+    },
+    {
+      "q": 3,
+      "r": -6
+    },
+    {
+      "q": 6,
+      "r": -3
+    },
+    {
+      "q": 3,
+      "r": 3
+    },
+    {
+      "q": -3,
+      "r": 5
+    },
+    {
+      "q": -5,
+      "r": 2
+    },
+    {
+      "q": -2,
+      "r": -3
+    },
+    {
+      "q": 3,
+      "r": -5
+    },
+    {
+      "q": 5,
+      "r": -2
+    },
+    {
+      "q": 2,
+      "r": 3
+    },
+    {
+      "q": -6,
+      "r": 4
+    },
+    {
+      "q": -4,
+      "r": -2
+    },
+    {
+      "q": 2,
+      "r": -6
+    },
+    {
+      "q": 6,
+      "r": -4
+    },
+    {
+      "q": 4,
+      "r": 2
+    },
+    {
+      "q": -2,
+      "r": 6
+    },
+    {
+      "q": -2,
+      "r": 1
+    },
+    {
+      "q": -1,
+      "r": -1
+    },
+    {
+      "q": 1,
+      "r": -2
+    },
+    {
+      "q": 2,
+      "r": -1
+    },
+    {
+      "q": 1,
+      "r": 1
+    },
+    {
+      "q": -1,
+      "r": 2
+    },
+    {
+      "q": -3,
+      "r": 1
+    },
+    {
+      "q": -1,
+      "r": -2
+    },
+    {
+      "q": 2,
+      "r": -3
+    },
+    {
+      "q": 3,
+      "r": -1
+    },
+    {
+      "q": 1,
+      "r": 2
+    },
+    {
+      "q": -2,
+      "r": 3
+    }
+  ],
+  "victoryPowerCenters": 6
+}

@@ -1,154 +1,226 @@
+import { doctrineRechargeModifier } from './doctrines.js'
 import { trimGameEventLog } from './event-log.js'
-import type { GameSnapshot } from './save-file.js'
+import type { GameSnapshot, RuntimeCellState } from './save-file.js'
+import type { HexCoord } from './types.js'
+import { victoryThresholdForSnapshot } from './victory.js'
 
-export type ResourceRechargeTurns = 1 | 2 | 3
-
-export const DEFAULT_RESOURCE_RECHARGE_TURNS: ResourceRechargeTurns = 2
-
-/** @deprecated миграция старых сейвов; новые партии используют resourceRechargeTurnsRemaining */
-export type ResourceRechargeInterval = ResourceRechargeTurns
-
-export const DEFAULT_RESOURCE_RECHARGE_INTERVAL: ResourceRechargeInterval =
-  DEFAULT_RESOURCE_RECHARGE_TURNS
-
-export function normalizeResourceRechargeTurns(value: unknown): ResourceRechargeTurns | null {
-  if (value === 1 || value === 2 || value === 3) return value
-  return null
-}
-
-/** @deprecated используйте normalizeResourceRechargeTurns */
-export function normalizeResourceRechargeInterval(value: unknown): ResourceRechargeInterval {
-  return normalizeResourceRechargeTurns(value) ?? DEFAULT_RESOURCE_RECHARGE_TURNS
-}
-
-export function rollResourceRechargeTurns(rng: () => number = Math.random): ResourceRechargeTurns {
-  const roll = Math.floor(rng() * 3)
-  if (roll <= 0) return 1
-  if (roll === 1) return 2
-  return 3
-}
-
-function pluralTurns(n: number): string {
-  const mod10 = n % 10
-  const mod100 = n % 100
-  if (mod10 === 1 && mod100 !== 11) return 'ход'
-  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) return 'хода'
-  return 'ходов'
-}
-
-/** Текст для игрока: когда будет следующая автоперезарядка. */
-export function formatResourceRechargePlayerHint(turnsRemaining: ResourceRechargeTurns): string {
-  if (turnsRemaining === 1) {
-    return 'Перезарядка фишек — в конце этого хода'
-  }
-  return `Перезарядка фишек через ${turnsRemaining} ${pluralTurns(turnsRemaining)}`
-}
-
-/** Крупный баннер: «До перезарядки ресурсов — N ходов». */
-export function formatResourceRechargeBannerText(turnsRemaining: ResourceRechargeTurns): string {
-  return `До перезарядки ресурсов — ${turnsRemaining} ${pluralTurns(turnsRemaining)}`
-}
-
-/** Переносит сохранённое значение или legacy-поле; случайный бросок не делает. */
-export function migrateResourceRechargeSchedule(game: GameSnapshot): ResourceRechargeTurns | undefined {
-  const current = normalizeResourceRechargeTurns(game.resourceRechargeTurnsRemaining)
-  if (current != null) {
-    game.resourceRechargeTurnsRemaining = current
-    return current
-  }
-
-  const legacy = normalizeResourceRechargeTurns(
-    (game as GameSnapshot & { resourceRechargeInterval?: unknown }).resourceRechargeInterval,
-  )
-  if (legacy != null) {
-    game.resourceRechargeTurnsRemaining = legacy
-    return legacy
-  }
-
-  delete game.resourceRechargeTurnsRemaining
-  return undefined
-}
-
-/** Явный бросок интервала 1–3 (старт партии или сброс после перезарядки). */
-export function rollNewResourceRechargeSchedule(
-  game: GameSnapshot,
-  rng: () => number = Math.random,
-): ResourceRechargeTurns {
-  const next = rollResourceRechargeTurns(rng)
-  game.resourceRechargeTurnsRemaining = next
-  return next
+/** Ссылка на конкретную фишку на клетке. Совпадает по форме с `TokenSpendRef` в производстве. */
+export interface ResourceTokenRef {
+  coord: HexCoord
+  tokenIndex: number
 }
 
 /**
- * @deprecated Используйте migrateResourceRechargeSchedule (без броска) или rollNewResourceRechargeSchedule.
+ * Бюджет перезарядки: сколько фишек игрок поднимает лицом вверх за один ход.
+ *
+ * Прежде переворачивались разом **все** потраченные фишки всех игроков раз в случайные
+ * один-три хода, то есть доход был пропорционален территории и ничем не ограничен сверху.
+ * Теперь возврат ограничен числом фишек, и это число падает с ростом числа центров власти:
+ * центр власти даёт прибавку к захвату, но режет экономику. Размен «одно на одно».
+ *
+ * Формула выводится из порога победы, а не назначается: наклон задан требованием читаемого
+ * размена (минус одна фишка за центр), ноль наступает ровно за шаг до победы. При пороге 6
+ * это даёт 4-3-2-1-0.
+ *
+ * Бюджет ограничивает **скорость возврата**, а не объём трат: поднятые фишки не сгорают,
+ * копить на дорогой корабль можно.
  */
-export function ensureResourceRechargeSchedule(
+export function computeRechargeBudget(
   game: GameSnapshot,
-  _rng: () => number = Math.random,
-): ResourceRechargeTurns | undefined {
-  return migrateResourceRechargeSchedule(game)
-}
-
-/** Переворачивает все face-down фишки на контролируемых клетках. */
-export function applyAutomaticResourceRecharge(game: GameSnapshot): number {
-  let flipped = 0
+  ownerId: string,
+  doctrineModifier = doctrineRechargeModifier(game, ownerId),
+): number {
+  const threshold = victoryThresholdForSnapshot(game)
+  let powerCenters = 0
   for (const cell of game.cells) {
-    if (!cell.controlOwnerId) continue
-    for (const token of cell.resourceTokens) {
-      if (token.faceUp === false) {
-        token.faceUp = true
-        flipped += 1
-      }
-    }
+    if (cell.isPowerCenter && cell.controlOwnerId === ownerId) powerCenters += 1
   }
-  return flipped
+  return Math.max(0, threshold - 1 - powerCenters + doctrineModifier)
 }
 
-function appendRechargeScheduleEvent(
-  game: GameSnapshot,
-  message: string,
-  type: 'recharge' | 'system' = 'recharge',
-): void {
+function faceDownTokensOf(game: GameSnapshot, ownerId: string): {
+  cell: RuntimeCellState
+  tokenIndex: number
+  value: number
+}[] {
+  const found: { cell: RuntimeCellState; tokenIndex: number; value: number }[] = []
+  for (const cell of game.cells) {
+    if (cell.controlOwnerId !== ownerId) continue
+    cell.resourceTokens.forEach((token, tokenIndex) => {
+      if (token.faceUp === false) found.push({ cell, tokenIndex, value: token.value })
+    })
+  }
+  return found
+}
+
+export function countFaceDownTokens(game: GameSnapshot, ownerId: string): number {
+  return faceDownTokensOf(game, ownerId).length
+}
+
+export function rechargePicksRemaining(game: GameSnapshot, ownerId: string): number {
+  return game.rechargePicksRemainingByPlayer?.[ownerId] ?? 0
+}
+
+function setPicksRemaining(game: GameSnapshot, ownerId: string, value: number): void {
+  game.rechargePicksRemainingByPlayer ??= {}
+  if (value > 0) game.rechargePicksRemainingByPlayer[ownerId] = value
+  else delete game.rechargePicksRemainingByPlayer[ownerId]
+}
+
+function appendRechargeEvent(game: GameSnapshot, message: string): void {
   game.eventLog.push({
     id: `evt-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
     turn: game.turnNumber,
     phase: game.phase,
-    type,
+    type: 'recharge',
     message,
     timestamp: Date.now(),
   })
   trimGameEventLog(game)
 }
 
-/**
- * В конце полного хода (переход «Действия» → «События»): уменьшает счётчик
- * или перезаряжает фишки и бросает новый интервал 1–3 хода.
- */
-export function maybeApplyAutomaticResourceRecharge(
-  game: GameSnapshot,
-  rng: () => number = Math.random,
-): void {
-  const remaining = migrateResourceRechargeSchedule(game)
-  if (remaining == null) return
+export function participantsOf(game: GameSnapshot): string[] {
+  const participating = game.participatingPlayerIds?.length
+    ? new Set(game.participatingPlayerIds)
+    : null
+  return game.players
+    .filter((player) => !player.eliminated && (!participating || participating.has(player.id)))
+    .map((player) => player.id)
+}
 
-  if (remaining > 1) {
-    game.resourceRechargeTurnsRemaining = (remaining - 1) as ResourceRechargeTurns
+/**
+ * Выдать бюджет одному игроку.
+ *
+ * Отдельно для каждого, потому что бюджет зависит от числа центров власти, а оно
+ * уточняется захватом: пока у игрока не разрешён выбор клеток, считать ему бюджет рано.
+ *
+ * Если перевёрнутых фишек не больше бюджета — поднимаем все молча: диалог нужен только
+ * когда выбирать действительно приходится.
+ */
+export function grantRechargeBudgetFor(game: GameSnapshot, playerId: string): void {
+  setPicksRemaining(game, playerId, 0)
+  // Бюджет зависит от доктрины: пока выбор открыт, выдавать рано.
+  if (game.doctrineChoice) return
+  const faceDown = faceDownTokensOf(game, playerId)
+  if (faceDown.length === 0) return
+
+  const budget = computeRechargeBudget(game, playerId)
+  if (budget === 0) return
+
+  if (faceDown.length <= budget) {
+    for (const entry of faceDown) {
+      const token = entry.cell.resourceTokens[entry.tokenIndex]
+      if (token) token.faceUp = true
+    }
     return
   }
+  setPicksRemaining(game, playerId, budget)
+}
 
-  const flipped = applyAutomaticResourceRecharge(game)
-  const next = rollNewResourceRechargeSchedule(game, rng)
-
-  if (flipped > 0) {
-    appendRechargeScheduleEvent(
-      game,
-      `Автоперезарядка фишек: перевёрнуто ${flipped}. Следующая через ${next} ${pluralTurns(next)}.`,
-    )
-  } else {
-    appendRechargeScheduleEvent(
-      game,
-      `Автоперезарядка: перевёрнутых фишек не было. Следующая через ${next} ${pluralTurns(next)}.`,
-      'system',
-    )
+/**
+ * Начало игрового хода: выдать бюджет всем, у кого не осталось незакрытого выбора клеток
+ * для захвата. Остальным бюджет выдаётся в момент закрытия этого выбора.
+ */
+export function refreshRechargeBudgets(
+  game: GameSnapshot,
+  hasPendingClaims: (playerId: string) => boolean = () => false,
+): void {
+  game.rechargePicksRemainingByPlayer = {}
+  for (const playerId of participantsOf(game)) {
+    if (hasPendingClaims(playerId)) continue
+    grantRechargeBudgetFor(game, playerId)
   }
+}
+
+export const RECHARGE_PICK_ERRORS = {
+  nothingOwed: 'Сейчас переворачивать фишки не нужно',
+  tooMany: 'Выбрано больше фишек, чем позволяет бюджет перезарядки',
+  notYours: 'Фишка не на вашей клетке',
+  notFaceDown: 'Фишка уже лицом вверх',
+  duplicate: 'Одна и та же фишка выбрана дважды',
+  unknown: 'Фишка не найдена',
+} as const
+
+/** Перевернуть выбранные фишки лицом вверх в счёт бюджета. */
+export function executeRechargePicks(
+  game: GameSnapshot,
+  playerId: string,
+  picks: readonly ResourceTokenRef[],
+): string[] {
+  const remaining = rechargePicksRemaining(game, playerId)
+  if (remaining <= 0) return [RECHARGE_PICK_ERRORS.nothingOwed]
+  if (picks.length === 0) return [RECHARGE_PICK_ERRORS.nothingOwed]
+  if (picks.length > remaining) return [RECHARGE_PICK_ERRORS.tooMany]
+
+  const seen = new Set<string>()
+  const resolved: { cell: RuntimeCellState; tokenIndex: number }[] = []
+  for (const pick of picks) {
+    const key = `${pick.coord.q},${pick.coord.r}:${pick.tokenIndex}`
+    if (seen.has(key)) return [RECHARGE_PICK_ERRORS.duplicate]
+    seen.add(key)
+
+    const cell = game.cells.find(
+      (candidate) => candidate.coord.q === pick.coord.q && candidate.coord.r === pick.coord.r,
+    )
+    if (!cell) return [RECHARGE_PICK_ERRORS.unknown]
+    if (cell.controlOwnerId !== playerId) return [RECHARGE_PICK_ERRORS.notYours]
+    const token = cell.resourceTokens[pick.tokenIndex]
+    if (!token) return [RECHARGE_PICK_ERRORS.unknown]
+    if (token.faceUp !== false) return [RECHARGE_PICK_ERRORS.notFaceDown]
+    resolved.push({ cell, tokenIndex: pick.tokenIndex })
+  }
+
+  for (const entry of resolved) {
+    const token = entry.cell.resourceTokens[entry.tokenIndex]
+    if (token) token.faceUp = true
+  }
+  setPicksRemaining(game, playerId, remaining - resolved.length)
+  appendRechargeEvent(game, `Перезарядка: поднято фишек ${resolved.length}`)
+  return []
+}
+
+/**
+ * Разрешить долг за игрока: самые крупные номиналы первыми.
+ *
+ * Нужно для ИИ, для таймаута и при закрытии фазы планирования — иначе игрок, не сделавший
+ * выбор, подвесит партию. Порядок детерминирован, чтобы прогон был воспроизводим.
+ *
+ * Сортируем по печатному номиналу, а не по эффективному: бонус события прибавляется всем
+ * фишкам одинаково и порядка не меняет.
+ */
+export function autoResolveRechargePicks(game: GameSnapshot, playerId: string): number {
+  const remaining = rechargePicksRemaining(game, playerId)
+  if (remaining <= 0) return 0
+
+  const ordered = faceDownTokensOf(game, playerId).sort((a, b) => {
+    if (b.value !== a.value) return b.value - a.value
+    if (a.cell.coord.q !== b.cell.coord.q) return a.cell.coord.q - b.cell.coord.q
+    if (a.cell.coord.r !== b.cell.coord.r) return a.cell.coord.r - b.cell.coord.r
+    return a.tokenIndex - b.tokenIndex
+  })
+
+  const taken = ordered.slice(0, remaining)
+  for (const entry of taken) {
+    const token = entry.cell.resourceTokens[entry.tokenIndex]
+    if (token) token.faceUp = true
+  }
+  setPicksRemaining(game, playerId, 0)
+  if (taken.length > 0) {
+    appendRechargeEvent(game, `Перезарядка автоматически: поднято фишек ${taken.length}`)
+  }
+  return taken.length
+}
+
+/** Закрыть все незавершённые долги: партия не должна вставать из-за несделанного выбора. */
+export function autoResolveAllRechargePicks(game: GameSnapshot): void {
+  for (const playerId of Object.keys(game.rechargePicksRemainingByPlayer ?? {})) {
+    autoResolveRechargePicks(game, playerId)
+  }
+}
+
+/** Текст для игрока: сколько фишек можно поднять в этом ходу. */
+export function formatRechargeBudgetHint(budget: number, owed: number): string {
+  if (owed > 0) return `Перезарядка: выберите фишки, осталось ${owed}`
+  if (budget <= 0) return 'Перезарядка недоступна: слишком много центров власти'
+  return `Перезарядка: до ${budget} фишек за ход`
 }

@@ -17,14 +17,13 @@ function writeStorage(key: string, value: string): void {
 }
 
 /**
- * Одноразовое объявление счётчика перезарядки в начале партии (ход 1, без карты события).
+ * Одноразовое объявление правила перезарядки в начале партии (ход 1, без карты события).
  * Если одновременно открыта модалка события — не показываем (счётчик уже на ней).
  */
 export function useResourceRechargeIntroAnnounce(
   roomId: Ref<string>,
   turnNumber: Ref<number>,
   rechargeBanner: Ref<string | null>,
-  eventAnnounceVisible: Ref<boolean>,
 ) {
   const visible = ref(false)
   let watchingRoomId: string | null = null
@@ -44,7 +43,7 @@ export function useResourceRechargeIntroAnnounce(
   }
 
   watch(
-    [roomId, turnNumber, rechargeBanner, eventAnnounceVisible],
+    [roomId, turnNumber, rechargeBanner],
     () => {
       if (!import.meta.client) return
       const id = roomId.value
@@ -58,12 +57,6 @@ export function useResourceRechargeIntroAnnounce(
       }
 
       if (turnNumber.value > 1) {
-        markSeen(id)
-        visible.value = false
-        return
-      }
-
-      if (eventAnnounceVisible.value) {
         markSeen(id)
         visible.value = false
         return

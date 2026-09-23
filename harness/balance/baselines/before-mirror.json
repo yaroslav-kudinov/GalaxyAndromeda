@@ -1,0 +1,217 @@
+{
+  "label": "before-mirror",
+  "seed": 101,
+  "games": 50,
+  "options": {
+    "maxTurns": 50,
+    "maxSteps": 40000,
+    "maxCombatRounds": 3,
+    "handicapCells": 0
+  },
+  "summaries": {
+    "duel": {
+      "games": 50,
+      "errors": 0,
+      "turns": {
+        "mean": 22.06,
+        "p10": 16,
+        "median": 22,
+        "p90": 28
+      },
+      "hitTurnCapShare": 0,
+      "winRateBySeat": {
+        "player-2": 0.34,
+        "player-1": 0.66
+      },
+      "winRateByOrderPosition": {
+        "0": 0.34,
+        "1": 0.66
+      },
+      "meanLeadChanges": 3.26,
+      "pointOfNoReturn": {
+        "mean": 17.36,
+        "meanShareOfGame": 0.7804567343871976
+      },
+      "giniByTurn": {
+        "5": 0.03607110063998607,
+        "10": 0.05691212829415673,
+        "15": 0.05805918814915436
+      },
+      "wasteRatio": 1.040384116273034,
+      "firstUnlockTurn": {
+        "destroyer": 1,
+        "cruiser": 3.56,
+        "shield": 8.41304347826087,
+        "carrier": 8.41304347826087,
+        "battleship": 11.630434782608695,
+        "hyper": 12.837209302325581
+      },
+      "claimUtilisationAt3Plus": 0.4789277903274662,
+      "meanEliminationTurn": null,
+      "victoryReasons": {
+        "power_centers": 50
+      },
+      "handicap": {
+        "winRate": null,
+        "amplification": null
+      }
+    },
+    "trio-start": {
+      "games": 50,
+      "errors": 1,
+      "turns": {
+        "mean": 39.95918367346939,
+        "p10": 26,
+        "median": 44,
+        "p90": 50
+      },
+      "hitTurnCapShare": 0.40816326530612246,
+      "winRateBySeat": {
+        "player-1": 0.27586206896551724,
+        "player-3": 0.6551724137931034,
+        "player-2": 0.06896551724137931
+      },
+      "winRateByOrderPosition": {
+        "0": 0.32653061224489793,
+        "1": 0.1836734693877551,
+        "2": 0.08163265306122448
+      },
+      "meanLeadChanges": 6.836734693877551,
+      "pointOfNoReturn": {
+        "mean": 27.03448275862069,
+        "meanShareOfGame": 0.7997483519098023
+      },
+      "giniByTurn": {
+        "5": 0.012898192214962422,
+        "10": 0.0700142899510844,
+        "15": 0.08689791040664031
+      },
+      "wasteRatio": 1.0448308270676692,
+      "firstUnlockTurn": {
+        "destroyer": 1,
+        "cruiser": 3.979591836734694,
+        "shield": 9.63265306122449,
+        "carrier": 9.63265306122449,
+        "battleship": 12.145833333333334,
+        "hyper": 13.291666666666666
+      },
+      "claimUtilisationAt3Plus": 0.3594503984019851,
+      "meanEliminationTurn": 30,
+      "victoryReasons": {
+        "power_centers": 29,
+        "none": 20
+      },
+      "handicap": {
+        "winRate": null,
+        "amplification": null
+      }
+    },
+    "maltese-cross-4": {
+      "games": 50,
+      "errors": 8,
+      "turns": {
+        "mean": 42.69047619047619,
+        "p10": 28,
+        "median": 50,
+        "p90": 50
+      },
+      "hitTurnCapShare": 0.5952380952380952,
+      "winRateBySeat": {
+        "player-2": 0.47058823529411764,
+        "player-4": 0.058823529411764705,
+        "player-3": 0.4117647058823529,
+        "player-1": 0.058823529411764705
+      },
+      "winRateByOrderPosition": {
+        "0": 0.023809523809523808,
+        "1": 0.09523809523809523,
+        "2": 0.14285714285714285,
+        "3": 0.14285714285714285
+      },
+      "meanLeadChanges": 8.404761904761905,
+      "pointOfNoReturn": {
+        "mean": 25.823529411764707,
+        "meanShareOfGame": 0.8007450392181985
+      },
+      "giniByTurn": {
+        "5": 0.04471382885189957,
+        "10": 0.0941631415936161,
+        "15": 0.1262414098369198
+      },
+      "wasteRatio": 1.1146665351871938,
+      "firstUnlockTurn": {
+        "destroyer": 1,
+        "cruiser": 4.142857142857143,
+        "shield": 9.904761904761905,
+        "carrier": 9.904761904761905,
+        "battleship": 13.285714285714286,
+        "hyper": 14.476190476190476
+      },
+      "claimUtilisationAt3Plus": 0.26786025061594537,
+      "meanEliminationTurn": 24.833333333333332,
+      "victoryReasons": {
+        "none": 25,
+        "power_centers": 17
+      },
+      "handicap": {
+        "winRate": null,
+        "amplification": null
+      }
+    },
+    "six-point-path": {
+      "games": 50,
+      "errors": 3,
+      "turns": {
+        "mean": 26.53191489361702,
+        "p10": 17,
+        "median": 22,
+        "p90": 48
+      },
+      "hitTurnCapShare": 0.10638297872340426,
+      "winRateBySeat": {
+        "player-3": 0.6904761904761905,
+        "player-1": 0.023809523809523808,
+        "player-4": 0.19047619047619047,
+        "player-6": 0.023809523809523808,
+        "player-2": 0.07142857142857142
+      },
+      "winRateByOrderPosition": {
+        "0": 0.02127659574468085,
+        "1": 0.14893617021276595,
+        "2": 0.2127659574468085,
+        "3": 0.2127659574468085,
+        "4": 0.2978723404255319,
+        "5": 0
+      },
+      "meanLeadChanges": 5.23404255319149,
+      "pointOfNoReturn": {
+        "mean": 18.38095238095238,
+        "meanShareOfGame": 0.7663928121952941
+      },
+      "giniByTurn": {
+        "5": 0.10178852596120379,
+        "10": 0.2951483726812347,
+        "15": 0.4030787317627482
+      },
+      "wasteRatio": 1.1281949132996456,
+      "firstUnlockTurn": {
+        "destroyer": 1,
+        "cruiser": 1,
+        "shield": 6.0212765957446805,
+        "carrier": 6.0212765957446805,
+        "battleship": 8.702127659574469,
+        "hyper": 9.702127659574469
+      },
+      "claimUtilisationAt3Plus": 0.41891854509923265,
+      "meanEliminationTurn": 8.263565891472869,
+      "victoryReasons": {
+        "power_centers": 42,
+        "none": 5
+      },
+      "handicap": {
+        "winRate": null,
+        "amplification": null
+      }
+    }
+  }
+}

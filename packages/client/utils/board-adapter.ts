@@ -16,6 +16,8 @@ export interface BoardShipView extends StartingShipDef {
 export interface BoardCellView extends Omit<MapCellDefinition, 'startingShips'> {
   startingShips?: BoardShipView[]
   actionMarker?: boolean
+  /** Центр власти в осаде: слот осаждающего игрока. */
+  besiegedBy?: number | null
 }
 
 export function boardMarkerKeys(cells: BoardCellView[]): string[] {
@@ -36,9 +38,11 @@ export function playerSlotFromId(players: PlayerState[], ownerId: string | null)
 export function runtimeCellToBoardCell(
   cell: RuntimeCellState,
   players: PlayerState[],
+  besiegerId?: string | null,
 ): BoardCellView {
   const token = cell.resourceTokens[0]
   return {
+    ...(besiegerId ? { besiegedBy: playerSlotFromId(players, besiegerId) } : {}),
     q: cell.coord.q,
     r: cell.coord.r,
     isPowerCenter: cell.isPowerCenter,
@@ -54,7 +58,13 @@ export function runtimeCellToBoardCell(
 }
 
 export function snapshotToBoardCells(snapshot: GameSnapshot): BoardCellView[] {
-  return snapshot.cells.map((cell) => runtimeCellToBoardCell(cell, snapshot.players))
+  return snapshot.cells.map((cell) =>
+    runtimeCellToBoardCell(
+      cell,
+      snapshot.players,
+      snapshot.sieges?.[`${cell.coord.q},${cell.coord.r}`]?.besiegerId,
+    ),
+  )
 }
 
 export function mapCellsToBoardCells(cells: MapCellDefinition[]): BoardCellView[] {

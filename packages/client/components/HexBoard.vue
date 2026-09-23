@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { GameSnapshot, MapCellDefinition, PlayerState, RegionInfo, ShipType } from '@galaxy/rules'
-import { PLAYER_COLORS, findRegionAtCell, gameStateFromSnapshot, getCellResourceToken, getEffectiveTokenValue, getRegionInfo, hexKey } from '@galaxy/rules'
+import { PLAYER_COLORS, findRegionAtCell, gameStateFromSnapshot, getCellResourceToken, getRegionInfo, hexKey } from '@galaxy/rules'
 import {
   HEX_ORIENTATIONS,
   type HexOrientation,
@@ -180,7 +180,7 @@ function regionInfoForCell(cell: MapCellDefinition): RegionInfo | null {
   if (!region) return null
   return getRegionInfo(state, region, {
     productionMarkers: props.snapshot.productionMarkers,
-    effectiveTokenValue: (value) => getEffectiveTokenValue(props.snapshot!, value),
+    effectiveTokenValue: (value) => value,
   })
 }
 

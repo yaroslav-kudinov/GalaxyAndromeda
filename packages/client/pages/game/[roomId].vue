@@ -2,6 +2,7 @@
 import type { GalaxySaveFile, GameSnapshot, HexCoord, LegalAction, MapDefinition, ScenarioHighlight, ScenarioStep, ShipMovePlan, BombardmentPlan, CombatOptions, CombatResolutionResult, TokenSpendRef } from '@galaxy/rules'
 import {
   createEmptyMap,
+  GALAXY_SAVE_VERSION,
   executeMarkerBombardment,
   executeMarkerMovement,
   galaxySaveFromMap,
@@ -26,8 +27,13 @@ import {
   mustResolveActionMarkerBeforeAdvance,
   getLegalActionsForSnapshot,
   applyGameActionOnSnapshot,
-  getActiveEventObservation,
-  getTurnEventHistory,
+  canBesiegeCell,
+  claimPicksRemaining,
+  eligibleClaimCells,
+  rechargePicksRemaining,
+  siegeLossesOwedBy,
+  siegeWithdrawDestinations,
+  doctrineChoiceOwed,
   removeActionMarker,
   canRemoveActionMarkerThisTurn,
   syncParticipatingPlayerIds,
@@ -35,12 +41,14 @@ import {
   shouldConfirmPlanningPhaseAdvance,
   MAX_LOBBY_PLAYERS,
   actionMarkerLimitForPlayer,
+  autoDiceTargetsFor,
   buildCombatPreviewFromPending,
+  combatSupportersAwaited,
   combatPrepOf,
-  combatRoundStateOf,
   combatResolutionFingerprint,
   combatResolutionFromPending,
-  formatResourceRechargeBannerText,
+  computeRechargeBudget,
+  formatRechargeBudgetHint,
   getCombatRetreatDestinations,
 } from '@galaxy/rules'
 import { advanceScenarioStep, fetchObservation, fetchRoomBootstrap, GameApiError, joinRoom, rejoinRoom, startRoom, closeRoom, submitGameAction, updateCombatPrepAction } from '~/composables/useGameApi'
@@ -189,11 +197,10 @@ const tutorialMarkerActionModes = computed(() => {
       typeof allowed === 'string' ? allowed : allowed.actionId,
     ),
   )
-  const modes: Array<'movement' | 'bombardment' | 'build' | 'sacrifice'> = []
+  const modes: Array<'movement' | 'bombardment' | 'build'> = []
   if (ids.has('execute-marker-movement')) modes.push('movement')
   if (ids.has('execute-marker-bombardment')) modes.push('bombardment')
   if (ids.has('execute-production')) modes.push('build')
-  if (ids.has('execute-destroyer-sacrifice')) modes.push('sacrifice')
   return modes
 })
 
@@ -368,7 +375,7 @@ const markerMapPickBannerSlots = computed(() => {
 })
 const markerMapPickError = markerMapPick.error
 const markerMapPickCombatPreview = markerMapPick.combatPreview
-const markerMapPickRoundOneOdds = markerMapPick.roundOneOdds
+const markerMapPickBattleOdds = markerMapPick.battleOdds
 const markerMapPickOrderReady = markerMapPick.orderReady
 const markerMapPickHasPendingCombat = markerMapPick.hasPendingCombat
 const markerMapPickConfirmLabel = markerMapPick.confirmButtonLabel
@@ -543,6 +550,7 @@ const gameOverWinnerName = computed(() => {
 const GAME_OVER_REASON_LABELS: Record<string, string> = {
   power_centers: 'Большинство центров власти',
   last_standing: 'Последний игрок на карте',
+  turn_limit: 'Лимит ходов',
 }
 
 const gameOverReasonLabel = computed(() => {
@@ -596,10 +604,6 @@ watch(gameOverState, (go) => {
 const pendingCombatState = computed(() => snapshot.value?.pendingCombat ?? null)
 const combatPhase = computed(() => pendingCombatState.value?.phase ?? null)
 const combatPrepState = computed(() => combatPrepOf(pendingCombatState.value ?? undefined) ?? null)
-const combatRoundState = computed(
-  () => combatRoundStateOf(pendingCombatState.value ?? undefined) ?? null,
-)
-
 const combatPrepPreview = computed(() => {
   if (!snapshot.value) return null
   return buildCombatPreviewFromPending(snapshot.value)
@@ -628,23 +632,6 @@ const combatParticipantRole = computed<'attacker' | 'defender' | 'supporter' | n
   return null
 })
 
-/** Победитель раунда — только он выбирает уничтожаемые корабли */
-const isCombatDestructionChooser = computed(
-  () =>
-    combatPhase.value === 'awaiting-destruction'
-    && combatRoundState.value?.winnerId === playerId.value,
-)
-
-const combatPrepAttackerSkips = computed((): import('@galaxy/rules').ShipType[] => {
-  const skips = combatPrepState.value?.combatOptions?.attacker?.prioritySkips ?? []
-  return skips.map((s) => s.shipType)
-})
-
-const combatPrepDefenderSkips = computed((): import('@galaxy/rules').ShipType[] => {
-  const skips = combatPrepState.value?.combatOptions?.defender?.prioritySkips ?? []
-  return skips.map((s) => s.shipType)
-})
-
 const combatPrepSelfReady = computed(() => {
   const prep = combatPrepState.value
   if (!prep) return false
@@ -668,11 +655,47 @@ const combatPrepDefenderReady = computed(() => {
   return prep.readyBy[prep.defenderId] === true
 })
 
+/** Превью текущего боя по доске — для выбора целей перед раундом. */
+const pendingCombatPreview = computed(() =>
+  snapshot.value && pendingCombatState.value ? buildCombatPreviewFromPending(snapshot.value) : null,
+)
+
 const combatDecisionRole = computed(() => {
   const me = snapshot.value?.players.find((p) => p.id === playerId.value)
+  const supporterAwaited = !!snapshot.value
+    && combatSupportersAwaited(snapshot.value, pendingCombatPreview.value).includes(playerId.value)
   return combatContinueDecisionRole(pendingCombatState.value, playerId.value, {
     eliminated: me?.eliminated === true,
+    supporterAwaited,
   })
+})
+
+/**
+ * Цели на следующий раунд. Раунд начинается с предложения игры; игрок правит его, пока не
+ * нажмёт «Огонь». Новый раунд — новое предложение: урон изменился.
+ */
+const roundTargets = ref<Record<string, string[]>>({})
+watch(
+  () => {
+    const pending = pendingCombatState.value
+    return pending?.phase === 'awaiting-continue' ? `${pending.cellKey}:${pending.roundNumber}` : null
+  },
+  (key) => {
+    const preview = pendingCombatPreview.value
+    roundTargets.value = key && preview
+      ? autoDiceTargetsFor(preview, playerId.value, pendingCombatState.value?.damageByShipId ?? {})
+      : {}
+  },
+  { immediate: true },
+)
+
+/** Противник игрока в текущем бою — чьи корабли служат целями. */
+const combatEnemyId = computed(() => {
+  const preview = pendingCombatPreview.value
+  if (!preview) return null
+  const onAttackerSide = preview.attackerId === playerId.value
+    || preview.attacker.supportingShips.some((ship) => ship.ownerId === playerId.value)
+  return onAttackerSide ? preview.defenderId : preview.attackerId
 })
 
 const currentCombatRollsKey = computed(() => combatResultRollsKey(battleResolution.value))
@@ -697,7 +720,7 @@ const roundResultsPendingView = computed(() => {
 })
 
 /**
- * Модалка: prep, итоги раунда (всем клиентам) и выбор уничтожения победителем.
+ * Модалка: prep и итоги раунда (всем клиентам).
  * Решение «продолжить / отступить» — баннером после закрытия итогов, чтобы не перекрывать карту.
  * Итог держится и после конца pendingCombat (обстрел / бой без continue).
  */
@@ -706,8 +729,6 @@ const needsBattleModal = computed(() => {
   if (combatParticipantRole.value === null) return false
   switch (combatPhase.value) {
     case 'prep':
-      return true
-    case 'awaiting-destruction':
       return true
     default:
       return false
@@ -731,7 +752,6 @@ const combatUiExpectation = computed((): CombatUiExpectation => {
   return combatContinueUiExpectation({
     hasPendingCombat: hasActivePendingCombat.value,
     decisionRole: combatDecisionRole.value,
-    isDestructionChooser: isCombatDestructionChooser.value,
     phase: combatPhase.value,
     isParticipant: combatParticipantRole.value != null,
     battleModalOpen: battleModalOpen.value,
@@ -744,7 +764,6 @@ const combatUiPresentation = computed((): CombatUiPresentation => {
   if (showCombatContinueDecision.value) return 'continue-banner'
   if (!battleModalOpen.value) return 'none'
   if (combatPhase.value === 'prep') return 'prep-modal'
-  if (combatPhase.value === 'awaiting-destruction') return 'destruction-modal'
   if (combatPhase.value === 'awaiting-continue') {
     if (combatDecisionRole.value != null && !roundResultsPendingView.value) return 'continue-modal'
     return 'results-modal'
@@ -774,11 +793,6 @@ const foreignCombatBannerText = computed(() => {
   if (!pending) return ''
   const cell = pending.cellKey
   if (combatPhase.value === 'prep') return `Идёт подготовка к бою на (${cell})`
-  if (combatPhase.value === 'awaiting-destruction') {
-    const winner = combatRoundState.value?.winnerId
-    const winnerName = winner ? playerNameById.value[winner] ?? winner : ''
-    return `Бой на (${cell}): победитель раунда${winnerName ? ` ${winnerName}` : ''} выбирает потери`
-  }
   if (pending.phase === 'awaiting-continue') {
     const mustContinue = pending.shipsDestroyedInCombat !== true
     if (pending.continueDecisions.attacker !== true) {
@@ -913,7 +927,7 @@ function recoverCombatUiForExpectation(expectation: CombatUiExpectation) {
     battleModalOpen.value = false
     return
   }
-  if (expectation === 'destruction' || expectation === 'prep') {
+  if (expectation === 'prep') {
     openBattleModalFromPending()
   }
 }
@@ -1012,7 +1026,7 @@ watch(
       pendingCombatState.value?.roundNumber,
     ] as const,
   ([phase, key], [prevPhase, prevKey]) => {
-    if (phase !== 'awaiting-destruction' && phase !== 'awaiting-continue') return
+    if (phase !== 'awaiting-continue') return
     if (!key || key === prevKey) return
     if (battleModalOpen.value || needsBattleModal.value) return
     if (phase === prevPhase && key === dismissedCombatResultKey.value) return
@@ -1055,8 +1069,68 @@ const mustResolveActionMarker = computed(() =>
     : false,
 )
 
+/** Обязательные решения планирования, без которых ход не передаётся. */
+const planningDecisionsOwed = computed(() => {
+  const game = snapshot.value
+  if (!game || game.phase !== 'planning' || game.gameOver) return false
+  const me = playerId.value
+  return doctrineChoiceOwed(game, me)
+    || claimPicksRemaining(game, me) > 0
+    || rechargePicksRemaining(game, me) > 0
+    || siegeLossesOwedBy(game, me).length > 0
+})
+
+/** Выбор клеток захвата: подходящие обведены на карте, выбранные — кольцом. */
+const claimSelection = ref<string[]>([])
+const claimCandidateKeys = computed(() => {
+  const game = snapshot.value
+  if (!game || game.phase !== 'planning' || claimPicksRemaining(game, playerId.value) <= 0) return [] as string[]
+  return eligibleClaimCells(game, playerId.value).map((cell) => hexKey(cell.coord.q, cell.coord.r))
+})
+watch(claimCandidateKeys, (keys) => {
+  claimSelection.value = claimSelection.value.filter((key) => keys.includes(key))
+})
+
+function toggleClaimOnMap(key: string): boolean {
+  if (!claimCandidateKeys.value.includes(key) || !snapshot.value) return false
+  const need = Math.min(claimPicksRemaining(snapshot.value, playerId.value), claimCandidateKeys.value.length)
+  if (claimSelection.value.includes(key)) {
+    claimSelection.value = claimSelection.value.filter((entry) => entry !== key)
+  } else if (claimSelection.value.length < need) {
+    claimSelection.value = [...claimSelection.value, key]
+  }
+  return true
+}
+
+// Перебросы гарнизона идут в своём окне — окно боя с прошлым раундом не перекрывает его.
+watch(
+  () => snapshot.value?.pendingCombat?.phase,
+  (phase) => {
+    if (phase === 'awaiting-rerolls') battleModalOpen.value = false
+  },
+)
+
+/** Бой за осаждённый центр выигран — победитель решает, продолжать ли осаду. */
+const siegeContinuationMine = computed(() => {
+  const choice = snapshot.value?.siegeContinuationChoice
+  return choice && choice.playerId === playerId.value ? choice : null
+})
+const siegeContinuationCoord = computed(() => {
+  const key = siegeContinuationMine.value?.cellKey
+  if (!key) return null
+  const [q, r] = key.split(',').map(Number)
+  return { q: q!, r: r! }
+})
+const siegeWithdrawOptions = computed(() => {
+  const choice = siegeContinuationMine.value
+  if (!choice || !snapshot.value) return []
+  return siegeWithdrawDestinations(snapshot.value, playerId.value, choice.cellKey)
+})
+
 const phaseAdvanceBlockedReason = computed(() => {
   if (!saveFile.value?.game) return null
+  if (siegeContinuationMine.value) return ui.siegeContinuation.blocked
+  if (planningDecisionsOwed.value) return ui.planningDecisions.blocked
   return actionMarkerAdvanceBlockMessage(saveFile.value.game, playerId.value)
 })
 
@@ -1143,6 +1217,13 @@ const turnQueue = computed(() => {
   return queue.length > 1 ? queue : []
 })
 
+/** Сколько ходов осталось до лимита партии, считая текущий; без лимита — не показываем */
+const turnsLeft = computed(() => {
+  const game = saveFile.value?.game
+  if (!game || game.turnLimit == null || game.gameOver) return null
+  return Math.max(0, game.turnLimit - game.turnNumber + 1)
+})
+
 /** Сколько центров власти у каждого игрока и сколько осталось до победы */
 const victoryProgress = computed(() => {
   const save = saveFile.value
@@ -1222,7 +1303,7 @@ function applyObservation(
       battleResolution.value = next
     }
   }
-  // Наблюдатели: если lastCombatResult не пришёл, восстановить броски из pendingCombat.roundState
+  // Наблюдатели: если lastCombatResult не пришёл, восстановить броски из pendingCombat.lastRound
   if (
     (!battleResolution.value || combatResultRollsKey(battleResolution.value) == null)
     && game.pendingCombat
@@ -1236,7 +1317,7 @@ function applyObservation(
   } else if (
     battleResolution.value
     && game.pendingCombat
-    && (game.pendingCombat.phase === 'awaiting-destruction' || game.pendingCombat.phase === 'awaiting-continue')
+    && game.pendingCombat.phase === 'awaiting-continue'
   ) {
     const fromPending = combatResolutionFromPending(game.pendingCombat)
     const pendingRolls = combatResultRollsKey(fromPending)
@@ -1259,7 +1340,7 @@ function applyObservation(
   if (!map) return false
   saveFile.value = {
     format: 'galaxy-save',
-    version: 1,
+    version: GALAXY_SAVE_VERSION,
     savedAt: new Date().toISOString(),
     map: normalizeMapDefinition(map),
     game,
@@ -1318,39 +1399,83 @@ const myActionMarkerCount = computed(
   () => actionMarkers.value.filter((m) => m.ownerId === playerId.value).length,
 )
 
-const activeEvent = computed((): import('@galaxy/rules').ActiveEventObservation | null => {
-  if (!saveFile.value?.game) return null
-  return getActiveEventObservation(saveFile.value.game)
-})
-
-const turnEventHistory = computed(() => {
-  if (!saveFile.value?.game) return []
-  return getTurnEventHistory(saveFile.value.game)
-})
-
-const currentTurnEventResolvedAt = computed(
-  () => saveFile.value?.game?.turnEvent?.resolvedAt,
-)
-
-const showTurnEventsPanel = computed(
-  () =>
-    !!resourceRechargeBanner.value
-    || !!activeEvent.value
-    || turnEventHistory.value.length > 0,
-)
-
 const turnNumber = computed(() => snapshot.value?.turnNumber ?? 1)
-const {
-  visible: turnEventAnnounceVisible,
-  announced: turnEventAnnounced,
-  announcedTurn: turnEventAnnouncedTurn,
-  dismiss: dismissTurnEventAnnounce,
-} = useTurnEventAnnounce(roomId, activeEvent, turnNumber)
 
+const doctrineBusy = ref(false)
+
+/** Решение планирования из карточки «Нужно решить»: захват, перезарядка, потери в осаде. */
+async function submitPlanningDecision(actionId: string, params: Record<string, unknown>) {
+  if (doctrineBusy.value || !saveFile.value?.game) return
+  doctrineBusy.value = true
+  try {
+    if (serverStatus.value === 'online' && !roomId.value.startsWith('local-')) {
+      bumpObservationEpoch()
+      const obs = await submitGameAction(roomId.value, playerId.value, actionId, params)
+      applyObservation(obs)
+      persistLocal()
+    } else {
+      const result = applyGameActionOnSnapshot(
+        saveFile.value.game,
+        saveFile.value.map,
+        playerId.value,
+        actionId,
+        params,
+      )
+      if (result.errors.length) {
+        markerActionHint.value = result.errors[0] ?? null
+        return
+      }
+      persistLocal()
+      refreshLocalLegalActions()
+    }
+  } catch (e) {
+    markerActionHint.value = actionErrorMessage(e, 'Не удалось выполнить действие')
+  } finally {
+    doctrineBusy.value = false
+  }
+}
+
+/** Доктрину выбирают все одновременно — в любой момент планирования, не только в свой ход. */
+async function chooseDoctrineAction(doctrineId: import('@galaxy/rules').DoctrineId) {
+  if (doctrineBusy.value || !saveFile.value?.game) return
+  doctrineBusy.value = true
+  try {
+    if (serverStatus.value === 'online' && !roomId.value.startsWith('local-')) {
+      bumpObservationEpoch()
+      const obs = await submitGameAction(roomId.value, playerId.value, 'choose-doctrine', { doctrineId })
+      applyObservation(obs)
+      persistLocal()
+    } else {
+      const result = applyGameActionOnSnapshot(
+        saveFile.value.game,
+        saveFile.value.map,
+        playerId.value,
+        'choose-doctrine',
+        { doctrineId },
+      )
+      if (result.errors.length) {
+        markerActionHint.value = result.errors[0] ?? null
+        return
+      }
+      persistLocal()
+      refreshLocalLegalActions()
+    }
+  } catch (e) {
+    markerActionHint.value = actionErrorMessage(e, 'Не удалось выбрать доктрину')
+  } finally {
+    doctrineBusy.value = false
+  }
+}
 const resourceRechargeBanner = computed(() => {
-  const remaining = snapshot.value?.resourceRechargeTurnsRemaining
-  if (remaining !== 1 && remaining !== 2 && remaining !== 3) return null
-  return formatResourceRechargeBannerText(remaining)
+  const game = snapshot.value
+  const me = playerId.value
+  if (!game || !me) return null
+  // Отсчёта до перезарядки больше нет: фишки возвращаются каждый ход, но не больше
+  // бюджета, и бюджет падает с ростом числа центров власти.
+  const owed = game.rechargePicksRemainingByPlayer?.[me] ?? 0
+  const budget = computeRechargeBudget(game, me)
+  if (owed <= 0 && budget <= 0) return null
+  return formatRechargeBudgetHint(budget, owed)
 })
 
 const {
@@ -1360,7 +1485,6 @@ const {
   roomId,
   turnNumber,
   resourceRechargeBanner,
-  turnEventAnnounceVisible,
 )
 
 const phaseGuidance = computed(() =>
@@ -1369,7 +1493,7 @@ const phaseGuidance = computed(() =>
     actionMarkersMax: myActionMarkerLimit.value,
     actionMarkerUsedThisTurn: actionMarkerUsedThisTurn.value,
     actionMarkerUnresolved: mustResolveActionMarker.value,
-    eventResolved: activeEvent.value?.resolved ?? false,
+    doctrineOwed: !!snapshot.value && doctrineChoiceOwed(snapshot.value, playerId.value),
   }),
 )
 
@@ -1447,10 +1571,10 @@ const boardInteractiveKeys = computed(() => {
 })
 
 const boardTokenPickKeys = computed(() =>
-  buildTokenPick.value.active ? buildTokenPick.value.pickKeys : [],
+  buildTokenPick.value.active ? buildTokenPick.value.pickKeys : claimCandidateKeys.value,
 )
 const boardTokenPickedKeys = computed(() =>
-  buildTokenPick.value.active ? buildTokenPick.value.pickedKeys : [],
+  buildTokenPick.value.active ? buildTokenPick.value.pickedKeys : claimSelection.value,
 )
 
 const boardReachableKeys = computed(() => {
@@ -1677,7 +1801,7 @@ function closeBattleModal() {
   battleModalOpen.value = false
   markerMapPick.afterBattleModalClosed()
   pendingOrderAfterBattle.value = null
-  if (combatPhase.value !== 'awaiting-destruction' && combatPhase.value !== 'awaiting-continue') {
+  if (combatPhase.value !== 'awaiting-continue') {
     battleResolution.value = null
   }
   battleResolving.value = false
@@ -1703,15 +1827,9 @@ async function resolveBattleWithOptions(combatOptions: CombatOptions) {
     }
     if (saveFile.value?.game) {
       const lastEvt = saveFile.value.game.eventLog.at(-1)
-      if (lastEvt && !battleResolution.value?.needsDestructionSelection) {
-        markerActionHint.value = lastEvt.message
-      }
+      if (lastEvt) markerActionHint.value = lastEvt.message
     }
-    if (battleResolution.value?.needsDestructionSelection) {
-      markerActionHint.value = 'Выберите корабли для уничтожения'
-    } else if (!battleResolution.value?.needsDestructionSelection) {
-      pendingOrderAfterBattle.value = null
-    }
+    pendingOrderAfterBattle.value = null
   } catch (e) {
     markerActionHint.value = actionErrorMessage(e, 'Не удалось разрешить бой')
   } finally {
@@ -1729,12 +1847,18 @@ async function submitCombatPrepReady(combatOptions: CombatOptions) {
     if (!prep || !pending) return
 
     const isAttacker = pending.attackerId === playerId.value
-    const sideSkips = isAttacker
-      ? combatOptions.attacker?.prioritySkips
-      : combatOptions.defender?.prioritySkips
+    const sideOptions = isAttacker ? combatOptions.attacker : combatOptions.defender
+    const targetPriority = sideOptions?.targetPriority
+    const diceTargets = sideOptions?.diceTargets
 
     bumpObservationEpoch()
-    const obs = await updateCombatPrepAction(roomId.value, playerId.value, true, sideSkips)
+    const obs = await updateCombatPrepAction(
+      roomId.value,
+      playerId.value,
+      true,
+      targetPriority,
+      diceTargets,
+    )
     applyObservation(obs)
     persistLocal()
     markerActionHint.value = 'Готовность отправлена'
@@ -1769,7 +1893,7 @@ async function submitCombatSupportSide(side: 'attacker' | 'defender' | null) {
   try {
     bumpObservationEpoch()
     const obs = await submitGameAction(roomId.value, playerId.value, 'update-combat-prep', {
-      ready: true,
+      ready: side == null,
       supportSide: side,
     })
     applyObservation(obs)
@@ -1777,11 +1901,114 @@ async function submitCombatSupportSide(side: 'attacker' | 'defender' | null) {
     markerActionHint.value =
       side == null
         ? 'Вы не поддерживаете никого — готовность подтверждена'
-        : 'Поддержка выбрана — готовность подтверждена'
+        : 'Сторона выбрана — назначьте цели и подтвердите готовность'
   } catch (e) {
     markerActionHint.value = actionErrorMessage(e, 'Не удалось выбрать поддержку')
   } finally {
     battleResolving.value = false
+  }
+}
+
+/**
+ * Осада вместо штурма доступна при входе на защищённый чужой центр власти. Онлайн это
+ * говорит подготовка боя; в локальной партии подготовки нет — проверяем по доске.
+ */
+const battleSiegeAvailable = computed(() => {
+  if (combatPrepState.value) return combatPrepState.value.siegeAvailable === true
+  const order = pendingOrderAfterBattle.value
+  const game = saveFile.value?.game
+  if (!order || order.kind !== 'movement' || !game) return false
+  const target = order.moves.find((move) =>
+    game.cells.some(
+      (cell) =>
+        cell.coord.q === move.to.q
+        && cell.coord.r === move.to.r
+        && cell.ships.some((ship) => ship.ownerId !== playerId.value),
+    ),
+  )
+  return !!target && canBesiegeCell(game, playerId.value, target.to)
+})
+
+async function establishSiegeAction() {
+  if (battleResolving.value || !saveFile.value?.game) return
+  battleResolving.value = true
+  markerActionHint.value = null
+  try {
+    if (serverStatus.value === 'online' && !roomId.value.startsWith('local-')) {
+      bumpObservationEpoch()
+      const obs = await submitGameAction(roomId.value, playerId.value, 'establish-siege')
+      applyObservation(obs)
+      persistLocal()
+    } else {
+      const order = pendingOrderAfterBattle.value
+      if (!order || order.kind !== 'movement') return
+      const game = saveFile.value.game
+      const map = saveFile.value.map
+      // Локально подготовки нет: ставим её ходом без параметров боя и сразу осаждаем.
+      const prep = applyGameActionOnSnapshot(game, map, playerId.value, 'execute-marker-movement', {
+        from: order.from,
+        moves: order.moves,
+      })
+      const siege = prep.errors.length
+        ? prep
+        : applyGameActionOnSnapshot(game, map, playerId.value, 'establish-siege')
+      if (siege.errors.length) {
+        markerActionHint.value = siege.errors[0] ?? null
+        return
+      }
+      // Ответ осаждённого в локальной партии не спрашиваем: он ответит вылазкой в свой ход.
+      if (game.pendingCombat?.phase === 'prep' && game.pendingCombat.prep.siegeResponse) {
+        applyGameActionOnSnapshot(game, map, game.pendingCombat.attackerId, 'cancel-combat-prep')
+      }
+      persistLocal()
+      refreshLocalLegalActions()
+    }
+    pendingOrderAfterBattle.value = null
+    battleResolution.value = null
+    closeBattleModal()
+    markerActionHint.value = 'Осада установлена: гарнизон будет терять по кораблю в начале хода'
+  } catch (e) {
+    markerActionHint.value = actionErrorMessage(e, 'Не удалось установить осаду')
+  } finally {
+    battleResolving.value = false
+  }
+}
+
+/** Маркер на клетке с чужими кораблями: бой прямо здесь — вылазка или штурм осады. */
+async function assaultFromMarker() {
+  const from = markerActionSource.value
+  if (!saveFile.value?.game || !from || markerActionBusy.value) return
+  markerActionBusy.value = true
+  markerActionHint.value = null
+  closeMarkerActionModal()
+  try {
+    if (serverStatus.value === 'online' && !roomId.value.startsWith('local-')) {
+      bumpObservationEpoch()
+      const obs = await submitGameAction(roomId.value, playerId.value, 'execute-marker-assault', { from })
+      applyObservation(obs)
+      persistLocal()
+      markerActionHint.value = 'Подготовка к бою на клетке'
+      return
+    }
+    const result = applyGameActionOnSnapshot(
+      saveFile.value.game,
+      saveFile.value.map,
+      playerId.value,
+      'execute-marker-assault',
+      { from, combatOptions: {} },
+    )
+    if (result.errors.length) {
+      markerActionHint.value = result.errors[0] ?? null
+      return
+    }
+    battleResolution.value = result.combatResult ?? null
+    persistLocal()
+    refreshLocalLegalActions()
+    markerActionHint.value = 'Бой на клетке'
+  } catch (e) {
+    markerActionHint.value = actionErrorMessage(e, 'Не удалось начать бой')
+  } finally {
+    markerActionBusy.value = false
   }
 }
 
@@ -1802,62 +2029,18 @@ async function cancelCombatPrepAction() {
   }
 }
 
-async function confirmBattleDestruction(destructionSelection: string[]) {
+/** Поддерживающий подтвердил сторону и цели первого раунда. */
+async function submitSupportReady(diceTargets: Record<string, string[]>) {
   if (battleResolving.value) return
   battleResolving.value = true
-  markerActionHint.value = null
-
   try {
-    if (serverStatus.value === 'online' && !roomId.value.startsWith('local-')) {
-      bumpObservationEpoch()
-      const obs = await submitGameAction(
-        roomId.value,
-        playerId.value,
-        'confirm-combat-destruction',
-        { destructionSelection },
-      )
-      applyObservation(obs)
-      battleResolution.value =
-        (obs.mechanics as { lastCombatResult?: CombatResolutionResult }).lastCombatResult ?? null
-      persistLocal()
-    } else if (saveFile.value?.game && saveFile.value.map) {
-      const result = applyGameActionOnSnapshot(
-        saveFile.value.game,
-        saveFile.value.map,
-        playerId.value,
-        'confirm-combat-destruction',
-        { destructionSelection },
-      )
-      if (result.errors.length) {
-        markerActionHint.value = result.errors[0] ?? null
-        return
-      }
-      battleResolution.value = result.combatResult ?? null
-      persistLocal()
-      refreshLocalLegalActions()
-    }
-
-    pendingOrderAfterBattle.value = null
-    markerActionSource.value = null
-    // Подтверждающий уже видел итог на экране выбора потерь — сразу закрываем модалку,
-    // чтобы показался баннер continue/retreat (он скрыт, пока модалка открыта).
-    if (combatPhase.value === 'awaiting-continue') {
-      closeBattleModal()
-      markerActionHint.value = 'Уничтожение применено — выберите: продолжить бой или отступить'
-    } else if (!hasActivePendingCombat.value) {
-      battleModalOpen.value = false
-      if (battleResolutionKey.value) {
-        dismissedCombatResultKey.value = battleResolutionKey.value
-      }
-      if (currentCombatRollsKey.value) {
-        dismissedCombatRollsKey.value = currentCombatRollsKey.value
-      }
-      markerActionHint.value = 'Уничтожение применено'
-    } else {
-      markerActionHint.value = 'Уничтожение применено'
-    }
+    bumpObservationEpoch()
+    const obs = await updateCombatPrepAction(roomId.value, playerId.value, true, undefined, diceTargets)
+    applyObservation(obs)
+    persistLocal()
+    markerActionHint.value = 'Готовность подтверждена'
   } catch (e) {
-    markerActionHint.value = actionErrorMessage(e, 'Не удалось подтвердить уничтожение')
+    markerActionHint.value = actionErrorMessage(e, 'Не удалось подтвердить готовность')
   } finally {
     battleResolving.value = false
   }
@@ -1870,7 +2053,9 @@ async function continuePendingCombatAction() {
   const prevResultKey = battleResolutionKey.value
   bumpObservationEpoch()
   try {
-    const obs = await submitGameAction(roomId.value, playerId.value, 'continue-combat')
+    const obs = await submitGameAction(roomId.value, playerId.value, 'continue-combat', {
+      diceTargets: roundTargets.value,
+    })
     applyObservation(obs)
     persistLocal()
     // Новый раунд / конец боя — показать актуальный lastCombatResult (не старый флот).
@@ -1886,11 +2071,9 @@ async function continuePendingCombatAction() {
         dismissedCombatRollsKey.value = null
       }
     }
-    markerActionHint.value = role === 'attacker'
-      ? 'Вы продолжили бой — ждём решения защитника'
-      : (combatPhase.value === 'awaiting-continue' || combatPhase.value === 'awaiting-destruction'
-        ? 'Бой продолжен'
-        : 'Бой завершён')
+    markerActionHint.value = combatPhase.value === 'awaiting-continue'
+      ? 'Цели выбраны — ждём остальных участников боя'
+      : 'Бой завершён'
   } catch (e) {
     markerActionHint.value = actionErrorMessage(e, 'Не удалось продолжить бой')
   }
@@ -2038,51 +2221,6 @@ async function confirmMarkerBuild(
     markerActionHint.value = 'Постройка выполнена'
   } catch (e) {
     markerActionHint.value = actionErrorMessage(e, 'Не удалось выполнить постройку')
-  } finally {
-    markerActionBusy.value = false
-  }
-}
-
-async function confirmMarkerSacrifice(payload: { shipId: string }) {
-  const from = markerActionSource.value
-  if (!saveFile.value?.game || !from || markerActionBusy.value) return
-
-  markerActionBusy.value = true
-  markerActionHint.value = null
-
-  try {
-    if (serverStatus.value === 'online' && !roomId.value.startsWith('local-')) {
-      bumpObservationEpoch()
-      const obs = await submitGameAction(roomId.value, playerId.value, 'execute-destroyer-sacrifice', {
-        from,
-        shipId: payload.shipId,
-      })
-      applyObservation(obs)
-      persistLocal()
-      markerActionOpen.value = false
-      markerActionSource.value = null
-      markerActionHint.value = 'Клетка занята, эсминец погиб'
-      return
-    }
-
-    const result = applyGameActionOnSnapshot(
-      saveFile.value.game,
-      saveFile.value.map,
-      playerId.value,
-      'execute-destroyer-sacrifice',
-      { from, shipId: payload.shipId },
-    )
-    if (result.errors.length) {
-      markerActionHint.value = result.errors[0] ?? null
-      return
-    }
-    persistLocal()
-    refreshLocalLegalActions()
-    markerActionOpen.value = false
-    markerActionSource.value = null
-    markerActionHint.value = 'Клетка занята, эсминец погиб'
-  } catch (e) {
-    markerActionHint.value = actionErrorMessage(e, 'Не удалось занять клетку')
   } finally {
     markerActionBusy.value = false
   }
@@ -2561,6 +2699,8 @@ async function selectCell(q: number, r: number) {
     return
   }
 
+  if (toggleClaimOnMap(hexKey(q, r))) return
+
   if (markerMapPickActive.value) {
     markerMapPick.handleMapSelect(q, r)
     return
@@ -2918,7 +3058,7 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
       <CombatPreviewPanel
         v-if="markerMapPickActive && markerMapPickHasPendingCombat && markerMapPickCombatPreview && snapshot"
         :preview="markerMapPickCombatPreview"
-        :round-one-odds="markerMapPickRoundOneOdds"
+        :battle-odds="markerMapPickBattleOdds"
         :player-names="playerNameById"
       />
     </section>
@@ -3021,12 +3161,13 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
       class="map-pick-banner map-pick-banner--combat"
       role="status"
     >
-      <p class="map-pick-text">
+      <p v-if="combatDecisionRole === 'support'" class="map-pick-text">
+        {{ ui.combatTargets.supportBanner(pendingCombatState.roundNumber) }}
+      </p>
+      <p v-else class="map-pick-text">
         Бой на ({{ pendingCombatState.cellKey }}) — раунд {{ pendingCombatState.roundNumber }}.
         <template v-if="!combatRetreatAllowed">
-          Пока в этом бою никто не уничтожен — отступление недоступно, бой продолжается.
-          <template v-if="combatDecisionRole === 'attacker'">Подтвердите продолжение.</template>
-          <template v-else>Атакующий продолжил — подтвердите продолжение как защитник.</template>
+          Пока в этом бою никто не уничтожен — отступление недоступно. Выберите цели на раунд.
         </template>
         <template v-else-if="combatDecisionRole === 'attacker'">
           Ваш ход как атакующего: продолжить сражение или отступить на подсвеченную клетку.
@@ -3035,15 +3176,26 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
           Атакующий продолжил бой — ваш ход как защитника: продолжить или отступить на подсвеченную клетку.
         </template>
       </p>
-      <p v-if="combatRetreatAllowed" class="map-pick-text map-pick-text--hint">
+      <CombatTargetsPanel
+        v-if="pendingCombatPreview"
+        v-model="roundTargets"
+        class="map-pick-targets"
+        :preview="pendingCombatPreview"
+        :player-id="playerId"
+        :player-color="sidePanelPlayerColor(playerId)"
+        :enemy-color="sidePanelPlayerColor(combatEnemyId ?? '')"
+        :round-number="pendingCombatState.roundNumber"
+        :damage-by-ship-id="pendingCombatState.damageByShipId ?? {}"
+      />
+      <p v-if="combatRetreatAllowed && combatDecisionRole !== 'support'" class="map-pick-text map-pick-text--hint">
         Клетки отступления подсвечены на карте. Можно нажать на клетку или на кнопку ниже;
         наведение на кнопку подсвечивает клетку ярче.
       </p>
       <div class="map-pick-actions">
         <button type="button" class="map-pick-primary" @click="continuePendingCombatAction">
-          Продолжить бой
+          {{ ui.combatTargets.fire }}
         </button>
-        <template v-if="combatRetreatAllowed">
+        <template v-if="combatRetreatAllowed && combatDecisionRole !== 'support'">
           <span v-if="!retreatDestinations.length" class="map-pick-error">
             Нет доступной соседней клетки для отступления.
           </span>
@@ -3065,16 +3217,62 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
       </div>
     </div>
 
-    <TurnEventAnnounceModal
-      v-if="turnEventAnnounceVisible && turnEventAnnounced"
-      :event="turnEventAnnounced"
-      :turn-number="turnEventAnnouncedTurn"
-      :recharge-banner="resourceRechargeBanner"
-      @close="dismissTurnEventAnnounce"
+    <CombatRerollsPanel
+      v-if="snapshot && snapshot.pendingCombat?.phase === 'awaiting-rerolls'"
+      :snapshot="snapshot"
+      :player-id="playerId"
+      :player-names="playerNameById"
+      :busy="doctrineBusy"
+      @reroll="submitPlanningDecision('reroll-combat-die', { dieIndex: $event })"
+      @finish="submitPlanningDecision('finish-combat-rerolls', { auto: $event })"
+    />
+
+    <div
+      v-if="siegeContinuationMine && siegeContinuationCoord"
+      class="map-pick-banner map-pick-banner--combat"
+      role="status"
+    >
+      <p class="map-pick-text">
+        <strong>{{ ui.siegeContinuation.title(siegeContinuationCoord.q, siegeContinuationCoord.r) }}</strong>
+      </p>
+      <p class="map-pick-text map-pick-text--hint">{{ ui.siegeContinuation.body }}</p>
+      <div class="map-pick-actions">
+        <button
+          type="button"
+          class="map-pick-primary"
+          :disabled="doctrineBusy"
+          @click="submitPlanningDecision('resolve-siege-continuation', { continue: true })"
+        >
+          {{ ui.siegeContinuation.keep }}
+        </button>
+        <button
+          v-for="coord in siegeWithdrawOptions"
+          :key="hexKey(coord.q, coord.r)"
+          type="button"
+          class="map-pick-secondary"
+          :disabled="doctrineBusy"
+          @click="submitPlanningDecision('resolve-siege-continuation', { continue: false, retreatTo: coord })"
+        >
+          {{ ui.siegeContinuation.withdraw(coord.q, coord.r) }}
+        </button>
+      </div>
+    </div>
+
+    <PlanningDecisionsPanel
+      v-if="snapshot && !battleModalOpen"
+      :snapshot="snapshot"
+      :player-id="playerId"
+      v-model:claim-selected="claimSelection"
+      :busy="doctrineBusy"
+      @doctrine="chooseDoctrineAction"
+      @claims="submitPlanningDecision('execute-claim-picks', { picks: $event })"
+      @recharge="submitPlanningDecision('execute-recharge-picks', { picks: $event })"
+      @siege-losses="submitPlanningDecision('execute-siege-losses', { shipIds: $event })"
+      @focus-cell="selectedKey = hexKey($event.q, $event.r)"
     />
 
     <TurnEventAnnounceModal
-      v-else-if="rechargeIntroVisible && resourceRechargeBanner"
+      v-if="rechargeIntroVisible && resourceRechargeBanner"
       :turn-number="turnNumber"
       :recharge-banner="resourceRechargeBanner"
       @close="dismissRechargeIntro"
@@ -3093,8 +3291,8 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
       @close="closeMarkerActionModal"
       @start-pick="startMarkerMapPick"
       @execute-build="confirmMarkerBuild($event.orders, $event.spentTokens)"
-      @execute-sacrifice="confirmMarkerSacrifice"
       @remove-marker="removeMarkerAtSourceFromModal"
+      @assault="assaultFromMarker"
     />
 
     <BattleModal
@@ -3109,15 +3307,20 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
       :self-ready="combatPrepSelfReady"
       :attacker-ready="combatPrepAttackerReady"
       :defender-ready="combatPrepDefenderReady"
-      :remote-attacker-skips="combatPrepAttackerSkips"
-      :remote-defender-skips="combatPrepDefenderSkips"
       :countdown-started-at="combatPrepState?.countdownStartedAt"
       :continue-decision-role="combatDecisionRole"
       :retreat-allowed="combatRetreatAllowed"
       :retreat-destinations="retreatDestinations"
+      :siege-available="battleSiegeAvailable"
+      :siege-response="combatPrepState?.siegeResponse === true"
+      :assault-blocked="combatPrepState?.assaultBlocked === true"
+      :support-side="combatPrepState?.combatOptions.supportSides?.[playerId] ?? null"
+      :round-targets="roundTargets"
+      @update:round-targets="roundTargets = $event"
+      @support-ready="submitSupportReady"
+      @establish-siege="establishSiegeAction"
       @close="closeBattleModal"
       @resolve="resolveBattleWithOptions"
-      @confirm-destruction="confirmBattleDestruction"
       @prep-ready="resolveBattleWithOptions"
       @prep-unready="submitCombatPrepUnready"
       @support-side="submitCombatSupportSide"
@@ -3449,17 +3652,19 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
 
         <section v-if="victoryProgress" class="block victory-block">
           <h3 class="block-label">{{ ui.victory.heading }}</h3>
-          <VictoryTrackerPanel :progress="victoryProgress" :my-player-id="playerId" />
+          <VictoryTrackerPanel :progress="victoryProgress" :my-player-id="playerId" :turns-left="turnsLeft" />
         </section>
 
-        <section v-if="showTurnEventsPanel" class="block event-block">
-          <TurnEventsPanel
-            :active-event="activeEvent"
-            :history="turnEventHistory"
-            :current-turn="snapshot?.turnNumber ?? 1"
-            :phase="snapshot?.phase"
-            :resolved-at="currentTurnEventResolvedAt"
+        <section
+          v-if="snapshot && (snapshot.doctrineWindow || resourceRechargeBanner)"
+          class="block event-block"
+        >
+          <DoctrinePanel
+            :snapshot="snapshot"
+            :player-id="playerId"
+            :busy="doctrineBusy"
             :recharge-banner="resourceRechargeBanner"
+            @choose="chooseDoctrineAction"
           />
         </section>
 
@@ -3723,6 +3928,11 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
 }
 .map-pick-banner--combat {
   border-color: rgba(248, 113, 113, 0.6);
+}
+.map-pick-banner--combat .map-pick-targets {
+  margin: 0.4rem 0;
+  max-height: 45vh;
+  overflow-y: auto;
 }
 .board-layer {
   position: absolute;

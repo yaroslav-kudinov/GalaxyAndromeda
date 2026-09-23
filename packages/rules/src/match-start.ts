@@ -1,7 +1,8 @@
 import type { GameSnapshot } from './save-file.js'
 import { gameStateFromSnapshot } from './save-file.js'
 import { refreshActionMarkerCapacity } from './marker-pools.js'
-import { rollNewResourceRechargeSchedule } from './resource-recharge.js'
+import { refreshRechargeBudgets } from './resource-recharge.js'
+import { DEFAULT_DOCTRINE_WINDOW, openDoctrineWindowIfDue } from './doctrines.js'
 import { activePlayerOrder } from './turn.js'
 
 /** Новая партия: ход 1, планирование, без маркеров и боя. */
@@ -20,15 +21,58 @@ export function isPristineMatchSnapshot(game: GameSnapshot): boolean {
  * Старт матча для реально вошедших слотов: очередь хода только среди них,
  * корабли и контроль пустых слотов снимаются (иначе «призраки» на карте).
  */
+/**
+ * Жёсткий лимит ходов. По его достижении победитель определяется цепочкой тай-брейков
+ * (`resolveTurnLimitWinner`): партия не может закончиться без победителя.
+ */
+export const DEFAULT_TURN_LIMIT = 15
+
+export interface BeginMatchOptions {
+  /**
+   * Лимит ходов партии. `null` — без лимита: обучение не должно обрываться на середине
+   * урока. По умолчанию `DEFAULT_TURN_LIMIT`.
+   */
+  turnLimit?: number | null
+  /**
+   * Сид партии. `null` — без сида: порядок хода остаётся привязан к карте, как рассчитывают
+   * обучающие сценарии. По умолчанию — случайный.
+   */
+  matchSeed?: number | null
+  /**
+   * Длина окна доктрин в ходах. `null` — без доктрин: обучение их не объясняет и не должно
+   * на них спотыкаться. По умолчанию `DEFAULT_DOCTRINE_WINDOW`.
+   */
+  doctrineWindow?: number | null
+}
+
 export function beginMatchForParticipants(
   game: GameSnapshot,
   mapId: string,
   participatingIds: string[],
+  options?: BeginMatchOptions,
 ): void {
   const ids = [...new Set(participatingIds.filter(Boolean))]
   game.participatingPlayerIds = ids
 
-  rollNewResourceRechargeSchedule(game)
+  // Сид партии: разрешение ничьих должно быть одинаковым при повторной загрузке сейва,
+  // но разным от партии к партии — иначе одно и то же место выигрывало бы все ничьи.
+  if (options?.matchSeed === null) delete game.matchSeed
+  else if (options?.matchSeed != null) game.matchSeed = options.matchSeed >>> 0
+  else game.matchSeed ??= Math.floor(Math.random() * 0xffffffff) >>> 0
+  const turnLimit = options?.turnLimit === undefined ? DEFAULT_TURN_LIMIT : options.turnLimit
+  if (turnLimit == null) game.turnLimit = undefined
+  else game.turnLimit ??= turnLimit
+
+  const doctrineWindow =
+    options?.doctrineWindow === undefined ? DEFAULT_DOCTRINE_WINDOW : options.doctrineWindow
+  if (doctrineWindow == null) delete game.doctrineWindow
+  else game.doctrineWindow ??= doctrineWindow
+
+  // Первое окно доктрин открывается с первым ходом, и бюджет перезарядки ждёт вскрытия:
+  // доктрина действует с начала хода, в котором выбрана.
+  game.claimPicksRemainingByPlayer = {}
+  openDoctrineWindowIfDue(game)
+  refreshRechargeBudgets(game, () => !!game.doctrineChoice)
 
   for (const cell of game.cells) {
     cell.ships = cell.ships.filter((ship) => ids.includes(ship.ownerId))

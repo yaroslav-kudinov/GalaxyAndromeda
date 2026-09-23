@@ -17,7 +17,6 @@ import type { Room } from './room.js'
 const MAX_BOT_TICKS = 24
 const OUT_OF_TURN_BOT_ACTIONS = new Set([
   'update-combat-prep',
-  'confirm-combat-destruction',
   'continue-combat',
   'stop-combat',
 ])
@@ -135,6 +134,7 @@ export function initTutorialRoomState(
   room.botPlayerIds = bots.map((bot) => bot.playerId)
   room.botPlayerId = room.botPlayerIds[0]
   room.state.scenarioProgress = initScenarioProgress(scenarioId)
+  if (script?.scriptedDiceValue != null) room.state.scriptedDiceValue = script.scriptedDiceValue
 }
 
 export function manualAdvanceScenarioStep(room: Room): boolean {

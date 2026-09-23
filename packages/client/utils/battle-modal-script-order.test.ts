@@ -34,8 +34,8 @@ function immediateRollWatchIndex(): number {
 
 const DECLARATIONS = [
   'let revealTimer',
-  'const destructionReviewReady',
-  'let destructionReviewTimer',
+  'const revealedCount',
+  'const animationDone',
 ]
 
 test('состояние анимации бросков объявлено до немедленного watch', () => {

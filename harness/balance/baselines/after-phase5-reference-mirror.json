@@ -1,0 +1,78 @@
+{
+  "label": "after-phase5-reference-mirror",
+  "seed": 101,
+  "games": 150,
+  "options": {
+    "maxTurns": 60,
+    "victoryPowerCenters": null,
+    "maxSteps": 250000,
+    "maxCombatRounds": 12,
+    "handicapCells": 0
+  },
+  "summaries": {
+    "reference-duel": {
+      "games": 150,
+      "errors": 0,
+      "turns": {
+        "mean": 8.666666666666666,
+        "p10": 6,
+        "median": 8,
+        "p90": 13
+      },
+      "hitTurnCapShare": 0,
+      "winRateBySeat": {
+        "player-2": 0.5266666666666666,
+        "player-1": 0.47333333333333333
+      },
+      "winRateByOrderPosition": {
+        "0": 0.4866666666666667,
+        "1": 0.5133333333333333
+      },
+      "meanLeadChanges": 2.4266666666666667,
+      "pointOfNoReturn": {
+        "mean": 7.466666666666667,
+        "meanShareOfGame": 0.8619091464091461
+      },
+      "giniByTurn": {
+        "5": 0.037299275069092926,
+        "10": 0.030684934684454986,
+        "15": 0.03138822661113453
+      },
+      "wasteRatio": 1.2998013508144617,
+      "firstUnlockTurn": {
+        "destroyer": 1,
+        "cruiser": 5.343511450381679,
+        "carrier": 8.10958904109589,
+        "battleship": 9.2,
+        "hyper": 9.666666666666666
+      },
+      "claimUtilisationAt3Plus": 0.8410732023233872,
+      "meanEliminationTurn": null,
+      "victoryReasons": {
+        "power_centers": 147,
+        "turn_limit": 3
+      },
+      "battles": {
+        "perGame": 2.02,
+        "bombardmentsPerGame": 0,
+        "outcomes": {
+          "mutual": 0.039603960396039604,
+          "attacker": 0.7062706270627063,
+          "retreat": 0.033003300330033,
+          "defender": 0.2145214521452145,
+          "none": 0.006600660066006601
+        },
+        "meanAttackerLossValue": 1.9801980198019802,
+        "meanDefenderLossValue": 3.046204620462046
+      },
+      "sieges": {
+        "perGame": 0.6133333333333333,
+        "capturedShare": 0.31868131868131866
+      },
+      "handicap": {
+        "winRate": null,
+        "amplification": null
+      }
+    }
+  }
+}

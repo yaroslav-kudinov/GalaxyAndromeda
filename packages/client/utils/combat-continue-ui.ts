@@ -1,13 +1,14 @@
 import type { CombatResolutionResult, PendingCombat } from '@galaxy/rules'
-import { combatPrepOf, combatRoundStateOf } from '@galaxy/rules'
+import { combatPrepOf } from '@galaxy/rules'
 
-export type CombatContinueRole = 'attacker' | 'defender'
+/** Кто решает перед раундом: атакующий, защитник или третий игрок, чьи корабли поддерживают бой. */
+export type CombatContinueRole = 'attacker' | 'defender' | 'support'
 
-export type CombatContinueExpectation = 'prep' | 'destruction' | 'continue-decision' | null
+export type CombatContinueExpectation = 'prep' | 'continue-decision' | null
 
 /**
- * Броски текущего раунда без уничтожения.
- * После выбора потерь отпечаток итога меняется, броски те же — закрытое окно не открываем снова.
+ * Броски текущего раунда. Если отпечаток итога меняется при тех же бросках,
+ * закрытое окно не открываем снова.
  */
 export function combatResultRollsKey(
   res: CombatResolutionResult | null | undefined,
@@ -16,44 +17,38 @@ export function combatResultRollsKey(
   const round = res.rounds?.[res.rounds.length - 1] ?? res.roundOne
   const rolls = round?.shipRolls ?? []
   const rollsKey = rolls
-    .map(
-      (s) =>
-        `${s.shipId}:${s.total}:${s.combatRolls.join('.')}:${s.supportRolls?.map((x) => x.rolls.join('.')).join(',') ?? ''}`,
-    )
+    .map((s) => `${s.shipId}:${s.dice.map((d) => `${d.value}>${d.targetShipId ?? '-'}`).join('.')}`)
     .join('|')
   return `${res.coord.q},${res.coord.r}:${res.rounds?.length ?? 1}:${rollsKey}`
 }
 
 export function isCombatDefender(pending: PendingCombat, playerId: string): boolean {
   if (pending.defenderIds.includes(playerId)) return true
-  if (pending.phase === 'awaiting-destruction' || pending.phase === 'awaiting-continue') {
-    return pending.roundState?.defenderId === playerId
-  }
   if (pending.phase === 'prep') return pending.prep.defenderId === playerId
   return false
 }
 
 /**
- * Чья очередь нажать «продолжить бой» / «отступить».
- * Не зависит от того, чей сейчас ход на карте: сначала атакующий, затем защитник.
+ * Кто сейчас выбирает цели и решает, продолжать ли бой. Не зависит от того, чей ход на карте.
+ * Пока в бою никто не уничтожен, отступать нельзя и все решают одновременно; после первого
+ * уничтожения защитник ждёт решения атакующего.
  */
 export function combatContinueDecisionRole(
   pending: PendingCombat | null | undefined,
   playerId: string,
-  options?: { eliminated?: boolean },
+  options?: { eliminated?: boolean; supporterAwaited?: boolean },
 ): CombatContinueRole | null {
   if (options?.eliminated) return null
   if (pending?.phase !== 'awaiting-continue') return null
-  if (pending.attackerId === playerId && pending.continueDecisions?.attacker == null) {
-    return 'attacker'
+  if (pending.attackerId === playerId) {
+    return pending.continueDecisions?.attacker == null ? 'attacker' : null
   }
-  if (
-    isCombatDefender(pending, playerId)
-    && pending.continueDecisions?.attacker === true
-    && pending.continueDecisions?.defender == null
-  ) {
-    return 'defender'
+  if (isCombatDefender(pending, playerId)) {
+    const attackerFirst = pending.shipsDestroyedInCombat === true
+    if (attackerFirst && pending.continueDecisions?.attacker !== true) return null
+    return pending.continueDecisions?.defender == null ? 'defender' : null
   }
+  if (options?.supporterAwaited && pending.supportReady?.[playerId] !== true) return 'support'
   return null
 }
 
@@ -78,7 +73,7 @@ export function shouldShowForeignCombatBanner(args: {
 }
 
 /**
- * Смена отпечатка итога при тех же бросках (после выбора потерь) не сбрасывает закрытие.
+ * Смена отпечатка итога при тех же бросках не сбрасывает закрытие.
  * Новые броски следующего раунда — сбрасывает, чтобы снова показать итог.
  */
 export function shouldKeepCombatResultDismiss(args: {
@@ -99,7 +94,6 @@ export function shouldKeepCombatResultDismiss(args: {
 export function combatContinueUiExpectation(args: {
   hasPendingCombat: boolean
   decisionRole: CombatContinueRole | null
-  isDestructionChooser: boolean
   phase: PendingCombat['phase'] | null
   isParticipant: boolean
   battleModalOpen: boolean
@@ -109,34 +103,29 @@ export function combatContinueUiExpectation(args: {
   // Пока читают итог в открытом окне — не срывать просмотр ради баннера.
   if (args.battleModalOpen && args.viewingResults) return null
   if (args.decisionRole != null) return 'continue-decision'
-  if (args.isDestructionChooser) return 'destruction'
   if (args.phase === 'prep' && args.isParticipant) return 'prep'
   return null
 }
 
 export type CombatOutcomeKind = 'win' | 'loss' | 'draw' | 'attacker-won' | 'defender-won'
 
-export function isCombatRoundDraw(args: {
-  roundWinner?: 'attacker' | 'defender' | 'draw' | null
-  winnerId?: string | null
-}): boolean {
-  if (args.roundWinner === 'draw') return true
-  return !args.winnerId && args.roundWinner !== 'attacker' && args.roundWinner !== 'defender'
-}
-
 /**
- * Крупный итог раунда: со стороны зрителя или глобально (атакующий / защитник / ничья).
- * Не смотрит на activePlayerId карты.
+ * Крупный итог раунда: со стороны зрителя или глобально (атакующий / защитник).
+ * Пока бой идёт и никто не выбит — «раунд без исхода». Не смотрит на activePlayerId карты.
  */
 export function combatRoundOutcome(args: {
   localPlayerId: string
   attackerId: string
   defenderId: string
   winnerId: string | null | undefined
-  roundWinner?: 'attacker' | 'defender' | 'draw' | null
+  /** Бой закончился (стороны выбиты, отступили или бой не состоялся). */
+  battleOver?: boolean
+  /** Ни одна сторона не могла стрелять. */
+  stalemate?: boolean
 }): { kind: CombatOutcomeKind; label: string } {
-  if (isCombatRoundDraw({ roundWinner: args.roundWinner, winnerId: args.winnerId })) {
-    return { kind: 'draw', label: 'Ничья' }
+  if (args.stalemate) return { kind: 'draw', label: 'Бой не состоялся' }
+  if (!args.winnerId) {
+    return { kind: 'draw', label: args.battleOver ? 'Взаимное уничтожение' : 'Раунд без исхода' }
   }
   const isParticipant =
     args.localPlayerId === args.attackerId || args.localPlayerId === args.defenderId
@@ -144,7 +133,7 @@ export function combatRoundOutcome(args: {
     if (args.winnerId === args.localPlayerId) return { kind: 'win', label: 'Победа' }
     return { kind: 'loss', label: 'Поражение' }
   }
-  if (args.winnerId === args.attackerId || args.roundWinner === 'attacker') {
+  if (args.winnerId === args.attackerId) {
     return { kind: 'attacker-won', label: 'Победа атакующего' }
   }
   return { kind: 'defender-won', label: 'Победа защитника' }
@@ -156,12 +145,11 @@ export function combatRoundOutcome(args: {
 export function combatDecisionStatusLine(args: {
   pending: PendingCombat | null | undefined
   isBombardment?: boolean
-  isRoundDraw?: boolean
 }): string {
   const pending = args.pending
   if (!pending) {
     if (args.isBombardment) return 'Обстрел завершён: клетка не захватывается.'
-    return args.isRoundDraw ? 'Раунд завершён без уничтожений.' : 'Раунд завершён.'
+    return 'Бой завершён.'
   }
 
   if (pending.phase === 'prep') {
@@ -170,26 +158,19 @@ export function combatDecisionStatusLine(args: {
     return 'Стороны готовятся к бою'
   }
 
-  if (pending.phase === 'awaiting-destruction') {
-    const winnerId = combatRoundStateOf(pending)?.winnerId
-    if (winnerId && winnerId === pending.attackerId) return 'Атакующий выбирает потери'
-    return 'Защитник выбирает потери'
-  }
-
   if (pending.phase === 'awaiting-continue') {
     const mustContinue = pending.shipsDestroyedInCombat !== true
     const attackerDecided = pending.continueDecisions?.attacker === true
-    if (!attackerDecided) {
-      return mustContinue
-        ? 'Атакующий подтверждает продолжение'
-        : 'Атакующий: продолжить или отступить'
+    const defenderDecided = pending.continueDecisions?.defender === true
+    if (mustContinue) {
+      if (!attackerDecided && !defenderDecided) return 'Стороны выбирают цели на следующий раунд'
+      if (!attackerDecided) return 'Атакующий выбирает цели'
+      if (!defenderDecided) return 'Защитник выбирает цели'
+      return 'Поддержка выбирает цели'
     }
-    if (pending.continueDecisions?.defender !== true) {
-      return mustContinue
-        ? 'Защитник подтверждает продолжение'
-        : 'Защитник: продолжить или отступить'
-    }
-    return 'Ждём подтверждения'
+    if (!attackerDecided) return 'Атакующий: цели и продолжить или отступить'
+    if (!defenderDecided) return 'Защитник: цели и продолжить или отступить'
+    return 'Поддержка выбирает цели'
   }
 
   return 'Ждём подтверждения'

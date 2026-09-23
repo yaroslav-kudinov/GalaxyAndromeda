@@ -31,6 +31,20 @@ describe('victory progress', () => {
     expect(victoryThresholdFor(powerCenterMap(7))).toBe(4)
   })
 
+  it('порог из карты главнее запасного правила — и в описании карты, и в партии', () => {
+    const map = powerCenterMap(9)
+    map.victoryPowerCenters = 6
+    expect(victoryThresholdFor(map)).toBe(6)
+
+    const game = gameSnapshotFromMap(map)
+    ensurePlayerSlots(game, 2)
+    game.participatingPlayerIds = ['player-1', 'player-2']
+    controlPowerCenters(game, ['player-1', 'player-1'])
+    const progress = victoryProgressForSnapshot(game, map)
+    expect(progress.needed).toBe(6)
+    expect(progress.entries.find((e) => e.playerId === 'player-1')?.remaining).toBe(4)
+  })
+
   it('считает захваченные центры власти и остаток до порога', () => {
     const map = powerCenterMap(5)
     const game = gameSnapshotFromMap(map)

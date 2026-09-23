@@ -13,6 +13,8 @@ import type {
 } from '@galaxy/rules'
 
 import {
+  maskDoctrineChoice,
+  maskPendingCombatForViewer,
 
   buildObservation,
 
@@ -400,8 +402,6 @@ function maybeAdvanceCombatPrep(room: Room): {
       : combatResult.winnerId === attackerId
         ? defenderId
         : attackerId
-  const shieldAbsorbEntry = combatResult?.log.find((e) => e.step === 'shield-absorb')
-  const shieldContributions = (shieldAbsorbEntry?.data as { contributions?: unknown[] } | undefined)?.contributions
   debugLog(combatResult ? 'combat.auto-resolve' : 'combat.countdown', {
     roomId: room.id,
     phaseBefore: prepBefore?.phase,
@@ -411,9 +411,8 @@ function maybeAdvanceCombatPrep(room: Room): {
     attackerId,
     defenderId,
     loserId,
-    shieldAbsorbed: combatResult?.shieldAbsorbed,
-    rawDamage: combatResult?.rawDamage,
-    shieldContributionCount: Array.isArray(shieldContributions) ? shieldContributions.length : undefined,
+    destroyedShipIds: combatResult?.destroyedShipIds,
+    stalemate: combatResult?.stalemate,
   })
   return { combatResult, changed: true }
 }
@@ -467,16 +466,29 @@ function roomObservation(
     actionMarkerResolvedThisTurn: s.actionMarkerResolvedThisTurn ?? false,
     productionMarkerResolvedThisTurn: s.productionMarkerResolvedThisTurn ?? false,
     participatingPlayerIds: s.participatingPlayerIds,
-    turnEvent: s.turnEvent ?? null,
-    eventDeck: s.eventDeck ?? null,
+    victoryPowerCenters: s.victoryPowerCenters ?? null,
+    turnLimit: s.turnLimit ?? null,
+    matchSeed: s.matchSeed ?? null,
     gameOver: s.gameOver ?? null,
-    pendingCombat: s.pendingCombat ?? null,
+    pendingCombat: maskPendingCombatForViewer(s, playerId) ?? null,
     productionTokensSpentThisTurn: s.productionTokensSpentThisTurn ?? null,
     overtimeRegionByPlayer: s.overtimeRegionByPlayer ?? null,
     actionMarkerLimitByPlayer: s.actionMarkerLimitByPlayer ?? null,
     productionMarkerLimitByPlayer: s.productionMarkerLimitByPlayer ?? null,
-    resourceRechargeTurnsRemaining:
-      room.status === 'playing' ? (s.resourceRechargeTurnsRemaining ?? null) : undefined,
+    rechargePicksRemainingByPlayer:
+      room.status === 'playing' ? (s.rechargePicksRemainingByPlayer ?? null) : undefined,
+    claimPicksRemainingByPlayer:
+      room.status === 'playing' ? (s.claimPicksRemainingByPlayer ?? null) : undefined,
+    sieges: room.status === 'playing' ? (s.sieges ?? null) : undefined,
+    doctrineWindow: room.status === 'playing' ? (s.doctrineWindow ?? null) : undefined,
+    doctrineByPlayer: room.status === 'playing' ? (s.doctrineByPlayer ?? null) : undefined,
+    // Выбор одновременный: до вскрытия игрок видит только свою доктрину и кто уже выбрал.
+    doctrineChoice:
+      room.status === 'playing' ? maskDoctrineChoice(s.doctrineChoice, playerId) : undefined,
+    siegeLossesOwedByPlayer:
+      room.status === 'playing' ? (s.siegeLossesOwedByPlayer ?? null) : undefined,
+    siegeTickTurn: room.status === 'playing' ? (s.siegeTickTurn ?? null) : undefined,
+    siegeContinuationChoice: room.status === 'playing' ? (s.siegeContinuationChoice ?? null) : undefined,
     lastCombatResult: room.lastCombatResult ?? null,
     observationRevision: room.observationRevision,
     roomStatus: room.status,
@@ -568,8 +580,6 @@ export function createTutorialRoom(
     if (!room.playerIds.includes(bot.playerId)) room.playerIds.push(bot.playerId)
   }
   syncParticipatingPlayerIds(room.state, room.playerIds)
-  if (script.eventDeck?.length) room.state.eventDeck = [...script.eventDeck]
-
   const start = startRoom(room.id, joinHuman.playerId)
   if (!start.ok) return { ok: false, error: start.error }
 
@@ -775,7 +785,13 @@ export function startRoom(roomId: string, playerId: string): RoomStartResult {
   room.hostPlayerId = room.hostPlayerId ?? playerId
   syncParticipatingPlayerIds(room.state, room.playerIds)
   if (isPristineMatchSnapshot(room.state)) {
-    beginMatchForParticipants(room.state, room.map.id, room.playerIds)
+    beginMatchForParticipants(room.state, room.map.id, room.playerIds, {
+      // Обучение не обрывается лимитом ходов: урок важнее темпа. И сценарий рассчитан на
+      // конкретную очередь хода, поэтому сид партии ему не выдаётся.
+      turnLimit: room.mode === 'tutorial' ? null : undefined,
+      matchSeed: room.mode === 'tutorial' ? null : undefined,
+      doctrineWindow: room.mode === 'tutorial' ? null : undefined,
+    })
   } else {
     ensureActivePlayerParticipating(room.state)
   }

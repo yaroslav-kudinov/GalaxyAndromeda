@@ -3,7 +3,7 @@ import type {
   CombatPreview,
   GameSnapshot,
   HexCoord,
-  RoundOneOutcomeOdds,
+  BattleOutcomeOdds,
   ShipMovePlan,
 } from '@galaxy/rules'
 import {
@@ -11,13 +11,13 @@ import {
   buildBombardmentPreview,
   buildCombatPreview,
   detectCombatsFromMoves,
-  estimateRoundOneOutcome,
+  estimateBattleOutcome,
   getCombatDestinationKeysFromMoves,
   hexKey,
   isCombatDestination,
 } from '@galaxy/rules'
 
-export type MarkerActionMode = 'movement' | 'bombardment' | 'build' | 'sacrifice'
+export type MarkerActionMode = 'movement' | 'bombardment' | 'build'
 
 export type DraftMovePreview = {
   shipId: string
@@ -127,10 +127,10 @@ export function useActionOrderDraft(
     return buildCombatPreview(snapshot.value, coord, playerId.value, incomingShips)
   })
 
-  const roundOneOdds = computed((): RoundOneOutcomeOdds | null => {
+  const battleOdds = computed((): BattleOutcomeOdds | null => {
     const preview = orderCombatPreview.value
     if (!preview) return null
-    return estimateRoundOneOutcome(preview)
+    return estimateBattleOutcome(preview)
   })
 
   function pushUndoSnapshot(
@@ -247,7 +247,7 @@ export function useActionOrderDraft(
     destinationKeys,
     contestedDestinationKeys,
     orderCombatPreview,
-    roundOneOdds,
+    battleOdds,
     pushUndoSnapshot,
     clear,
     wouldViolateSingleCombatRule,

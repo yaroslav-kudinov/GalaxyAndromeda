@@ -1,0 +1,62 @@
+{
+  "label": "after-phase3-reference-handicap",
+  "seed": 101,
+  "games": 150,
+  "options": {
+    "maxTurns": 60,
+    "victoryPowerCenters": null,
+    "maxSteps": 250000,
+    "maxCombatRounds": 3,
+    "handicapCells": 6
+  },
+  "summaries": {
+    "reference-duel": {
+      "games": 150,
+      "errors": 0,
+      "turns": {
+        "mean": 9.206666666666667,
+        "p10": 6,
+        "median": 9,
+        "p90": 14
+      },
+      "hitTurnCapShare": 0,
+      "winRateBySeat": {
+        "player-2": 0.6,
+        "player-1": 0.4
+      },
+      "winRateByOrderPosition": {
+        "0": 0.42,
+        "1": 0.58
+      },
+      "meanLeadChanges": 2.6466666666666665,
+      "pointOfNoReturn": {
+        "mean": 7.8933333333333335,
+        "meanShareOfGame": 0.8467748547748548
+      },
+      "giniByTurn": {
+        "5": 0.0890642785960011,
+        "10": 0.04195115083772071,
+        "15": 0.02356683507105536
+      },
+      "wasteRatio": 1.2280574671012918,
+      "firstUnlockTurn": {
+        "destroyer": 1,
+        "cruiser": 1,
+        "shield": 6.417391304347826,
+        "carrier": 6.417391304347826,
+        "battleship": 8.098765432098766,
+        "hyper": 8.850746268656716
+      },
+      "claimUtilisationAt3Plus": 0.855369402950609,
+      "meanEliminationTurn": null,
+      "victoryReasons": {
+        "power_centers": 145,
+        "turn_limit": 5
+      },
+      "handicap": {
+        "winRate": 0.4,
+        "amplification": 0.6327001737782408
+      }
+    }
+  }
+}

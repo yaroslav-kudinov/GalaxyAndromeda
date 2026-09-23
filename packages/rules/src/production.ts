@@ -6,10 +6,6 @@ import {
 } from './constants.js'
 import { trimGameEventLog } from './event-log.js'
 import {
-  getEffectiveTokenValue,
-  isShipTypeBuildBlocked,
-} from './events.js'
-import {
   markActionMarkerResolvedThisTurn,
   removeActionMarker,
   ACTION_MARKER_ALREADY_RESOLVED_MSG,
@@ -24,7 +20,8 @@ import {
   SHIP_PRODUCTION_COST,
 } from './ships.js'
 import { applyVictoryAndDefeatChecks } from './victory.js'
-import type { HexCoord, ResourceTokenDef, ShipType } from './types.js'
+import { siegeAt } from './siege.js'
+import type { HexCoord, ResourceTokenDef, ResourceTokenType, ShipType } from './types.js'
 import { hexKey } from './types.js'
 
 export interface TokenSpendRef {
@@ -165,7 +162,7 @@ export function getRegionResourceSummary(
 
   for (const cell of iterRegionCells(game, mapId, marker)) {
     for (const token of cell.resourceTokens) {
-      const effective = getEffectiveTokenValue(game, token.value)
+      const effective = token.value
       if (token.type === 'credits') {
         if (token.faceUp === false) faceDownCreditsCount += 1
         else faceUpCredits += effective
@@ -316,8 +313,8 @@ export function getBuildableShipsForMarker(
 
     if (!region) {
       disabledReason = 'Не удалось определить регион этого маркера'
-    } else if (isShipTypeBuildBlocked(game, type)) {
-      disabledReason = 'Событие хода запрещает постройку этого класса'
+    } else if (siegeAt(game, marker.coord)?.besiegedId === playerId) {
+      disabledReason = BESIEGED_BUILD_BLOCKED_MSG
     } else if (fleetRemaining < 1) {
       disabledReason = `Лимит флота: ${fleetMax} ${SHIP_LABELS[type]} (на карте ${fleetCount})`
     } else if (!canBuildShipInRegionSize(type, region.size)) {
@@ -352,6 +349,9 @@ function tokenAt(game: GameSnapshot, ref: TokenSpendRef): ResourceTokenDef | nul
   return token
 }
 
+/** Осаждённый не строит в осаждённой клетке: верфь отрезана (ADR 019). */
+export const BESIEGED_BUILD_BLOCKED_MSG = 'Клетка в осаде: строить здесь нельзя'
+
 function validateMarkerResolutionPreconditions(
   game: GameSnapshot,
   playerId: string,
@@ -367,6 +367,9 @@ function validateMarkerResolutionPreconditions(
   const cell = cellAt(game, marker.coord)
   if (!cell?.actionMarkerId || cell.actionMarkerId !== marker.id) {
     return ['На клетке нет этого маркера действия']
+  }
+  if (siegeAt(game, marker.coord)?.besiegedId === playerId) {
+    return [BESIEGED_BUILD_BLOCKED_MSG]
   }
 
   return { marker }
@@ -416,8 +419,8 @@ export function validateTokenPayment(
       continue
     }
 
-    if (token.type === 'credits') credits += getEffectiveTokenValue(game, token.value)
-    else production += getEffectiveTokenValue(game, token.value)
+    if (token.type === 'credits') credits += token.value
+    else production += token.value
   }
 
   if (credits < creditsNeeded) {
@@ -443,6 +446,61 @@ function batchResourceTotals(
   return { credits, production }
 }
 
+interface TokenCandidate {
+  ref: TokenSpendRef
+  value: number
+}
+
+/**
+ * Наименее расточительный набор фишек на нужную сумму.
+ *
+ * Трата переворачивает фишку целиком, сдачи нет, поэтому отбор «сначала самые крупные»
+ * систематически сжигает номинал: эсминец за 2 кредита оплачивался фишкой 7. Здесь
+ * сначала минимизируется пережог (сумма как можно ближе к нужной сверху), а при равном
+ * пережоге берётся меньше фишек — так их меньше потом поднимать обратно.
+ *
+ * Подзадача — 0/1 «рюкзак» на маленьких числах: номиналы 1–9, потребность максимум 12,
+ * поэтому полный разбор по достижимым суммам дешевле любой эвристики.
+ */
+function pickTokensWithLeastWaste(
+  candidates: readonly TokenCandidate[],
+  needed: number,
+): TokenSpendRef[] | null {
+  if (needed <= 0) return []
+
+  let maxValue = 0
+  for (const candidate of candidates) {
+    if (candidate.value > maxValue) maxValue = candidate.value
+  }
+  if (maxValue <= 0) return null
+
+  // Оптимальная сумма строго меньше needed + maxValue: иначе из набора можно выбросить
+  // любую фишку и всё ещё покрыть потребность, то есть набор не был минимальным.
+  const cap = needed + maxValue
+  const best: (number[] | null)[] = new Array(cap + 1).fill(null)
+  best[0] = []
+
+  for (let index = 0; index < candidates.length; index += 1) {
+    const value = candidates[index]!.value
+    if (value <= 0) continue
+    // Идём вниз, чтобы одна фишка не попала в набор дважды.
+    for (let sum = cap; sum >= value; sum -= 1) {
+      const previous = best[sum - value]
+      if (!previous) continue
+      const current = best[sum]
+      if (!current || previous.length + 1 < current.length) {
+        best[sum] = [...previous, index]
+      }
+    }
+  }
+
+  for (let sum = needed; sum <= cap; sum += 1) {
+    const picked = best[sum]
+    if (picked) return picked.map((index) => candidates[index]!.ref)
+  }
+  return null
+}
+
 export function autoAllocateTokens(
   game: GameSnapshot,
   mapId: string,
@@ -451,30 +509,20 @@ export function autoAllocateTokens(
   productionNeeded: number,
 ): TokenSpendRef[] | null {
   const tokens = getRegionTokensForMarker(game, mapId, marker)
-  const creditTokens = tokens
-    .filter((t) => t.token.type === 'credits')
-    .sort((a, b) => b.token.value - a.token.value)
-  const productionTokens = tokens
-    .filter((t) => t.token.type === 'production')
-    .sort((a, b) => b.token.value - a.token.value)
+  const candidatesOf = (type: ResourceTokenType): TokenCandidate[] =>
+    tokens
+      .filter((t) => t.token.type === type)
+      .map((t) => ({
+        ref: { coord: t.coord, tokenIndex: t.tokenIndex },
+        value: t.token.value,
+      }))
 
-  const selected: TokenSpendRef[] = []
-  let credits = 0
-  let production = 0
+  const credits = pickTokensWithLeastWaste(candidatesOf('credits'), creditsNeeded)
+  if (!credits) return null
+  const production = pickTokensWithLeastWaste(candidatesOf('production'), productionNeeded)
+  if (!production) return null
 
-  for (const t of creditTokens) {
-    if (credits >= creditsNeeded) break
-    selected.push({ coord: t.coord, tokenIndex: t.tokenIndex })
-    credits += getEffectiveTokenValue(game, t.token.value)
-  }
-  for (const t of productionTokens) {
-    if (production >= productionNeeded) break
-    selected.push({ coord: t.coord, tokenIndex: t.tokenIndex })
-    production += getEffectiveTokenValue(game, t.token.value)
-  }
-
-  if (credits < creditsNeeded || production < productionNeeded) return null
-  return selected
+  return [...credits, ...production]
 }
 
 export function validateShipPlacements(

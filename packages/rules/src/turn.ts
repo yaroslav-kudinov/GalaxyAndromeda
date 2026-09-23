@@ -1,18 +1,32 @@
-import { maybeApplyProductionHexClaims } from './claim.js'
+import { autoResolveAllClaimPicks, claimPicksRemaining, maybeApplyTurnEndClaims } from './claim.js'
 import { trimGameEventLog } from './event-log.js'
-import { ensureTurnEventForPhase, resolveTurnEvent } from './events.js'
+import {
+  autoResolveDoctrines,
+  doctrineChoiceOwed,
+  openDoctrineWindowIfDue,
+} from './doctrines.js'
 import { refreshActionMarkerCapacity } from './marker-pools.js'
 import {
   syncActionMarkerTurnTracking,
   validateActionMarkerBeforeAdvance,
 } from './markers.js'
-import { maybeApplyAutomaticResourceRecharge } from './resource-recharge.js'
+import {
+  autoResolveAllRechargePicks,
+  grantRechargeBudgetFor,
+  refreshRechargeBudgets,
+  rechargePicksRemaining,
+} from './resource-recharge.js'
+import { applySiegeTick, autoResolveAllSiegeLosses, siegeLossesOwedBy } from './siege.js'
 import { applyVictoryAndDefeatChecks } from './victory.js'
 import type { GameSnapshot } from './save-file.js'
 import { gameStateFromSnapshot } from './save-file.js'
 import type { GameState, Phase, PlayerState } from './types.js'
 
-export const PHASE_ORDER: Phase[] = ['events', 'planning', 'actions']
+/**
+ * Цикл хода: планирование и действия. Фаза «События» снята вместе с колодой (ADR 020);
+ * значение `'events'` осталось в типе `Phase` только ради старых сохранений.
+ */
+export const PHASE_ORDER: Phase[] = ['planning', 'actions']
 
 export const PHASE_LABELS: Record<Phase, string> = {
   events: 'События',
@@ -34,8 +48,21 @@ export function nextPhase(current: Phase): Phase {
   return PHASE_ORDER[(idx + 1) % PHASE_ORDER.length]
 }
 
-function mixTurnOrderSeed(turnNumber: number, mapId: string): number {
+/**
+ * Сид порядка хода. От сида партии, если он есть: иначе порядок зависит только от карты и
+ * номера хода и совпадает во всех партиях на этой карте — одно и то же место систематически
+ * оказывалось в выгодной позиции (замер: 70 % побед одного места на эталонной дуэли).
+ *
+ * Без сида партии (обучение, снимки из тестов) остаётся прежнее поведение: обучающие сценарии
+ * рассчитаны на конкретную очередь.
+ */
+function mixTurnOrderSeed(turnNumber: number, mapId: string, matchSeed?: number): number {
   let h = ((turnNumber + 1) * 0x9e3779b9) >>> 0
+  if (matchSeed != null) {
+    h = Math.imul(h ^ (matchSeed >>> 0), 0x01000193) >>> 0
+    h = Math.imul(h ^ (h >>> 13), 0x5bd1e995) >>> 0
+    return h >>> 0
+  }
   for (let i = 0; i < mapId.length; i++) {
     h = Math.imul(h ^ mapId.charCodeAt(i), 0x01000193) >>> 0
   }
@@ -83,7 +110,9 @@ export function activePlayerOrder(
     const shuffled = [...base]
     shuffleInPlace(
       shuffled,
-      mulberry32(mixTurnOrderSeed(context.state.turnNumber, context.state.mapId)),
+      mulberry32(
+        mixTurnOrderSeed(context.state.turnNumber, context.state.mapId, context.state.matchSeed),
+      ),
     )
     return shuffled.filter((id) => eligible.has(id))
   }
@@ -142,6 +171,12 @@ function canPlayerActInPhase(game: GameSnapshot, state: GameState, playerId: str
   if (state.phase === 'events') return true
 
   if (state.phase === 'planning') {
+    // Долги по доктрине, осаде, захвату и перезарядке — такие же действия фазы
+    // планирования, как расстановка маркеров.
+    if (doctrineChoiceOwed(game, playerId)) return true
+    if (siegeLossesOwedBy(game, playerId).length > 0) return true
+    if (claimPicksRemaining(game, playerId) > 0) return true
+    if (rechargePicksRemaining(game, playerId) > 0) return true
     const canPlaceAction = game.cells.some(
       (cell) =>
         !cell.actionMarkerId
@@ -169,9 +204,14 @@ function applyTurnState(game: GameSnapshot, state: GameState, prevPhase: Phase, 
   game.activePlayerId = state.activePlayerId
   game.eventLog = state.eventLog
   syncActionMarkerTurnTracking(game, prevPhase, prevActivePlayerId)
-  maybeApplyProductionHexClaims(game, prevPhase)
-  if (prevPhase === 'actions' && game.phase === 'events') {
-    maybeApplyAutomaticResourceRecharge(game)
+  maybeApplyTurnEndClaims(game, prevPhase, state.mapId)
+  // Выход из планирования: несделанный выбор не должен подвешивать партию.
+  // Захват первым: от него зависит число центров власти, а значит и бюджет.
+  if (prevPhase === 'planning' && game.phase !== 'planning') {
+    autoResolveAllSiegeLosses(game)
+    grantBudgetsAfterDoctrines(game, autoResolveDoctrines(game))
+    autoResolveAllClaimPicks(game, state.mapId)
+    autoResolveAllRechargePicks(game)
   }
 }
 
@@ -248,7 +288,9 @@ function skipPlayersWithoutPhaseActions(
   const errors = advanceGamePhase(state, game.participatingPlayerIds)
   if (errors.length) return errors
   applyTurnState(game, state, prevPhase, prevActivePlayerId)
-  return completeEventsPhaseIfActive(game, mapId)
+  if (game.phase === 'planning' && prevPhase !== 'planning') beginTurnPlanning(game)
+  applyVictoryAndDefeatChecks(game, mapId)
+  return []
 }
 
 /** Label for the primary «advance / pass turn» action in UI */
@@ -301,6 +343,7 @@ export function advanceGamePhase(
 
   const phase = state.phase
 
+  // Старое сохранение, застрявшее в снятой фазе «События»: просто начинаем планирование.
   if (phase === 'events') {
     state.phase = 'planning'
     const planningOrder = activePlayerOrder(state.players, participatingPlayerIds, {
@@ -330,32 +373,17 @@ export function advanceGamePhase(
     return []
   }
 
-  if (phase === 'actions') {
+  if (phase === 'actions' || phase === 'production') {
     state.turnNumber += 1
-    state.phase = 'events'
-    const eventsOrder = activePlayerOrder(state.players, participatingPlayerIds, {
+    state.phase = 'planning'
+    const planningOrder = activePlayerOrder(state.players, participatingPlayerIds, {
       state,
-      phase: 'events',
+      phase: 'planning',
     })
-    state.activePlayerId = eventsOrder[0]!
+    state.activePlayerId = planningOrder[0]!
     appendPhaseEvent(
       state,
-      `Ход ${state.turnNumber}, фаза «${PHASE_LABELS.events}»`,
-    )
-    return []
-  }
-
-  if (phase === 'production') {
-    state.turnNumber += 1
-    state.phase = 'events'
-    const eventsOrder = activePlayerOrder(state.players, participatingPlayerIds, {
-      state,
-      phase: 'events',
-    })
-    state.activePlayerId = eventsOrder[0]!
-    appendPhaseEvent(
-      state,
-      `Ход ${state.turnNumber}, фаза «${PHASE_LABELS.events}»`,
+      `Ход ${state.turnNumber}, фаза «${PHASE_LABELS.planning}», ход ${playerDisplayName(state, state.activePlayerId)}`,
     )
     return []
   }
@@ -378,28 +406,57 @@ export function advanceGamePhase(
   return []
 }
 
-function applyTurnEventIfInEventsPhase(game: GameSnapshot): string[] {
-  if (game.phase !== 'events') return []
-  ensureTurnEventForPhase(game)
-  return resolveTurnEvent(game)
+/**
+ * Выдать бюджет перезарядки тем, чьи доктрины только что вступили в силу, — кроме тех, у
+ * кого ещё не закрыт выбор клеток: их бюджет выдаётся в момент закрытия этого выбора.
+ */
+export function grantBudgetsAfterDoctrines(game: GameSnapshot, revealed: readonly string[]): void {
+  for (const playerId of revealed) {
+    if (claimPicksRemaining(game, playerId) > 0) continue
+    grantRechargeBudgetFor(game, playerId)
+  }
 }
 
-/** Вытянуть и применить карту события, затем уйти из фазы «События» без действия игрока. */
-export function completeEventsPhaseIfActive(game: GameSnapshot, mapId: string): string[] {
-  if (game.phase !== 'events') return []
-  const errors = applyTurnEventIfInEventsPhase(game)
-  if (errors.length) return errors
+/**
+ * Начало хода, в самом начале планирования. Порядок важен:
+ *
+ * 1. маркеры действия — на новый ход;
+ * 2. тик осады — гибель последнего корабля гарнизона меняет число центров власти;
+ * 3. окно доктрин — доктрина действует с начала хода, в котором выбрана;
+ * 4. бюджет перезарядки — зависит и от центров власти, и от доктрины, поэтому ждёт, пока
+ *    доктрины вскроют и закроется выбор клеток.
+ */
+export function beginTurnPlanning(game: GameSnapshot): void {
   refreshActionMarkerCapacity(game)
-  return advanceGameSnapshot(game, mapId)
+  applySiegeTick(game)
+  openDoctrineWindowIfDue(game)
+  refreshRechargeBudgets(
+    game,
+    (playerId) => claimPicksRemaining(game, playerId) > 0 || !!game.doctrineChoice,
+  )
+}
+
+/**
+ * Старое сохранение в снятой фазе «События»: перевести его в планирование того же хода.
+ * Вызывается при каждом чтении состояния, поэтому обязана быть идемпотентной.
+ */
+export function leaveLegacyEventsPhase(game: GameSnapshot, mapId: string): string[] {
+  if (game.phase !== 'events') return []
+  const state = gameStateFromSnapshot(game, mapId)
+  const prevPhase = game.phase
+  const prevActivePlayerId = game.activePlayerId
+  const errors = advanceGamePhase(state, game.participatingPlayerIds)
+  if (errors.length) return errors
+  applyTurnState(game, state, prevPhase, prevActivePlayerId)
+  beginTurnPlanning(game)
+  return []
 }
 
 export function advanceGameSnapshot(game: GameSnapshot, mapId: string): string[] {
   const advanceErrors = [...validateActionMarkerBeforeAdvance(game)]
   if (advanceErrors.length) return advanceErrors
-
-  const eventErrors = applyTurnEventIfInEventsPhase(game)
-  if (eventErrors.length) return eventErrors
-
+  const legacyErrors = leaveLegacyEventsPhase(game, mapId)
+  if (legacyErrors.length) return legacyErrors
   const prevPhase = game.phase
   const prevActivePlayerId = game.activePlayerId
   const participating = game.participatingPlayerIds
@@ -415,12 +472,8 @@ export function advanceGameSnapshot(game: GameSnapshot, mapId: string): string[]
   if (errors.length) return errors
 
   applyTurnState(game, state, prevPhase, prevActivePlayerId)
-  if (game.phase === 'planning' && prevPhase === 'events') {
-    refreshActionMarkerCapacity(game)
-  }
+  if (game.phase === 'planning' && prevPhase !== 'planning') beginTurnPlanning(game)
   applyVictoryAndDefeatChecks(game, mapId)
-  const afterEvents = completeEventsPhaseIfActive(game, mapId)
-  if (afterEvents.length) return afterEvents
   return game.phase === prevPhase ? skipPlayersWithoutPhaseActions(game, mapId) : []
 }
 

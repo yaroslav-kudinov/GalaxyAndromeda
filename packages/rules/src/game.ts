@@ -1,7 +1,6 @@
 import { getCellResourceToken } from './map-editor.js'
 import { resolveMapPlayerCount } from './map-editor.js'
 import type { GameObservation, GameState, LegalAction, MapDefinition } from './types.js'
-import { getActiveEventObservation } from './events.js'
 import type { GameSnapshot } from './save-file.js'
 import { buildSpatialSummary, renderAsciiMap } from './observation/index.js'
 import { PLAYER_COLORS } from './constants.js'
@@ -32,6 +31,9 @@ export function gameStateFromMap(map: MapDefinition, playerNames: string[] = [])
 
   const state: GameState = {
     mapId: map.id,
+    // Порог победы фиксируется в момент рождения партии: карту можно отредактировать
+    // позже, а начатая партия обязана доиграться со своим порогом.
+    victoryPowerCenters: map.victoryPowerCenters,
     phase: 'planning',
     turnNumber: 1,
     activePlayerId: players[0]?.id ?? null,
@@ -89,7 +91,9 @@ export function buildObservation(
   /** Явная передача полей snapshot — null означает «очищено на сервере» */
   for (const key of [
     'participatingPlayerIds',
-    'turnEvent',
+    'victoryPowerCenters',
+    'turnLimit',
+    'matchSeed',
     'gameOver',
     'pendingCombat',
     'productionTokensSpentThisTurn',
@@ -100,10 +104,17 @@ export function buildObservation(
     'observationRevision',
     'roomStatus',
     'hostPlayerId',
-    'eventDeck',
     'actionMarkerLimitByPlayer',
     'productionMarkerLimitByPlayer',
-    'resourceRechargeTurnsRemaining',
+    'rechargePicksRemainingByPlayer',
+    'claimPicksRemainingByPlayer',
+    'sieges',
+    'siegeLossesOwedByPlayer',
+    'siegeTickTurn',
+    'siegeContinuationChoice',
+    'doctrineWindow',
+    'doctrineByPlayer',
+    'doctrineChoice',
   ] as const) {
     if (key in stateExtra) {
       mechanicsExtra[key] = stateExtra[key] ?? null
@@ -123,10 +134,7 @@ export function buildObservation(
   }
   mechanicsExtra.actionMarkerLimitByPlayer = actionMarkerLimitByPlayer
 
-  const activeEvent = getActiveEventObservation(state as unknown as GameSnapshot)
-  if (activeEvent) {
-    mechanicsExtra.activeEvent = activeEvent
-  }
+
 
   return {
     mechanics: mechanics as GameObservation['mechanics'],
