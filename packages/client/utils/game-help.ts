@@ -58,7 +58,8 @@ export interface PhaseGuidanceContext {
   actionMarkersMax?: number
   actionMarkerUsedThisTurn?: boolean
   actionMarkerUnresolved?: boolean
-  eventResolved?: boolean
+  /** Игрок ещё не выбрал доктрину на новое окно ходов. */
+  doctrineOwed?: boolean
 }
 
 function normalizePhase(phase: Phase | undefined): Phase | undefined {
@@ -89,6 +90,12 @@ export function phaseGuidanceForTurn(
         accent: 'events',
       }
     case 'planning': {
+      if (ctx.doctrineOwed) {
+        return {
+          prompt: 'Выберите доктрину на ближайшие ходы — в боковой панели',
+          accent: 'planning-action',
+        }
+      }
       const actionMax = ctx.actionMarkersMax ?? 0
       const actionPlaced = ctx.actionMarkersPlaced ?? 0
       const actionRemaining = Math.max(0, actionMax - actionPlaced)

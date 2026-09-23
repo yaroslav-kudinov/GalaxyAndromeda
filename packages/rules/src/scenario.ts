@@ -1,6 +1,4 @@
 import type { HexCoord, Phase } from './types.js'
-import type { EventCardId } from './events.js'
-
 export type BotPolicy = 'passive' | 'simple'
 
 export interface ScenarioActionConstraint {
@@ -62,8 +60,6 @@ export interface ScenarioScript {
   botPolicy: BotPolicy
   /** Несколько учебных флотов; старые botPlayerId/botName остаются совместимыми. */
   bots?: ScenarioBot[]
-  /** Предсказуемая колода сценария; верхняя карта — первая в массиве. */
-  eventDeck?: EventCardId[]
   initialSave?: Record<string, unknown>
   steps: ScenarioStep[]
 }

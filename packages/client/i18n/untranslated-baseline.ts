@@ -15,7 +15,6 @@ export const UNTRANSLATED_BASELINE: readonly string[] = [
   'components/BugReportModal.vue',
   'components/CellDetailPanel.vue',
   'components/CombatPreviewPanel.vue',
-  'components/EventCardPanel.vue',
   'components/HexBoard.vue',
   'components/LandingMusicControl.vue',
   'components/MarkerActionModal.vue',

@@ -6,10 +6,6 @@ import {
 } from './constants.js'
 import { trimGameEventLog } from './event-log.js'
 import {
-  getEffectiveTokenValue,
-  isShipTypeBuildBlocked,
-} from './events.js'
-import {
   markActionMarkerResolvedThisTurn,
   removeActionMarker,
   ACTION_MARKER_ALREADY_RESOLVED_MSG,
@@ -166,7 +162,7 @@ export function getRegionResourceSummary(
 
   for (const cell of iterRegionCells(game, mapId, marker)) {
     for (const token of cell.resourceTokens) {
-      const effective = getEffectiveTokenValue(game, token.value)
+      const effective = token.value
       if (token.type === 'credits') {
         if (token.faceUp === false) faceDownCreditsCount += 1
         else faceUpCredits += effective
@@ -319,8 +315,6 @@ export function getBuildableShipsForMarker(
       disabledReason = 'Не удалось определить регион этого маркера'
     } else if (siegeAt(game, marker.coord)?.besiegedId === playerId) {
       disabledReason = BESIEGED_BUILD_BLOCKED_MSG
-    } else if (isShipTypeBuildBlocked(game, type)) {
-      disabledReason = 'Событие хода запрещает постройку этого класса'
     } else if (fleetRemaining < 1) {
       disabledReason = `Лимит флота: ${fleetMax} ${SHIP_LABELS[type]} (на карте ${fleetCount})`
     } else if (!canBuildShipInRegionSize(type, region.size)) {
@@ -425,8 +419,8 @@ export function validateTokenPayment(
       continue
     }
 
-    if (token.type === 'credits') credits += getEffectiveTokenValue(game, token.value)
-    else production += getEffectiveTokenValue(game, token.value)
+    if (token.type === 'credits') credits += token.value
+    else production += token.value
   }
 
   if (credits < creditsNeeded) {
@@ -520,7 +514,7 @@ export function autoAllocateTokens(
       .filter((t) => t.token.type === type)
       .map((t) => ({
         ref: { coord: t.coord, tokenIndex: t.tokenIndex },
-        value: getEffectiveTokenValue(game, t.token.value),
+        value: t.token.value,
       }))
 
   const credits = pickTokensWithLeastWaste(candidatesOf('credits'), creditsNeeded)

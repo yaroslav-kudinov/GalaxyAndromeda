@@ -1,0 +1,302 @@
+import { trimGameEventLog } from './event-log.js'
+import type { GameSnapshot } from './save-file.js'
+import { besiegedCellKeysOf } from './siege.js'
+import { getShipMoveRange } from './ships.js'
+import type { ShipType } from './types.js'
+
+/**
+ * Доктрины (ADR 020) вместо колоды событий.
+ *
+ * Раз в окно ходов (по умолчанию 5: ходы 1–5, 6–10, 11–15) каждый игрок выбирает доктрину —
+ * стратегическое лицо на треть партии. Выбор одновременный: пока не выбрали все, чужие
+ * доктрины скрыты. Доктрина действует с начала хода, в котором выбрана, поэтому и бюджет
+ * перезарядки этого хода, и захват в его конце считаются уже по ней.
+ *
+ * Доктрины затрагивают только то, что принадлежит игроку, — экономику, скорость, захват,
+ * попадания его кораблей — и не меняют процедуру боя.
+ */
+export type DoctrineId = 'expansion' | 'production' | 'maneuvers' | 'attack' | 'defense' | 'none'
+
+export interface DoctrineDefinition {
+  id: DoctrineId
+  name: string
+  /** Что даёт — для игрока, одной строкой. */
+  gives: string
+  /** Чем платит — для игрока, одной строкой. */
+  costs: string
+  claimLimit: number
+  rechargeBudget: number
+  moveRange: number
+  /** Поправка к нужному на кубике значению для своих выстрелов: −1 — точнее. */
+  ownShots: number
+  /** Поправка к нужному значению для выстрелов противника по своим кораблям: +1 — труднее. */
+  enemyShots: number
+}
+
+export const DOCTRINES: readonly DoctrineDefinition[] = [
+  {
+    id: 'expansion',
+    name: 'Экспансия',
+    gives: '+1 к лимиту захвата',
+    costs: '−1 к бюджету перезарядки',
+    claimLimit: 1,
+    rechargeBudget: -1,
+    moveRange: 0,
+    ownShots: 0,
+    enemyShots: 0,
+  },
+  {
+    id: 'production',
+    name: 'Производство',
+    gives: '+1 к бюджету перезарядки',
+    costs: '−1 к лимиту захвата',
+    claimLimit: -1,
+    rechargeBudget: 1,
+    moveRange: 0,
+    ownShots: 0,
+    enemyShots: 0,
+  },
+  {
+    id: 'maneuvers',
+    name: 'Манёвры',
+    gives: '+1 к скорости всех кораблей',
+    costs: '−1 к бюджету перезарядки и −1 к лимиту захвата',
+    claimLimit: -1,
+    rechargeBudget: -1,
+    moveRange: 1,
+    ownShots: 0,
+    enemyShots: 0,
+  },
+  {
+    id: 'attack',
+    name: 'Атака',
+    gives: 'ваши корабли попадают на 1 легче и стреляют на клетку дальше; не действует, пока осаждают ваши центры',
+    costs: '−2 к бюджету перезарядки',
+    claimLimit: 0,
+    rechargeBudget: -2,
+    moveRange: 0,
+    ownShots: -1,
+    enemyShots: 0,
+  },
+  {
+    id: 'defense',
+    name: 'Оборона',
+    gives: 'противнику нужно на 1 больше, чтобы попасть по вашим кораблям',
+    costs: '−1 к скорости (не ниже 1) и −2 к лимиту захвата',
+    claimLimit: -2,
+    rechargeBudget: 0,
+    moveRange: -1,
+    ownShots: 0,
+    enemyShots: 1,
+  },
+  {
+    id: 'none',
+    name: 'Без доктрины',
+    gives: 'ничего',
+    costs: 'ничего',
+    claimLimit: 0,
+    rechargeBudget: 0,
+    moveRange: 0,
+    ownShots: 0,
+    enemyShots: 0,
+  },
+]
+
+export const DEFAULT_DOCTRINE_WINDOW = 5
+
+const BY_ID = new Map(DOCTRINES.map((doctrine) => [doctrine.id, doctrine]))
+
+export function isDoctrineId(value: unknown): value is DoctrineId {
+  return typeof value === 'string' && BY_ID.has(value as DoctrineId)
+}
+
+export function doctrineDefinition(id: DoctrineId): DoctrineDefinition {
+  return BY_ID.get(id)!
+}
+
+export interface ActiveDoctrine {
+  doctrineId: DoctrineId
+  /** Ход, с которого доктрина действует. */
+  fromTurn: number
+}
+
+/** Незакрытый выбор доктрин: окно и уже сделанные (скрытые до вскрытия) выборы. */
+export interface DoctrineChoiceState {
+  windowStart: number
+  picks: Record<string, DoctrineId>
+  /**
+   * Кто уже выбрал. Заполняется в наблюдении для игрока: чужие выборы из `picks` там
+   * вырезаны, а знать, кого ждём, нужно.
+   */
+  pickedBy?: string[]
+}
+
+export function doctrinesEnabled(game: GameSnapshot): boolean {
+  return (game.doctrineWindow ?? 0) > 0
+}
+
+/** Первый ход окна, в которое попадает ход `turn`. */
+export function doctrineWindowStart(game: GameSnapshot, turn = game.turnNumber): number {
+  const size = game.doctrineWindow ?? 0
+  if (size <= 0) return 1
+  return Math.floor((turn - 1) / size) * size + 1
+}
+
+/** Доктрина игрока, действующая в текущем окне; вне окна выбора — «без доктрины». */
+export function activeDoctrineId(game: GameSnapshot, playerId: string): DoctrineId {
+  if (!doctrinesEnabled(game)) return 'none'
+  const active = game.doctrineByPlayer?.[playerId]
+  if (!active) return 'none'
+  return doctrineWindowStart(game, active.fromTurn) === doctrineWindowStart(game) ? active.doctrineId : 'none'
+}
+
+function activeDefinition(game: GameSnapshot, playerId: string): DoctrineDefinition {
+  return doctrineDefinition(activeDoctrineId(game, playerId))
+}
+
+export function doctrineClaimLimitModifier(game: GameSnapshot, playerId: string): number {
+  return activeDefinition(game, playerId).claimLimit
+}
+
+export function doctrineRechargeModifier(game: GameSnapshot, playerId: string): number {
+  return activeDefinition(game, playerId).rechargeBudget
+}
+
+export function doctrineMoveRangeModifier(game: GameSnapshot, playerId: string): number {
+  return activeDefinition(game, playerId).moveRange
+}
+
+/** Дальность хода корабля игрока с учётом доктрины; не меньше одной клетки. */
+export function effectiveMoveRange(game: GameSnapshot, type: ShipType, playerId?: string): number {
+  const base = getShipMoveRange(type)
+  if (!playerId) return base
+  return Math.max(1, base + doctrineMoveRangeModifier(game, playerId))
+}
+
+/**
+ * Поправка к нужному на кубике значению для выстрела `shooterId` по кораблям `targetOwnerId`.
+ * «Атака» не действует, пока осаждают клетки самого стреляющего: бонус — для штурма, а не для
+ * обороны своего осаждённого центра.
+ */
+export function doctrineShotModifier(
+  game: GameSnapshot,
+  shooterId: string,
+  targetOwnerId: string | null,
+): number {
+  if (!doctrinesEnabled(game)) return 0
+  let modifier = 0
+  const own = activeDefinition(game, shooterId)
+  if (own.ownShots !== 0 && besiegedCellKeysOf(game, shooterId).length === 0) modifier += own.ownShots
+  if (targetOwnerId) modifier += activeDefinition(game, targetOwnerId).enemyShots
+  return modifier
+}
+
+function participants(game: GameSnapshot): string[] {
+  const participating = game.participatingPlayerIds?.length
+    ? new Set(game.participatingPlayerIds)
+    : null
+  return game.players
+    .filter((player) => !player.eliminated && (!participating || participating.has(player.id)))
+    .map((player) => player.id)
+}
+
+export function doctrineChoiceOwed(game: GameSnapshot, playerId: string): boolean {
+  const choice = game.doctrineChoice
+  if (!choice) return false
+  if (!participants(game).includes(playerId)) return false
+  return !(playerId in choice.picks) && !choice.pickedBy?.includes(playerId)
+}
+
+/**
+ * Начало хода: если это первый ход окна, открыть выбор доктрин. Идемпотентно — повторный
+ * вызов в том же ходу ничего не делает.
+ */
+export function openDoctrineWindowIfDue(game: GameSnapshot): void {
+  if (!doctrinesEnabled(game)) return
+  const start = doctrineWindowStart(game)
+  if (start !== game.turnNumber) return
+  if (game.doctrineChoice?.windowStart === start) return
+  const anyActive = Object.values(game.doctrineByPlayer ?? {}).some(
+    (doctrine) => doctrine.fromTurn === start,
+  )
+  if (anyActive) return
+  game.doctrineChoice = { windowStart: start, picks: {} }
+}
+
+function appendDoctrineEvent(game: GameSnapshot, message: string): void {
+  game.eventLog.push({
+    id: `evt-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    turn: game.turnNumber,
+    phase: game.phase,
+    type: 'doctrine',
+    message,
+    timestamp: Date.now(),
+  })
+  trimGameEventLog(game)
+}
+
+/**
+ * Вскрыть выбор, когда выбрали все. Возвращает игроков, чьи доктрины только что вступили в
+ * силу, — вызывающий выдаёт им бюджет перезарядки.
+ */
+function revealIfComplete(game: GameSnapshot): string[] {
+  const choice = game.doctrineChoice
+  if (!choice) return []
+  const players = participants(game)
+  if (!players.every((id) => id in choice.picks)) return []
+  game.doctrineByPlayer ??= {}
+  for (const id of players) {
+    game.doctrineByPlayer[id] = { doctrineId: choice.picks[id]!, fromTurn: game.turnNumber }
+  }
+  delete game.doctrineChoice
+  const names = game.players
+    .filter((player) => players.includes(player.id))
+    .map((player) => `${player.name} — ${doctrineDefinition(game.doctrineByPlayer![player.id]!.doctrineId).name}`)
+  appendDoctrineEvent(game, `Доктрины вскрыты: ${names.join(', ')}`)
+  return players
+}
+
+export const DOCTRINE_ERRORS = {
+  notNow: 'Сейчас доктрину не выбирают',
+  already: 'Доктрина на это окно уже выбрана',
+  unknown: 'Такой доктрины нет',
+} as const
+
+/** Выбрать доктрину. Возвращает ошибки и игроков, у которых доктрина вступила в силу. */
+export function chooseDoctrine(
+  game: GameSnapshot,
+  playerId: string,
+  doctrineId: unknown,
+): { errors: string[]; revealed: string[] } {
+  if (!isDoctrineId(doctrineId)) return { errors: [DOCTRINE_ERRORS.unknown], revealed: [] }
+  const choice = game.doctrineChoice
+  if (!choice || !participants(game).includes(playerId)) {
+    return { errors: [DOCTRINE_ERRORS.notNow], revealed: [] }
+  }
+  if (playerId in choice.picks) return { errors: [DOCTRINE_ERRORS.already], revealed: [] }
+  choice.picks[playerId] = doctrineId
+  return { errors: [], revealed: revealIfComplete(game) }
+}
+
+/** Закрыть выбор за всех, кто не успел, — «без доктрины». Партия не должна вставать. */
+export function autoResolveDoctrines(game: GameSnapshot): string[] {
+  const choice = game.doctrineChoice
+  if (!choice) return []
+  for (const id of participants(game)) {
+    if (!(id in choice.picks)) choice.picks[id] = 'none'
+  }
+  return revealIfComplete(game)
+}
+
+/**
+ * Что видит игрок `viewerId` о незакрытом выборе: свой выбор и кто уже выбрал. Чужие выборы
+ * скрыты до вскрытия — иначе последний выбирающий видел бы доктрины соперников.
+ */
+export function maskDoctrineChoice(
+  choice: DoctrineChoiceState | undefined,
+  viewerId: string | null,
+): DoctrineChoiceState | null {
+  if (!choice) return null
+  const own = viewerId && viewerId in choice.picks ? { [viewerId]: choice.picks[viewerId]! } : {}
+  return { windowStart: choice.windowStart, picks: own, pickedBy: Object.keys(choice.picks) }
+}

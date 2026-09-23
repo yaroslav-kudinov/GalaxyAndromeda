@@ -2,6 +2,7 @@ import type { GameSnapshot } from './save-file.js'
 import { gameStateFromSnapshot } from './save-file.js'
 import { refreshActionMarkerCapacity } from './marker-pools.js'
 import { refreshRechargeBudgets } from './resource-recharge.js'
+import { DEFAULT_DOCTRINE_WINDOW, openDoctrineWindowIfDue } from './doctrines.js'
 import { activePlayerOrder } from './turn.js'
 
 /** Новая партия: ход 1, планирование, без маркеров и боя. */
@@ -37,6 +38,11 @@ export interface BeginMatchOptions {
    * обучающие сценарии. По умолчанию — случайный.
    */
   matchSeed?: number | null
+  /**
+   * Длина окна доктрин в ходах. `null` — без доктрин: обучение их не объясняет и не должно
+   * на них спотыкаться. По умолчанию `DEFAULT_DOCTRINE_WINDOW`.
+   */
+  doctrineWindow?: number | null
 }
 
 export function beginMatchForParticipants(
@@ -57,9 +63,16 @@ export function beginMatchForParticipants(
   if (turnLimit == null) game.turnLimit = undefined
   else game.turnLimit ??= turnLimit
 
-  // Бюджет перезарядки выдаётся каждый игровой ход, включая первый.
+  const doctrineWindow =
+    options?.doctrineWindow === undefined ? DEFAULT_DOCTRINE_WINDOW : options.doctrineWindow
+  if (doctrineWindow == null) delete game.doctrineWindow
+  else game.doctrineWindow ??= doctrineWindow
+
+  // Первое окно доктрин открывается с первым ходом, и бюджет перезарядки ждёт вскрытия:
+  // доктрина действует с начала хода, в котором выбрана.
   game.claimPicksRemainingByPlayer = {}
-  refreshRechargeBudgets(game)
+  openDoctrineWindowIfDue(game)
+  refreshRechargeBudgets(game, () => !!game.doctrineChoice)
 
   for (const cell of game.cells) {
     cell.ships = cell.ships.filter((ship) => ids.includes(ship.ownerId))

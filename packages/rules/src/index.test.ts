@@ -184,7 +184,6 @@ import { getShipMoveRange, getShipProductionCost, canBuildShipInRegionSize, getS
 import { MAX_FLEET_SIZE_PER_PLAYER, SHIP_LABELS } from './constants.js'
 import { trimGameEventLog } from './event-log.js'
 import { advanceGamePhase, advanceGameSnapshot, activePlayerOrder, turnQueueForSnapshot } from './turn.js'
-import { isTurnEventResolved } from './events.js'
 import { renderAsciiMapFromDefinition } from './observation/index.js'
 
 describe('hex map', () => {
@@ -643,10 +642,10 @@ describe('galaxy save file', () => {
     expect(game.pendingCombat).toBeUndefined()
   })
 
-  it('gameSnapshotFromObservation clears turnEvent when server sends null', () => {
+  it('gameSnapshotFromObservation clears doctrineChoice when server sends null', () => {
     const map = createEmptyMap()
     const preserve = gameSnapshotFromMap(map)
-    preserve.turnEvent = { eventId: 'magnetic-storm', turnNumber: 1, resolvedAt: '2026-01-01' }
+    preserve.doctrineChoice = { windowStart: 1, picks: { 'player-1': 'attack' } }
 
     const game = gameSnapshotFromObservation(
       {
@@ -657,11 +656,11 @@ describe('galaxy save file', () => {
         cells: preserve.cells,
         actionMarkers: [],
         productionMarkers: [],
-        turnEvent: null,
-      } as Parameters<typeof gameSnapshotFromObservation>[0] & { turnEvent: null },
+        doctrineChoice: null,
+      } as Parameters<typeof gameSnapshotFromObservation>[0] & { doctrineChoice: null },
       preserve,
     )
-    expect(game.turnEvent).toBeUndefined()
+    expect(game.doctrineChoice).toBeUndefined()
   })
 
   it('gameSnapshotFromObservation replaces eventLog when server sends it', () => {
@@ -689,14 +688,13 @@ describe('galaxy save file', () => {
   it('buildObservation forwards explicit nulls for cleared snapshot fields', () => {
     const map = createEmptyMap()
     const game = gameSnapshotFromMap(map)
-    game.turnEvent = { eventId: 'magnetic-storm', turnNumber: 1 }
-
+    game.doctrineChoice = { windowStart: 1, picks: {} }
     const obs = buildObservation(
       {
         ...gameStateFromSnapshot(game, map.id),
         actionMarkers: game.actionMarkers,
         productionMarkers: game.productionMarkers,
-        turnEvent: null,
+        doctrineChoice: null,
         pendingCombat: null,
         gameOver: null,
         lastCombatResult: null,
@@ -707,7 +705,7 @@ describe('galaxy save file', () => {
     )
 
     const mech = obs.mechanics as Record<string, unknown>
-    expect(mech.turnEvent).toBeNull()
+    expect(mech.doctrineChoice).toBeNull()
     expect(mech.pendingCombat).toBeNull()
     expect(mech.gameOver).toBeNull()
     expect(mech.lastCombatResult).toBeNull()
@@ -1329,7 +1327,7 @@ describe('turn flow', () => {
     expect(state.activePlayerId).toBe(actionsOrder[1])
 
     expect(advanceGamePhase(state)).toEqual([])
-    expect(state.phase).toBe('events')
+    expect(state.phase).toBe('planning')
     expect(state.turnNumber).toBe(2)
   })
 
@@ -1363,7 +1361,7 @@ describe('turn flow', () => {
     expect(game.turnNumber).toBe(2)
   })
 
-  it('starts new turn with events after actions end', () => {
+  it('starts new turn with planning after actions end', () => {
     const state = gameStateFromMap(createEmptyMap(), ['P1', 'P2', 'P3'])
     state.phase = 'actions'
     state.turnNumber = 1
@@ -1371,14 +1369,14 @@ describe('turn flow', () => {
     state.activePlayerId = actionsOrder[actionsOrder.length - 1]!
 
     expect(advanceGamePhase(state)).toEqual([])
-    expect(state.phase).toBe('events')
+    expect(state.phase).toBe('planning')
     expect(state.turnNumber).toBe(2)
     expect(state.activePlayerId).toBe(
-      activePlayerOrder(state.players, null, { state, phase: 'events' })[0],
+      activePlayerOrder(state.players, null, { state, phase: 'planning' })[0],
     )
   })
 
-  it('auto-applies the turn event and enters planning after actions', () => {
+  it('after actions the next turn starts straight with planning', () => {
     const map = createEmptyMap()
     const base = gameStateFromMap(map, ['P1', 'P2'])
     base.phase = 'actions'
@@ -1386,13 +1384,10 @@ describe('turn flow', () => {
     const actionsOrder = activePlayerOrder(base.players, null, { state: base, phase: 'actions' })
     base.activePlayerId = actionsOrder[actionsOrder.length - 1]!
     const game = gameSnapshotFromGameState(base)
-    game.eventDeck = ['empty-void', 'magnetic-storm']
 
     expect(advanceGameSnapshot(game, map.id)).toEqual([])
     expect(game.phase).toBe('planning')
     expect(game.turnNumber).toBe(2)
-    expect(game.turnEvent?.eventId).toBe('empty-void')
-    expect(isTurnEventResolved(game)).toBe(true)
     expect(game.activePlayerId).toBe(
       activePlayerOrder(game.players, null, {
         state: gameStateFromSnapshot(game, map.id),
@@ -1401,22 +1396,20 @@ describe('turn flow', () => {
     )
   })
 
-  it('getLegalActionsForSnapshot auto-completes a leftover events phase', () => {
+  it('getLegalActionsForSnapshot moves an old save out of the removed events phase', () => {
     const map = createEmptyMap()
     const game = gameSnapshotFromMap(map)
     game.phase = 'events'
     game.turnNumber = 2
     game.activePlayerId = 'player-1'
-    game.eventDeck = ['magnetic-storm']
 
     const actions = getLegalActionsForSnapshot(game, map.id, 'player-1')
     expect(game.phase).toBe('planning')
-    expect(isTurnEventResolved(game)).toBe(true)
-    expect(game.turnEvent?.eventId).toBe('magnetic-storm')
+    expect(game.turnNumber).toBe(2)
     expect(actions.some((a) => a.id === 'advance-phase')).toBe(true)
   })
 
-  it('events phase skips player rotation', () => {
+  it('an old save in the events phase goes straight to planning', () => {
     const state = gameStateFromMap(createEmptyMap(), ['P1', 'P2'])
     state.phase = 'events'
     state.activePlayerId = 'player-1'

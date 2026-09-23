@@ -26,7 +26,7 @@ import {
   type CombatTargetState,
   type FireRange,
 } from './combat-hits.js'
-import { getTurnModifiers, canRetreatFromBattle } from './events.js'
+import { doctrineShotModifier } from './doctrines.js'
 import { hexDistance } from './map.js'
 import { transferControlIfEnemyOwned } from './claim.js'
 import { removeStaleProductionMarkerAt } from './markers.js'
@@ -395,11 +395,11 @@ function distinctOwners(ships: ShipUnit[]): string[] {
  * `targetOwnerId`. Точка подключения доктрин «Атака» и «Оборона» (фаза 6); сейчас ноль.
  */
 export function combatShotModifier(
-  _game: GameSnapshot,
-  _shooterId: string,
-  _targetOwnerId: string | null,
+  game: GameSnapshot,
+  shooterId: string,
+  targetOwnerId: string | null,
 ): number {
-  return 0
+  return doctrineShotModifier(game, shooterId, targetOwnerId)
 }
 
 /** Дальность стрельбы класса: от минимальной до той, где ещё хватает шестёрки. */
@@ -1172,7 +1172,6 @@ export function resolveCombatAtCell(
     damageByShipId,
     options,
     rng,
-    getTurnModifiers(game).fixedDiceValue,
   )
   const log: BattleLogEntry[] = [
     {
@@ -1448,7 +1447,7 @@ export function getCombatRetreatDestinations(
   playerId: string,
 ): HexCoord[] {
   const pending = game.pendingCombat
-  if (!isAwaitingContinue(pending) || !canRetreatFromBattle(game)) return []
+  if (!isAwaitingContinue(pending)) return []
   if (!isCombatRetreatAllowed(pending)) return []
   const [q, r] = pending.cellKey.split(',').map(Number)
   const battleCoord = { q, r }
@@ -1888,7 +1887,6 @@ export function stopPendingCombat(
   if (!isCombatRetreatAllowed(pending)) {
     return ['Отступление недоступно, пока в этом бою не уничтожен ни один корабль']
   }
-  if (!canRetreatFromBattle(game)) return ['«Стоять насмерть!»: отступление запрещено']
   if (!retreatTo) return ['Выберите соседнюю клетку для отступления']
   const destinations = getCombatRetreatDestinations(game, playerId)
   if (!destinations.some((coord) => hexKey(coord.q, coord.r) === hexKey(retreatTo.q, retreatTo.r))) {

@@ -1,3 +1,4 @@
+import { doctrineRechargeModifier } from './doctrines.js'
 import { trimGameEventLog } from './event-log.js'
 import type { GameSnapshot, RuntimeCellState } from './save-file.js'
 import type { HexCoord } from './types.js'
@@ -27,7 +28,7 @@ export interface ResourceTokenRef {
 export function computeRechargeBudget(
   game: GameSnapshot,
   ownerId: string,
-  doctrineModifier = 0,
+  doctrineModifier = doctrineRechargeModifier(game, ownerId),
 ): number {
   const threshold = victoryThresholdForSnapshot(game)
   let powerCenters = 0
@@ -98,6 +99,8 @@ export function participantsOf(game: GameSnapshot): string[] {
  */
 export function grantRechargeBudgetFor(game: GameSnapshot, playerId: string): void {
   setPicksRemaining(game, playerId, 0)
+  // Бюджет зависит от доктрины: пока выбор открыт, выдавать рано.
+  if (game.doctrineChoice) return
   const faceDown = faceDownTokensOf(game, playerId)
   if (faceDown.length === 0) return
 

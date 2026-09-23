@@ -26,9 +26,10 @@ HTTP base: `http://127.0.0.1:3001` (env `GAME_SERVER_URL` for MCP).
 | `execute-marker-movement` | `{ from, moves, combatOptions? }` | `combatOptions.attacker/defender`: `targetPriority?: string[]` (id вражеских кораблей в порядке фокуса), `diceTargets?: Record<shooterId, targetId[]>` (явная цель каждого кубика); без них кубики распределяются автоматически |
 | `execute-marker-bombardment` | `{ from, bombardments, combatOptions? }` | Same combat options |
 | `continue-combat` | `{ combatOptions? }` | Решение продолжать: сначала attacker, затем defender; после двух подтверждений — следующий раунд |
-| `stop-combat` | `{ retreatTo: { q, r } }` | Текущий решающий участник отступает в соседнюю клетку без вражеских кораблей (сначала attacker, затем defender; кроме «Стоять насмерть!») |
+| `stop-combat` | `{ retreatTo: { q, r } }` | Текущий решающий участник отступает в соседнюю клетку без вражеских кораблей (сначала attacker, затем defender) |
 | `update-combat-prep` | `{ ready: boolean, targetPriority?: string[], supportSide?: 'attacker' \| 'defender' }` | Участники объявляют порядок целей + ready; неучастник с доступной поддержкой выбирает `supportSide` без ready |
 | `cancel-combat-prep` | — | Attacker cancels prep before battle starts; для `prep.siegeResponse` — отказ осаждённого нападать |
+| `choose-doctrine` | `{ doctrineId }` | Планирование, первый ход окна доктрин (`doctrineChoice` открыт): `expansion`, `production`, `maneuvers`, `attack`, `defense`, `none`. Любой участник, вне очереди. Чужие выборы в наблюдении скрыты (`doctrineChoice.pickedBy` — кто уже выбрал); вскрытие, когда выбрали все (ADR 020) |
 | `establish-siege` | — | Атакующий в подготовке боя (`prep.siegeAvailable`) осаждает центр власти вместо штурма: корабли входят без боя, маркер исполнен (ADR 019) |
 | `execute-marker-assault` | `{ from, combatOptions? }` | Бой на клетке маркера с чужими кораблями без перемещения: вылазка гарнизона или штурм осаждающих |
 | `execute-siege-losses` | `{ shipIds? }` | Планирование: какой корабль каждого осаждённого гарнизона потерять (по одному на клетку из `siegeLossesOwedByPlayer`); без `shipIds` — самые дешёвые |
@@ -47,11 +48,11 @@ Combat FSM phases: `prep` → (rounds) → `awaiting-continue` (attacker then de
 {
   mechanics: {
     phase, turnNumber, activePlayerId, players, cells,
-    pendingCombat?, turnEvent?, gameOver?, lastCombatResult?,
+    pendingCombat?, doctrineChoice?, doctrineByPlayer?, gameOver?, lastCombatResult?,
     observationRevision?, // monotonic; clients ignore stale responses
     roomStatus?, // 'lobby' | 'playing'
     hostPlayerId?,
-    actionMarkerLimitByPlayer?, // 2 + центры власти, заморожено в начале хода
+    actionMarkerLimitByPlayer?, // всегда 6 (ADR 015)
     productionMarkerLimitByPlayer?, // купленный пул PM (старт 1, макс 3)
     productionMarkerBoughtByPlayerThisTurn?, // кто уже купил доп. PM в этом игровом ходе
     // cleared fields are sent as explicit null, not omitted
@@ -65,9 +66,9 @@ Combat FSM phases: `prep` → (rounds) → `awaiting-continue` (attacker then de
 }
 ```
 
-**Sync contract:** server is source of truth. `observationRevision` increments on each state change (actions, combat auto-resolve). `pendingCombat`, `turnEvent`, `gameOver`, `lastCombatResult` use **explicit `null`** when cleared — clients must not preserve local values when server sends `null`. `lastCombatResult` is cached until the next non-prep action so both players can poll the same round result.
+**Sync contract:** server is source of truth. `observationRevision` increments on each state change (actions, combat auto-resolve). `pendingCombat`, `doctrineChoice`, `gameOver`, `lastCombatResult` use **explicit `null`** when cleared — clients must not preserve local values when server sends `null`. `lastCombatResult` is cached until the next non-prep action so both players can poll the same round result.
 
-Карта события хода вытягивается и применяется **автоматически** при выходе из производства (фаза `events` не интерактивна). Действие `resolve-event` оставлено для старых клиентов и сразу уводит в планирование; в `legalActions` его больше не нужно выбирать.
+Цикл хода — две фазы: `planning` → `actions` (ADR 020). Колоды событий и фазы `events` больше нет; сохранение, застрявшее в `events`, при первом чтении переводится в планирование. В начале планирования: тик осады, в первый ход окна доктрин — выбор доктрины (`choose-doctrine`), затем долги захвата и перезарядки.
 
 ## ASCII legend
 

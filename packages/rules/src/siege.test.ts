@@ -13,6 +13,7 @@ import { applyGameActionOnSnapshot, getLegalActionsForSnapshot } from './movemen
 import { addActionMarker } from './markers.js'
 import { applySiegeTick, siegeAt, siegeLossesOwedBy } from './siege.js'
 import { getBuildableShipsForMarker } from './production.js'
+import { applyTurnEndClaims } from './claim.js'
 import { advanceGameSnapshot } from './turn.js'
 
 function cellAt(game: GameSnapshot, q: number, r: number) {
@@ -124,7 +125,7 @@ describe('осада: установка', () => {
     expect(game.eventLog.at(-1)?.message).toMatch(/не стал нападать/)
   })
 
-  it('незащищённый чужой центр переходит при входе, осада не нужна', () => {
+  it('незащищённый чужой центр не переходит при входе — его занимают в конце хода', () => {
     const { map, game } = siegeBoard()
     addShip(game, 0, 0, 'player-1', 'cruiser', 'att-cr1')
     placeMarker(game, 'player-1', 0, 0)
@@ -134,6 +135,9 @@ describe('осада: установка', () => {
     })
     expect(move.errors).toEqual([])
     expect(game.pendingCombat).toBeUndefined()
+    expect(cellAt(game, 1, 0).controlOwnerId).toBe('player-2')
+
+    applyTurnEndClaims(game, map.id)
     expect(cellAt(game, 1, 0).controlOwnerId).toBe('player-1')
   })
 

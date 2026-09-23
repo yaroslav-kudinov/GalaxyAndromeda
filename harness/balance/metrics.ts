@@ -51,6 +51,8 @@ export interface GameRecord {
   battles: BattleRecord[]
   /** Осады: установлено, взято (центр перешёл осаждающему), снято без взятия. */
   sieges: { established: number; captured: number; lifted: number }
+  /** Выбранные доктрины по окнам: первый ход окна → доктрина → сколько раз. */
+  doctrines: Record<string, Record<string, number>>
   /** Кому выдали стартовую фору, если замер идёт с форой. */
   handicappedPlayerId?: string
   error?: string
@@ -202,6 +204,8 @@ export interface Summary {
     meanDefenderLossValue: number
   }
   sieges: { perGame: number; capturedShare: number | null }
+  /** Доли доктрин в каждом окне. */
+  doctrinesByWindow: Record<string, Record<string, number>>
   /** Замеры с форой: null, если фора не выдавалась. */
   handicap: {
     winRate: number | null
@@ -326,6 +330,20 @@ export function summarize(records: readonly GameRecord[]): Summary {
       meanAttackerLossValue: mean(fights.map((battle) => battle.attackerLossValue)),
       meanDefenderLossValue: mean(fights.map((battle) => battle.defenderLossValue)),
     },
+    doctrinesByWindow: (() => {
+      const totals: Record<string, Record<string, number>> = {}
+      for (const record of ok) {
+        for (const [window, counts] of Object.entries(record.doctrines ?? {})) {
+          totals[window] ??= {}
+          for (const [id, n] of Object.entries(counts)) totals[window]![id] = (totals[window]![id] ?? 0) + n
+        }
+      }
+      for (const counts of Object.values(totals)) {
+        const sum = Object.values(counts).reduce((a, b) => a + b, 0) || 1
+        for (const id of Object.keys(counts)) counts[id] = counts[id]! / sum
+      }
+      return totals
+    })(),
     sieges: {
       perGame: ok.length ? ok.reduce((sum, record) => sum + (record.sieges?.established ?? 0), 0) / ok.length : 0,
       capturedShare: (() => {

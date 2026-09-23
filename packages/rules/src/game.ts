@@ -1,7 +1,6 @@
 import { getCellResourceToken } from './map-editor.js'
 import { resolveMapPlayerCount } from './map-editor.js'
 import type { GameObservation, GameState, LegalAction, MapDefinition } from './types.js'
-import { getActiveEventObservation } from './events.js'
 import type { GameSnapshot } from './save-file.js'
 import { buildSpatialSummary, renderAsciiMap } from './observation/index.js'
 import { PLAYER_COLORS } from './constants.js'
@@ -95,7 +94,6 @@ export function buildObservation(
     'victoryPowerCenters',
     'turnLimit',
     'matchSeed',
-    'turnEvent',
     'gameOver',
     'pendingCombat',
     'productionTokensSpentThisTurn',
@@ -106,7 +104,6 @@ export function buildObservation(
     'observationRevision',
     'roomStatus',
     'hostPlayerId',
-    'eventDeck',
     'actionMarkerLimitByPlayer',
     'productionMarkerLimitByPlayer',
     'rechargePicksRemainingByPlayer',
@@ -114,6 +111,9 @@ export function buildObservation(
     'sieges',
     'siegeLossesOwedByPlayer',
     'siegeTickTurn',
+    'doctrineWindow',
+    'doctrineByPlayer',
+    'doctrineChoice',
   ] as const) {
     if (key in stateExtra) {
       mechanicsExtra[key] = stateExtra[key] ?? null
@@ -133,10 +133,7 @@ export function buildObservation(
   }
   mechanicsExtra.actionMarkerLimitByPlayer = actionMarkerLimitByPlayer
 
-  const activeEvent = getActiveEventObservation(state as unknown as GameSnapshot)
-  if (activeEvent) {
-    mechanicsExtra.activeEvent = activeEvent
-  }
+
 
   return {
     mechanics: mechanics as GameObservation['mechanics'],

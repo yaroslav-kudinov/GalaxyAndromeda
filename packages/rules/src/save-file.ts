@@ -81,10 +81,10 @@ export interface PendingEvent {
 
 import type { CombatOptions, CombatPrepState, CombatRoundResult } from './combat.js'
 import type { SiegeState } from './siege.js'
-import { migrateLegacyEventId, type EventCardId, type TurnEventState } from './events.js'
+import type { ActiveDoctrine, DoctrineChoiceState } from './doctrines.js'
 import type { GameOverState } from './victory.js'
 
-export type { TurnEventState, GameOverState }
+export type { GameOverState }
 
 /**
  * Фаза боя между запросами. Бросок кубов происходит синхронно внутри одного вызова,
@@ -306,13 +306,14 @@ export interface GameSnapshot {
   siegeLossesOwedByPlayer?: Record<string, string[]>
   /** Ход, в котором тик осады уже прошёл: тик идемпотентен. */
   siegeTickTurn?: number
-  /** Глобальное событие текущего хода (одно на всех игроков) */
-  turnEvent?: TurnEventState
   /**
-   * Оставшиеся карты событий (верх колоды — индекс 0).
-   * Пустая / отсутствующая колода при следующей вытяжке перетасовывается заново.
+   * Длина окна доктрин в ходах (ADR 020). Нет поля — доктрин в партии нет (обучение).
    */
-  eventDeck?: EventCardId[]
+  doctrineWindow?: number
+  /** Доктрины, вступившие в силу: какая и с какого хода. */
+  doctrineByPlayer?: Record<string, ActiveDoctrine>
+  /** Незакрытый выбор доктрин на новое окно. Чужие выборы до вскрытия не показываются. */
+  doctrineChoice?: DoctrineChoiceState
   /** Игра завершена */
   gameOver?: GameOverState
   /** Незавершённый многoroundовый бой */
@@ -533,14 +534,16 @@ function normalizeGameSnapshot(game: GameSnapshot, _map?: MapDefinition): GameSn
     victoryPowerCenters: game.victoryPowerCenters,
     turnLimit: game.turnLimit,
     matchSeed: game.matchSeed,
-    turnEvent: game.turnEvent
-      ? {
-          ...game.turnEvent,
-          eventId: migrateLegacyEventId(String(game.turnEvent.eventId)),
-        }
+    doctrineWindow: game.doctrineWindow,
+    doctrineByPlayer: game.doctrineByPlayer
+      ? Object.fromEntries(Object.entries(game.doctrineByPlayer).map(([id, d]) => [id, { ...d }]))
       : undefined,
-    eventDeck: Array.isArray(game.eventDeck)
-      ? game.eventDeck.map((id) => migrateLegacyEventId(String(id)))
+    doctrineChoice: game.doctrineChoice
+      ? {
+          windowStart: game.doctrineChoice.windowStart,
+          picks: { ...game.doctrineChoice.picks },
+          ...(game.doctrineChoice.pickedBy ? { pickedBy: [...game.doctrineChoice.pickedBy] } : {}),
+        }
       : undefined,
     gameOver: game.gameOver ? { ...game.gameOver } : undefined,
     pendingCombat: clonePendingCombat(migrateLegacyPendingCombat(game.pendingCombat)),
@@ -783,8 +786,9 @@ export function gameSnapshotFromObservation(
     ),
     turnLimit: fromObservationField(mech, 'turnLimit', preserve?.turnLimit),
     matchSeed: fromObservationField(mech, 'matchSeed', preserve?.matchSeed),
-    turnEvent: fromObservationField(mech, 'turnEvent', preserve?.turnEvent),
-    eventDeck: fromObservationField(mech, 'eventDeck', preserve?.eventDeck),
+    doctrineWindow: fromObservationField(mech, 'doctrineWindow', preserve?.doctrineWindow),
+    doctrineByPlayer: fromObservationField(mech, 'doctrineByPlayer', preserve?.doctrineByPlayer),
+    doctrineChoice: fromObservationField(mech, 'doctrineChoice', preserve?.doctrineChoice),
     productionTokensSpentThisTurn: fromObservationField(
       mech,
       'productionTokensSpentThisTurn',

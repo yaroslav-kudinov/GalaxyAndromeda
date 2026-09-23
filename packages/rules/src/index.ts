@@ -1,4 +1,4 @@
-export * from './events.js'
+export * from './doctrines.js'
 export * from './event-log.js'
 export * from './types.js'
 export * from './constants.js'

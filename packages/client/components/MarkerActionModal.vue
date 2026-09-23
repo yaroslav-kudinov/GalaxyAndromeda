@@ -14,7 +14,6 @@ import {
   canBuildShipInRegionSize,
   getBombardableShipsAtMarker,
   getBuildableShipsForMarker,
-  getEffectiveTokenValue,
   getMovableShipsAtMarker,
   getRegionForMarker,
   getRegionResourceSummary,
@@ -201,7 +200,7 @@ const regionTokenViews = computed<RegionTokenView[]>(() => {
       coord: option.coord,
       tokenIndex: option.tokenIndex,
       token: option.token,
-      value: getEffectiveTokenValue(props.snapshot, option.token.value),
+      value: option.token.value,
     }),
   )
 })

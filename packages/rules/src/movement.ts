@@ -58,9 +58,14 @@ import {
   type CombatOptions,
   type CombatResolutionResult,
 } from './combat.js'
-import { getEffectiveMoveRange, isMovementIntoCellBlocked } from './events.js'
+import {
+  chooseDoctrine,
+  doctrineChoiceOwed,
+  DOCTRINES,
+  effectiveMoveRange,
+} from './doctrines.js'
 import { getShipMoveRange } from './ships.js'
-import { advanceGameSnapshot, completeEventsPhaseIfActive } from './turn.js'
+import { advanceGameSnapshot, grantBudgetsAfterDoctrines, leaveLegacyEventsPhase } from './turn.js'
 import type { HexCoord, LegalAction, MapDefinition, ShipType, ShipUnit } from './types.js'
 import { hexKey } from './types.js'
 import { getLegalActions } from './game.js'
@@ -173,7 +178,7 @@ export function getReachableHexKeys(
   game?: GameSnapshot,
   playerId?: string,
 ): string[] {
-  const range = game ? getEffectiveMoveRange(game, shipType) : getShipMoveRange(shipType)
+  const range = game ? effectiveMoveRange(game, shipType, playerId) : getShipMoveRange(shipType)
   const fromKey = hexKey(from.q, from.r)
 
   const candidateKeys = new Set(
@@ -270,7 +275,7 @@ export function validateDestinationForMove(
   const toKey = hexKey(to.q, to.r)
   if (fromKey === toKey) return ['Выберите другую клетку назначения']
 
-  const range = game ? getEffectiveMoveRange(game, ship.type) : getShipMoveRange(ship.type)
+  const range = game ? effectiveMoveRange(game, ship.type, playerId) : getShipMoveRange(ship.type)
   const existingKeys = new Set(game.cells.map((c) => hexKey(c.coord.q, c.coord.r)))
   const pathDist = hexPathDistance(existingKeys, from, to, range, {
     blocksTransit: (key) => blocksMovementTransit(game, playerId, key),
@@ -280,10 +285,6 @@ export function validateDestinationForMove(
   }
   if (pathDist > range) {
     return [`Дальность ${range}, путь ${pathDist}`]
-  }
-
-  if (game && isMovementIntoCellBlocked(game, dest, fromKey, toKey)) {
-    return ['Местная самооборона: нельзя входить в клетку с ресурсами или центром власти']
   }
 
   if (effectiveControlOwnerId(game, dest.controlOwnerId) != null
@@ -336,7 +337,7 @@ export function getMovableShipsAtMarker(
   return fromCell.ships
     .filter((s) => s.ownerId === playerId)
     .map((ship) => {
-      const moveRange = getEffectiveMoveRange(game, ship.type)
+      const moveRange = effectiveMoveRange(game, ship.type, playerId)
       const rangeCandidates = getReachableHexKeys(map, from, ship.type, game, playerId)
       const reachableKeys = rangeCandidates.filter((key) => {
         const [q, r] = key.split(',').map(Number)
@@ -814,7 +815,7 @@ export function getLegalActionsForSnapshot(
   mapId: string,
   playerId: string,
 ): LegalAction[] {
-  completeEventsPhaseIfActive(game, mapId)
+  leaveLegacyEventsPhase(game, mapId)
   const state = gameStateFromSnapshot(game, mapId)
   const actions = getLegalActions(state, playerId)
 
@@ -825,6 +826,15 @@ export function getLegalActionsForSnapshot(
       type: 'claimPicks',
       description: `Занять клетки (осталось ${owedClaims}); без выбора займутся лучшие`,
       params: { remaining: owedClaims },
+    })
+  }
+
+  if (game.phase === 'planning' && doctrineChoiceOwed(game, playerId) && !game.gameOver) {
+    actions.push({
+      id: 'choose-doctrine',
+      type: 'doctrine',
+      description: 'Выбрать доктрину на это окно ходов; соперники увидят её, когда выберут все',
+      params: { options: DOCTRINES.map((doctrine) => doctrine.id) },
     })
   }
 
@@ -998,6 +1008,12 @@ function dispatchGameAction(
   }
   // Боевые решения может делать участник боя (победитель / attacker / defender),
   // а не только activePlayer текущей фазы.
+  // Доктрину выбирают все одновременно, не дожидаясь своей очереди.
+  if (actionId === 'choose-doctrine') {
+    const { errors, revealed } = chooseDoctrine(game, playerId, params?.doctrineId)
+    if (!errors.length) grantBudgetsAfterDoctrines(game, revealed)
+    return { errors }
+  }
   const isCombatDecisionAction =
     actionId === 'continue-combat'
     || actionId === 'stop-combat'
@@ -1111,10 +1127,6 @@ function dispatchGameAction(
 
   if (actionId === 'advance-phase') {
     return { errors: advanceGameSnapshot(game, map.id) }
-  }
-
-  if (actionId === 'resolve-event') {
-    return { errors: completeEventsPhaseIfActive(game, map.id) }
   }
 
   if (actionId === 'execute-marker-movement') {

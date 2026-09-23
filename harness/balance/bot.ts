@@ -33,6 +33,9 @@ import {
   hitProbability,
   rechargePicksRemaining,
   siegeLossesOwedBy,
+  besiegedCellKeysOf,
+  doctrineChoiceOwed,
+  type DoctrineId,
   SHIP_DICE,
   SHIP_HIT_THRESHOLD,
   SHIP_HULL,
@@ -60,6 +63,10 @@ export interface RunOptions {
   maxTurns: number
   /** Лимит ходов партии; `null` — без лимита. По умолчанию берётся из правил. */
   turnLimit: number | null | undefined
+  /** false — партия без доктрин, для сравнения с фазой 5. */
+  doctrines?: boolean
+  /** Все боты берут одну доктрину — чтобы замерить её в чистом виде. */
+  forcedDoctrine?: DoctrineId | null
   /** Подмена порога победы для подбора: карта своего порога может не задавать. */
   victoryPowerCenters: number | null
   /** Аварийный предохранитель: партия не должна крутиться бесконечно. */
@@ -192,6 +199,30 @@ function shipCount(game: GameSnapshot, playerId: string): number {
 
 function enemyShipsOn(cell: RuntimeCellState, playerId: string): ShipUnit[] {
   return cell.ships.filter((ship) => ship.ownerId !== playerId)
+}
+
+/**
+ * Выбор доктрины. Правила — дуга из плана: рано расширяться, поздно держаться. Центр в осаде —
+ * «Оборона» (перебросы гарнизона и −1 к вражеским попаданиям); флот сильнее вражеского и
+ * центров мало — «Атака»; четыре центра и больше — «Оборона», пока не сорвали; иначе
+ * «Экспансия». Ничьи между равноценными — случайно, как везде у бота.
+ */
+function pickDoctrine(game: GameSnapshot, playerId: string): DoctrineId {
+  const powerCenters = countControlledPowerCenters(game, playerId)
+  const myFleet: ShipType[] = []
+  const enemyFleet: ShipType[] = []
+  for (const cell of game.cells) {
+    for (const ship of cell.ships) (ship.ownerId === playerId ? myFleet : enemyFleet).push(ship.type)
+  }
+  const scores: Record<DoctrineId, number> = {
+    expansion: 3,
+    production: powerCenters >= 3 ? 2 : 1,
+    maneuvers: game.turnNumber === 1 ? 3 : 1,
+    attack: powerCenters <= 2 && combatStrength(myFleet) > 1.5 * combatStrength(enemyFleet) ? 4 : 0,
+    defense: besiegedCellKeysOf(game, playerId).length > 0 ? 6 : powerCenters >= 4 ? 4 : 0,
+    none: 0,
+  }
+  return pickAmongBest(Object.keys(scores) as DoctrineId[], (id) => scores[id]) ?? 'none'
 }
 
 /**
@@ -683,6 +714,7 @@ export function runGame(map: MapDefinition, seed: number, options: RunOptions): 
       eliminationTurns: [],
       battles: [],
       sieges: { established: 0, captured: 0, lifted: 0 },
+      doctrines: {},
     }
 
     if (playerIds.length < 2) {
@@ -698,7 +730,10 @@ export function runGame(map: MapDefinition, seed: number, options: RunOptions): 
       game.victoryPowerCenters = options.victoryPowerCenters
     }
 
-    beginMatchForParticipants(game, map.id, playerIds, { turnLimit: options.turnLimit })
+    beginMatchForParticipants(game, map.id, playerIds, {
+      turnLimit: options.turnLimit,
+      ...(options.doctrines === false ? { doctrineWindow: null } : {}),
+    })
 
     const tally: SpendTally = { tokenFaceValue: 0, shipCost: 0 }
     const orderSeen: Record<string, number[]> = Object.fromEntries(
@@ -799,6 +834,18 @@ export function runGame(map: MapDefinition, seed: number, options: RunOptions): 
       if (seen && seen.length <= record.samples.length) {
         seen.push(orderIndex)
         orderIndex += 1
+      }
+
+      if (game.phase === 'planning' && game.doctrineChoice) {
+        for (const playerId of playerIds) {
+          if (!doctrineChoiceOwed(game, playerId)) continue
+          const doctrineId = options.forcedDoctrine ?? pickDoctrine(game, playerId)
+          const window = String(game.doctrineChoice?.windowStart ?? game.turnNumber)
+          if (!applyGameActionOnSnapshot(game, map, playerId, 'choose-doctrine', { doctrineId }).errors.length) {
+            record.doctrines[window] ??= {}
+            record.doctrines[window]![doctrineId] = (record.doctrines[window]![doctrineId] ?? 0) + 1
+          }
+        }
       }
 
       let progressed = false

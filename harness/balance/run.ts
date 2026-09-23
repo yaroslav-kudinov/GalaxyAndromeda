@@ -10,6 +10,7 @@
  */
 
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
+import type { DoctrineId } from '../../packages/rules/src/index.js'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -58,6 +59,8 @@ function parseArgs(argv: readonly string[]): Args {
       maxTurns: Math.max(1, Math.floor(number('maxTurns', DEFAULT_RUN_OPTIONS.maxTurns))),
       handicapCells: Math.max(0, Math.floor(number('handicap', DEFAULT_RUN_OPTIONS.handicapCells))),
       maxSteps: Math.max(1000, Math.floor(number('maxSteps', DEFAULT_RUN_OPTIONS.maxSteps))),
+      doctrines: !flags.has('noDoctrines'),
+      forcedDoctrine: (flags.get('doctrine') as DoctrineId | undefined) ?? null,
       turnLimit: flags.has('noTurnLimit')
         ? null
         : flags.has('turnLimit')
@@ -164,6 +167,23 @@ function report(mapId: string, summary: Summary, records: readonly GameRecord[])
   lines.push(
     `Осад за партию: ${num(summary.sieges.perGame)}; доля взятых из завершённых: ${percent(summary.sieges.capturedShare)}`,
   )
+  const doctrineLabels: Record<string, string> = {
+    expansion: 'экспансия',
+    production: 'производство',
+    maneuvers: 'манёвры',
+    attack: 'атака',
+    defense: 'оборона',
+    none: 'без доктрины',
+  }
+  for (const [window, shares] of Object.entries(summary.doctrinesByWindow).sort((a, b) => Number(a[0]) - Number(b[0]))) {
+    lines.push(
+      `Доктрины с хода ${window}: `
+        + Object.entries(shares)
+          .sort((a, b) => b[1] - a[1])
+          .map(([id, share]) => `${doctrineLabels[id] ?? id} ${percent(share)}`)
+          .join(', '),
+    )
+  }
   lines.push('Исходы: ' + (Object.entries(summary.victoryReasons)
     .map(([reason, n]) => `${reason} ${n}`).join(', ') || '—'))
 

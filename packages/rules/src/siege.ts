@@ -55,8 +55,7 @@ export function besiegedCellKeysOf(game: GameSnapshot, playerId: string): string
 
 /**
  * Можно ли осадить клетку: это чужой центр власти под защитой кораблей владельца, и осады на
- * нём ещё нет. Незащищённый центр переходит при входе, как любая чужая клетка, — гарнизон уже
- * равен нулю.
+ * нём ещё нет. Незащищённый центр осаждать незачем: его занимают в конце хода захватом.
  */
 export function canBesiegeCell(game: GameSnapshot, attackerId: string, coord: HexCoord): boolean {
   const cell = cellByKey(game, keyOf(coord))

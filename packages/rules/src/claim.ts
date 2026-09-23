@@ -1,3 +1,4 @@
+import { doctrineClaimLimitModifier } from './doctrines.js'
 import { removeStaleProductionMarkerAt } from './markers.js'
 import { grantRechargeBudgetFor, participantsOf } from './resource-recharge.js'
 import type { GameSnapshot, RuntimeCellState } from './save-file.js'
@@ -44,7 +45,7 @@ function countPowerCenters(game: GameSnapshot, playerId: string): number {
  * закрывается, пока маркеры остаются, поэтому к моменту захвата их всегда ноль.
  */
 export function computeClaimLimit(game: GameSnapshot, playerId: string): number {
-  return 1 + countPowerCenters(game, playerId)
+  return Math.max(0, 1 + countPowerCenters(game, playerId) + doctrineClaimLimitModifier(game, playerId))
 }
 
 export function eligibleClaimCells(game: GameSnapshot, playerId: string): RuntimeCellState[] {
@@ -96,12 +97,17 @@ function claimPriority(a: RuntimeCellState, b: RuntimeCellState): number {
  * Вход на клетку под контролем другого игрока: контроль сразу у входящего,
  * чужой маркер производства снимается. Нейтральную клетку не трогает.
  * Если на клетке ещё стоят чужие корабли — не захватывает (это бой).
+ *
+ * Центр власти так не переходит (ADR 019): защищённый берут штурмом или осадой, пустой —
+ * захватом в конце хода, в счёт лимита. Иначе быстрые корабли снимали бы чужие центры
+ * набегом без всякого лимита.
  */
 export function transferControlIfEnemyOwned(
   game: GameSnapshot,
   cell: RuntimeCellState,
   enteringPlayerId: string,
 ): boolean {
+  if (cell.isPowerCenter) return false
   if (!cell.controlOwnerId || cell.controlOwnerId === enteringPlayerId) return false
   if (hasEnemyShips(cell, enteringPlayerId)) return false
   cell.controlOwnerId = enteringPlayerId
@@ -145,7 +151,7 @@ export function maybeApplyTurnEndClaims(
   previousPhase: string,
   mapId: string,
 ): void {
-  if (previousPhase === 'actions' && game.phase === 'events') {
+  if ((previousPhase === 'actions' || previousPhase === 'production') && game.phase === 'planning') {
     applyTurnEndClaims(game, mapId)
   }
 }

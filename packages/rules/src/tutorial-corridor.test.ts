@@ -44,7 +44,6 @@ describe('tutorial corridor', () => {
     expect(scenario.mapId).toBe('tutorial-corridor')
     expect(scenario.bots?.map((bot) => bot.playerId)).toEqual(['player-2', 'player-3'])
     expect(scenario.steps.length).toBeGreaterThanOrEqual(12)
-    expect(scenario.eventDeck?.[0]).toBe('empty-void')
     const markerStep = scenario.steps.find((step) => step.id === 'marker-cruisers')
     expect(markerStep?.allowedActions?.[0]).toMatchObject({
       actionId: 'toggle-marker',

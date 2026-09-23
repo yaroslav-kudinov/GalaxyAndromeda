@@ -33,12 +33,34 @@ async function loadRules() {
 const rules = await loadRules()
 
 const {
-  EVENT_CARDS,
-  EVENT_DECK_COPIES,
-  EVENT_DECK_SIZE,
   PLAYER_COLORS,
   PLAYER_LABELS,
 } = rules
+
+/** Колода событий настольного билда — в цифровой версии её заменили доктрины (ADR 020). */
+const EVENT_CARDS = [
+  { id: 'magnetic-storm', name: 'Магнитная буря', description: 'Все корабли: дальность хода −1 (минимум 1).', effectSummary: 'Дальность хода −1 (мин. 1)' },
+  { id: 'empty-void', name: 'Среди звёзд лишь пустота', description: 'Без эффекта.', effectSummary: 'Без эффекта' },
+  { id: 'stand-to-death', name: '«Стоять насмерть!»', description: 'Игроки не могут отступать из боя.', effectSummary: 'Отступление запрещено' },
+  { id: 'ammo-detonation', name: 'Детонация склада боеприпасов', description: 'Нельзя строить эсминец, крейсер, линкор в этом ходу.', effectSummary: 'Постройка эсминца, крейсера и линкора запрещена' },
+  { id: 'hyper-gap', name: 'Просвет в гиперпространстве', description: 'Все корабли +1 ход; у гиперорудия дальность стрельбы становится 2–4 (вместо 2–3).', effectSummary: 'Ход +1; дальность гиперорудия 2–4' },
+  { id: 'shadow-economy', name: 'Теневая экономика', description: 'Номинал каждой фишки ресурса +2 (только этот ход).', effectSummary: 'Номинал фишек +2' },
+  { id: 'hold-formation', name: '«Держать строй»', description: 'Цена уничтожения +2 для каждого уничтожаемого в бою корабля.', effectSummary: 'Цена уничтожения +2' },
+  { id: 'combat-chaos', name: 'Хаос битвы', description: 'Приоритет уничтожения игнорируется.', effectSummary: 'Приоритет уничтожения отключён' },
+  { id: 'local-self-defense', name: 'Местная самооборона', description: 'Нельзя входить движением в клетки с фишками ресурсов или центром власти (остаться на такой клетке можно). Отступление из боя на соседнюю клетку с фишкой или центром власти разрешено.', effectSummary: 'Запрет входа движением на ресурсы / центр власти' },
+]
+const EVENT_DECK_COPIES = {
+  'empty-void': 3,
+  'hyper-gap': 2,
+  'shadow-economy': 2,
+  'magnetic-storm': 2,
+  'combat-chaos': 1,
+  'stand-to-death': 1,
+  'ammo-detonation': 1,
+  'hold-formation': 1,
+  'local-self-defense': 1,
+}
+const EVENT_DECK_SIZE = EVENT_CARDS.reduce((sum, card) => sum + (EVENT_DECK_COPIES[card.id] ?? 1), 0)
 
 /**
  * Печатный вариант заморожен (пересборка ядра, ADR 015–018): цифровая версия ушла вперёд —

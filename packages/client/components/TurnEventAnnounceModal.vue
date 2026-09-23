@@ -1,9 +1,6 @@
 <script setup lang="ts">
 import { useUiStrings } from '~/i18n/ui-strings'
-import type { ActiveEventObservation } from '@galaxy/rules'
-
-const props = defineProps<{
-  event?: ActiveEventObservation | null
+defineProps<{
   turnNumber: number
   rechargeBanner?: string | null
 }>()
@@ -28,9 +25,7 @@ function onBackdropClick() {
 
 const t = useUiStrings().turnAnnounce
 
-const kicker = computed(() =>
-  props.event ? t.newTurn(props.turnNumber) : t.matchStart,
-)
+const kicker = computed(() => t.matchStart)
 </script>
 
 <template>
@@ -47,7 +42,7 @@ const kicker = computed(() =>
       role="dialog"
       @pointerdown="onDragHandlePointerDown"
       aria-modal="true"
-      :aria-labelledby="event ? 'event-announce-title' : 'event-announce-recharge'"
+      aria-labelledby="event-announce-recharge"
     >
       <p class="event-announce-kicker">{{ kicker }}</p>
       <ResourceRechargeBanner
@@ -56,15 +51,7 @@ const kicker = computed(() =>
         :text="rechargeBanner"
         variant="modal"
       />
-      <template v-if="event">
-        <h2 id="event-announce-title" class="event-announce-title">
-          {{ event.name }}
-        </h2>
-        <p class="event-announce-desc">{{ event.description }}</p>
-        <p class="event-announce-effect">{{ event.effectSummary }}</p>
-        <p class="event-announce-hint">{{ t.eventHint }}</p>
-      </template>
-      <p v-else class="event-announce-hint">{{ t.rechargeHint }}</p>
+      <p class="event-announce-hint">{{ t.rechargeHint }}</p>
       <button type="button" class="event-announce-ok" @click="emit('close')">
         {{ t.ok }}
       </button>

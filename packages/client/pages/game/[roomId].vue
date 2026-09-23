@@ -28,8 +28,7 @@ import {
   getLegalActionsForSnapshot,
   applyGameActionOnSnapshot,
   canBesiegeCell,
-  getActiveEventObservation,
-  getTurnEventHistory,
+  doctrineChoiceOwed,
   removeActionMarker,
   canRemoveActionMarkerThisTurn,
   syncParticipatingPlayerIds,
@@ -1297,35 +1296,41 @@ const myActionMarkerCount = computed(
   () => actionMarkers.value.filter((m) => m.ownerId === playerId.value).length,
 )
 
-const activeEvent = computed((): import('@galaxy/rules').ActiveEventObservation | null => {
-  if (!saveFile.value?.game) return null
-  return getActiveEventObservation(saveFile.value.game)
-})
-
-const turnEventHistory = computed(() => {
-  if (!saveFile.value?.game) return []
-  return getTurnEventHistory(saveFile.value.game)
-})
-
-const currentTurnEventResolvedAt = computed(
-  () => saveFile.value?.game?.turnEvent?.resolvedAt,
-)
-
-const showTurnEventsPanel = computed(
-  () =>
-    !!resourceRechargeBanner.value
-    || !!activeEvent.value
-    || turnEventHistory.value.length > 0,
-)
-
 const turnNumber = computed(() => snapshot.value?.turnNumber ?? 1)
-const {
-  visible: turnEventAnnounceVisible,
-  announced: turnEventAnnounced,
-  announcedTurn: turnEventAnnouncedTurn,
-  dismiss: dismissTurnEventAnnounce,
-} = useTurnEventAnnounce(roomId, activeEvent, turnNumber)
 
+const doctrineBusy = ref(false)
+
+/** Доктрину выбирают все одновременно — в любой момент планирования, не только в свой ход. */
+async function chooseDoctrineAction(doctrineId: import('@galaxy/rules').DoctrineId) {
+  if (doctrineBusy.value || !saveFile.value?.game) return
+  doctrineBusy.value = true
+  try {
+    if (serverStatus.value === 'online' && !roomId.value.startsWith('local-')) {
+      bumpObservationEpoch()
+      const obs = await submitGameAction(roomId.value, playerId.value, 'choose-doctrine', { doctrineId })
+      applyObservation(obs)
+      persistLocal()
+    } else {
+      const result = applyGameActionOnSnapshot(
+        saveFile.value.game,
+        saveFile.value.map,
+        playerId.value,
+        'choose-doctrine',
+        { doctrineId },
+      )
+      if (result.errors.length) {
+        markerActionHint.value = result.errors[0] ?? null
+        return
+      }
+      persistLocal()
+      refreshLocalLegalActions()
+    }
+  } catch (e) {
+    markerActionHint.value = actionErrorMessage(e, 'Не удалось выбрать доктрину')
+  } finally {
+    doctrineBusy.value = false
+  }
+}
 const resourceRechargeBanner = computed(() => {
   const game = snapshot.value
   const me = playerId.value
@@ -1345,7 +1350,6 @@ const {
   roomId,
   turnNumber,
   resourceRechargeBanner,
-  turnEventAnnounceVisible,
 )
 
 const phaseGuidance = computed(() =>
@@ -1354,7 +1358,7 @@ const phaseGuidance = computed(() =>
     actionMarkersMax: myActionMarkerLimit.value,
     actionMarkerUsedThisTurn: actionMarkerUsedThisTurn.value,
     actionMarkerUnresolved: mustResolveActionMarker.value,
-    eventResolved: activeEvent.value?.resolved ?? false,
+    doctrineOwed: !!snapshot.value && doctrineChoiceOwed(snapshot.value, playerId.value),
   }),
 )
 
@@ -3042,15 +3046,7 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
     </div>
 
     <TurnEventAnnounceModal
-      v-if="turnEventAnnounceVisible && turnEventAnnounced"
-      :event="turnEventAnnounced"
-      :turn-number="turnEventAnnouncedTurn"
-      :recharge-banner="resourceRechargeBanner"
-      @close="dismissTurnEventAnnounce"
-    />
-
-    <TurnEventAnnounceModal
-      v-else-if="rechargeIntroVisible && resourceRechargeBanner"
+      v-if="rechargeIntroVisible && resourceRechargeBanner"
       :turn-number="turnNumber"
       :recharge-banner="resourceRechargeBanner"
       @close="dismissRechargeIntro"
@@ -3428,14 +3424,16 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
           <VictoryTrackerPanel :progress="victoryProgress" :my-player-id="playerId" :turns-left="turnsLeft" />
         </section>
 
-        <section v-if="showTurnEventsPanel" class="block event-block">
-          <TurnEventsPanel
-            :active-event="activeEvent"
-            :history="turnEventHistory"
-            :current-turn="snapshot?.turnNumber ?? 1"
-            :phase="snapshot?.phase"
-            :resolved-at="currentTurnEventResolvedAt"
+        <section
+          v-if="snapshot && (snapshot.doctrineWindow || resourceRechargeBanner)"
+          class="block event-block"
+        >
+          <DoctrinePanel
+            :snapshot="snapshot"
+            :player-id="playerId"
+            :busy="doctrineBusy"
             :recharge-banner="resourceRechargeBanner"
+            @choose="chooseDoctrineAction"
           />
         </section>
 

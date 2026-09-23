@@ -1,0 +1,80 @@
+{
+  "label": "after-phase6-reference-no-doctrines",
+  "seed": 101,
+  "games": 150,
+  "options": {
+    "maxTurns": 60,
+    "victoryPowerCenters": null,
+    "maxSteps": 250000,
+    "maxCombatRounds": 12,
+    "handicapCells": 0,
+    "doctrines": false,
+    "forcedDoctrine": null
+  },
+  "summaries": {
+    "reference-duel": {
+      "games": 150,
+      "errors": 0,
+      "turns": {
+        "mean": 9.713333333333333,
+        "p10": 8,
+        "median": 9,
+        "p90": 13
+      },
+      "hitTurnCapShare": 0,
+      "winRateBySeat": {
+        "player-1": 0.5066666666666667,
+        "player-2": 0.49333333333333335
+      },
+      "winRateByOrderPosition": {
+        "0": 0.4866666666666667,
+        "1": 0.5133333333333333
+      },
+      "meanLeadChanges": 2.94,
+      "pointOfNoReturn": {
+        "mean": 8.593333333333334,
+        "meanShareOfGame": 0.8800258260258257
+      },
+      "giniByTurn": {
+        "5": 0.037391136912443286,
+        "10": 0.044582463811130894,
+        "15": 0.028993928610066253
+      },
+      "wasteRatio": 1.406307385229541,
+      "firstUnlockTurn": {
+        "destroyer": 1,
+        "cruiser": 5.695945945945946,
+        "carrier": 8.277777777777779,
+        "battleship": 9.076923076923077,
+        "hyper": 9.666666666666666
+      },
+      "claimUtilisationAt3Plus": 0.8594278601555458,
+      "meanEliminationTurn": null,
+      "victoryReasons": {
+        "power_centers": 146,
+        "turn_limit": 4
+      },
+      "battles": {
+        "perGame": 2.7,
+        "bombardmentsPerGame": 0,
+        "outcomes": {
+          "attacker": 0.7679012345679013,
+          "defender": 0.1580246913580247,
+          "retreat": 0.044444444444444446,
+          "mutual": 0.02962962962962963
+        },
+        "meanAttackerLossValue": 1.7185185185185186,
+        "meanDefenderLossValue": 3.2395061728395063
+      },
+      "doctrinesByWindow": {},
+      "sieges": {
+        "perGame": 0.48,
+        "capturedShare": 0.2638888888888889
+      },
+      "handicap": {
+        "winRate": null,
+        "amplification": null
+      }
+    }
+  }
+}

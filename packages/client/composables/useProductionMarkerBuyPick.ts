@@ -1,6 +1,5 @@
 import type { GameSnapshot, HexCoord, TokenSpendRef } from '@galaxy/rules'
 import {
-  getEffectiveTokenValue,
   getOwnedFaceUpTokenOptions,
   hexKey,
   nextProductionMarkerExpandCost,
@@ -40,7 +39,7 @@ export function useProductionMarkerBuyPick(
         (o) => o.coord.q === ref.coord.q && o.coord.r === ref.coord.r && o.tokenIndex === ref.tokenIndex,
       )
       if (!opt) continue
-      const value = getEffectiveTokenValue(snapshot.value, opt.token.value)
+      const value = opt.token.value
       if (opt.token.type === 'credits') credits += value
       else production += value
     }

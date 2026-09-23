@@ -13,6 +13,7 @@ import type {
 } from '@galaxy/rules'
 
 import {
+  maskDoctrineChoice,
 
   buildObservation,
 
@@ -467,8 +468,6 @@ function roomObservation(
     victoryPowerCenters: s.victoryPowerCenters ?? null,
     turnLimit: s.turnLimit ?? null,
     matchSeed: s.matchSeed ?? null,
-    turnEvent: s.turnEvent ?? null,
-    eventDeck: s.eventDeck ?? null,
     gameOver: s.gameOver ?? null,
     pendingCombat: s.pendingCombat ?? null,
     productionTokensSpentThisTurn: s.productionTokensSpentThisTurn ?? null,
@@ -480,6 +479,11 @@ function roomObservation(
     claimPicksRemainingByPlayer:
       room.status === 'playing' ? (s.claimPicksRemainingByPlayer ?? null) : undefined,
     sieges: room.status === 'playing' ? (s.sieges ?? null) : undefined,
+    doctrineWindow: room.status === 'playing' ? (s.doctrineWindow ?? null) : undefined,
+    doctrineByPlayer: room.status === 'playing' ? (s.doctrineByPlayer ?? null) : undefined,
+    // Выбор одновременный: до вскрытия игрок видит только свою доктрину и кто уже выбрал.
+    doctrineChoice:
+      room.status === 'playing' ? maskDoctrineChoice(s.doctrineChoice, playerId) : undefined,
     siegeLossesOwedByPlayer:
       room.status === 'playing' ? (s.siegeLossesOwedByPlayer ?? null) : undefined,
     siegeTickTurn: room.status === 'playing' ? (s.siegeTickTurn ?? null) : undefined,
@@ -574,8 +578,6 @@ export function createTutorialRoom(
     if (!room.playerIds.includes(bot.playerId)) room.playerIds.push(bot.playerId)
   }
   syncParticipatingPlayerIds(room.state, room.playerIds)
-  if (script.eventDeck?.length) room.state.eventDeck = [...script.eventDeck]
-
   const start = startRoom(room.id, joinHuman.playerId)
   if (!start.ok) return { ok: false, error: start.error }
 
@@ -786,6 +788,7 @@ export function startRoom(roomId: string, playerId: string): RoomStartResult {
       // конкретную очередь хода, поэтому сид партии ему не выдаётся.
       turnLimit: room.mode === 'tutorial' ? null : undefined,
       matchSeed: room.mode === 'tutorial' ? null : undefined,
+      doctrineWindow: room.mode === 'tutorial' ? null : undefined,
     })
   } else {
     ensureActivePlayerParticipating(room.state)
