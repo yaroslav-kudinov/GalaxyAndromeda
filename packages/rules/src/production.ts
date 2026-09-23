@@ -316,7 +316,7 @@ export function getBuildableShipsForMarker(
     let maxCount = 0
 
     if (!region) {
-      disabledReason = 'Регион маркера не найден'
+      disabledReason = 'Не удалось определить регион этого маркера'
     } else if (siegeAt(game, marker.coord)?.besiegedId === playerId) {
       disabledReason = BESIEGED_BUILD_BLOCKED_MSG
     } else if (isShipTypeBuildBlocked(game, type)) {
@@ -368,7 +368,7 @@ function validateMarkerResolutionPreconditions(
   if (game.actionMarkerResolvedThisTurn) return [ACTION_MARKER_ALREADY_RESOLVED_MSG]
 
   const marker = findActionMarkerForProduction(game, markerId, playerId)
-  if (!marker) return ['Маркер действия не найден']
+  if (!marker) return ['На этой клетке больше нет вашего маркера действия']
 
   const cell = cellAt(game, marker.coord)
   if (!cell?.actionMarkerId || cell.actionMarkerId !== marker.id) {
@@ -392,7 +392,7 @@ export function validateTokenPayment(
 ): string[] {
   const errors: string[] = []
   const region = getRegionForMarker(game, mapId, marker)
-  if (!region) return ['Регион маркера не найден']
+  if (!region) return ['Не удалось определить регион этого маркера']
 
   const regionHexSet = new Set(region.hexes)
   const seen = new Set<string>()
@@ -539,7 +539,7 @@ export function validateShipPlacements(
 ): string[] {
   const errors: string[] = []
   const region = getRegionForMarker(game, mapId, marker)
-  if (!region) return ['Регион маркера не найден']
+  if (!region) return ['Не удалось определить регион этого маркера']
 
   const regionHexSet = new Set(region.hexes)
   const buildable = getBuildableShipsForMarker(game, mapId, marker.ownerId, marker.id)

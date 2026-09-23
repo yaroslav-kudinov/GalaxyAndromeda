@@ -183,7 +183,7 @@ import {
 import { getShipMoveRange, getShipProductionCost, canBuildShipInRegionSize, getShipProductionRegionMin } from './ships.js'
 import { MAX_FLEET_SIZE_PER_PLAYER, SHIP_LABELS } from './constants.js'
 import { trimGameEventLog } from './event-log.js'
-import { advanceGamePhase, advanceGameSnapshot, activePlayerOrder } from './turn.js'
+import { advanceGamePhase, advanceGameSnapshot, activePlayerOrder, turnQueueForSnapshot } from './turn.js'
 import { isTurnEventResolved } from './events.js'
 import { renderAsciiMapFromDefinition } from './observation/index.js'
 
@@ -1269,6 +1269,38 @@ describe('turn flow', () => {
     expect(sequence(1)).toEqual(sequence(1))
     const distinct = new Set([1, 2, 3, 4, 5, 6].map((seed) => sequence(seed)))
     expect(distinct.size).toBeGreaterThan(1)
+  })
+
+  it('turnQueueForSnapshot numbers players in turn order', () => {
+    const map = createEmptyMap()
+    const game = gameSnapshotFromGameState(gameStateFromMap(map, ['P1', 'P2', 'P3']))
+    game.phase = 'actions'
+    const order = activePlayerOrder(game.players, null, {
+      state: gameStateFromSnapshot(game, map.id),
+      phase: 'actions',
+    })
+    game.activePlayerId = order[1]!
+
+    const queue = turnQueueForSnapshot(game, map.id)
+    expect(queue.map((e) => e.playerId)).toEqual(order)
+    expect(queue.map((e) => e.position)).toEqual([1, 2, 3])
+    expect(queue.map((e) => e.isActive)).toEqual([false, true, false])
+    expect(queue.map((e) => e.hasMoved)).toEqual([true, false, false])
+    expect(queue.every((e) => e.color.startsWith('#'))).toBe(true)
+  })
+
+  it('turnQueueForSnapshot skips eliminated and non-participating players', () => {
+    const map = createEmptyMap()
+    const game = gameSnapshotFromGameState(gameStateFromMap(map, ['P1', 'P2', 'P3', 'P4']))
+    game.participatingPlayerIds = ['player-1', 'player-2', 'player-3']
+    game.players.find((p) => p.id === 'player-2')!.eliminated = true
+    game.activePlayerId = null
+
+    const queue = turnQueueForSnapshot(game, map.id)
+    expect(queue.map((e) => e.playerId).sort()).toEqual(['player-1', 'player-3'])
+    expect(queue.map((e) => e.position)).toEqual([1, 2])
+    expect(queue.some((e) => e.isActive)).toBe(false)
+    expect(queue.some((e) => e.hasMoved)).toBe(false)
   })
 
   it('skips non-participating players when only two joined', () => {

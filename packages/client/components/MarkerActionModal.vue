@@ -45,7 +45,7 @@ const props = withDefaults(
     map: MapDefinition
     playerId: string
     source: HexCoord
-    /** В обучении скрывает типы приказов, которые не относятся к текущему шагу. */
+    /** В обучении скрывает действия, которые не относятся к текущему шагу. */
     allowedModes?: MarkerActionMode[]
     allowRemoveMarker?: boolean
     /** Клик игрока по клетке карты во время выбора фишек; seq растёт на каждый клик */
@@ -545,7 +545,7 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
         </button>
       </header>
 
-      <div class="mode-tabs" role="tablist" aria-label="Тип приказа">
+      <div class="mode-tabs" role="tablist" aria-label="Что сделать маркером">
         <button
           v-if="modeAllowed('movement')"
           type="button"
@@ -782,7 +782,7 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
         <template v-else>
           <p v-if="actionMode === 'movement'" class="lead">
             Выберите корабли для перемещения. Затем укажите клетки назначения на карте.
-            Красные клетки — бой; за один приказ — только одна клетка боя.
+            Красные клетки — бой; за одно действие можно вступить в бой только на одной клетке.
           </p>
           <p v-else class="lead">
             Выберите корабли с дальним огнём: крейсер, линкор или гиперорудие.

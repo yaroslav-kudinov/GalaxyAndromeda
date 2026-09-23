@@ -6,7 +6,7 @@ const props = defineProps<{
   preview: CombatPreview
   playerNames?: Record<string, string>
   battleOdds?: BattleOutcomeOdds | null
-  /** Показать кнопку «Разрешение боя» (после подтверждения приказа) */
+  /** Показать кнопку «Разрешение боя» (после подтверждения действия) */
   showBattleAction?: boolean
 }>()
 
@@ -16,9 +16,9 @@ const panelTitle = computed(() =>
 
 const leadText = computed(() => {
   if (props.preview.trigger === 'bombardment') {
-    return 'Обстрел по цели добавлен в приказ. Защитник не отвечает; каждая клетка расстояния прибавляет 1 к нужному значению.'
+    return 'Обстрел по цели добавлен в действие. Защитник не отвечает; каждая клетка расстояния прибавляет 1 к нужному значению.'
   }
-  return 'Ход на эту клетку добавлен в приказ. Бой идёт раундами, урон копится до конца боя.'
+  return 'Ход на эту клетку добавлен в действие. Бой идёт раундами, урон копится до конца боя.'
 })
 
 const isBombardment = computed(() => props.preview.trigger === 'bombardment')
