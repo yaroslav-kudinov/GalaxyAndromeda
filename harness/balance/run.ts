@@ -210,10 +210,19 @@ function report(mapId: string, summary: Summary, records: readonly GameRecord[])
 function applyDoctrineTuning(raw: string | undefined): void {
   if (!raw) return
   for (const entry of raw.split(',').map((part) => part.trim()).filter(Boolean)) {
-    const match = entry.match(/^(\w+)\.(\w+)=(-?\d+)$/)
+    // Значение — число, true/false или список классов через «|».
+    const match = entry.match(/^(\w+)\.(\w+)=([\w|-]+)$/)
     const doctrine = match && DOCTRINES.find((candidate) => candidate.id === match[1])
-    if (!match || !doctrine || !(match[2]! in doctrine)) throw new Error(`Не понял настройку доктрины: ${entry}`)
-    ;(doctrine as unknown as Record<string, number>)[match[2]!] = Number(match[3])
+    if (!match || !doctrine) throw new Error(`Не понял настройку доктрины: ${entry}`)
+    const raw = match[3]!
+    const value = raw === 'true'
+      ? true
+      : raw === 'false'
+        ? false
+        : /^-?\d+$/.test(raw)
+          ? Number(raw)
+          : raw.split('|')
+    ;(doctrine as unknown as Record<string, unknown>)[match[2]!] = value
   }
 }
 

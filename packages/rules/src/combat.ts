@@ -405,8 +405,9 @@ export function combatShotModifier(
   game: GameSnapshot,
   shooterId: string,
   targetOwnerId: string | null,
+  battleCoord?: HexCoord,
 ): number {
-  return doctrineShotModifier(game, shooterId, targetOwnerId)
+  return doctrineShotModifier(game, shooterId, targetOwnerId, battleCoord)
 }
 
 /** Дальность стрельбы класса: от минимальной до той, где ещё хватает шестёрки. */
@@ -562,7 +563,7 @@ export function collectSupportShips(
 ): CombatSupportShip[] {
   const out: CombatSupportShip[] = []
   const battleKey = hexKey(battleCoord.q, battleCoord.r)
-  const modifier = combatShotModifier(game, playerId, targetOwnerId)
+  const modifier = combatShotModifier(game, playerId, targetOwnerId, battleCoord)
   const carriers = carrierPositions(game, playerId, battleCoord, battleHexShipIds, positionOverrides)
 
   for (const cell of game.cells) {
@@ -630,7 +631,7 @@ function buildSidePreview(
   options: { canFireFromBattleHex?: boolean; collectSupport?: boolean } = {},
 ): CombatSidePreview {
   const battleHexShipIds = new Set(battleHexShips.map((s) => s.id))
-  const modifier = combatShotModifier(game, playerId, enemyOwnerId)
+  const modifier = combatShotModifier(game, playerId, enemyOwnerId, battleCoord)
   const carriers = carrierPositions(
     game,
     playerId,

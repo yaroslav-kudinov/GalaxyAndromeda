@@ -2,7 +2,8 @@ import { trimGameEventLog } from './event-log.js'
 import type { GameSnapshot } from './save-file.js'
 import { besiegedCellKeysOf } from './siege.js'
 import { getShipMoveRange } from './ships.js'
-import type { ShipType } from './types.js'
+import type { HexCoord, ShipType } from './types.js'
+import { hexKey } from './types.js'
 
 /**
  * Доктрины (ADR 020) вместо колоды событий.
@@ -27,10 +28,14 @@ export interface DoctrineDefinition {
   claimLimit: number
   rechargeBudget: number
   moveRange: number
+  /** На какие классы действует `moveRange`; не задано — на все. */
+  moveRangeTypes?: readonly ShipType[]
   /** Поправка к нужному на кубике значению для своих выстрелов: −1 — точнее. */
   ownShots: number
   /** Поправка к нужному значению для выстрелов противника по своим кораблям: +1 — труднее. */
   enemyShots: number
+  /** `enemyShots` действует, только когда корабли игрока бьются на его собственной клетке. */
+  enemyShotsOnOwnCellsOnly?: boolean
 }
 
 export const DOCTRINES: readonly DoctrineDefinition[] = [
@@ -162,15 +167,21 @@ export function doctrineRechargeModifier(game: GameSnapshot, playerId: string): 
   return activeDefinition(game, playerId).rechargeBudget
 }
 
-export function doctrineMoveRangeModifier(game: GameSnapshot, playerId: string): number {
-  return activeDefinition(game, playerId).moveRange
+export function doctrineMoveRangeModifier(
+  game: GameSnapshot,
+  playerId: string,
+  type?: ShipType,
+): number {
+  const doctrine = activeDefinition(game, playerId)
+  if (type && doctrine.moveRangeTypes && !doctrine.moveRangeTypes.includes(type)) return 0
+  return doctrine.moveRange
 }
 
 /** Дальность хода корабля игрока с учётом доктрины; не меньше одной клетки. */
 export function effectiveMoveRange(game: GameSnapshot, type: ShipType, playerId?: string): number {
   const base = getShipMoveRange(type)
   if (!playerId) return base
-  return Math.max(1, base + doctrineMoveRangeModifier(game, playerId))
+  return Math.max(1, base + doctrineMoveRangeModifier(game, playerId, type))
 }
 
 /**
@@ -182,13 +193,25 @@ export function doctrineShotModifier(
   game: GameSnapshot,
   shooterId: string,
   targetOwnerId: string | null,
+  battleCoord?: HexCoord,
 ): number {
   if (!doctrinesEnabled(game)) return 0
   let modifier = 0
   const own = activeDefinition(game, shooterId)
   if (own.ownShots !== 0 && besiegedCellKeysOf(game, shooterId).length === 0) modifier += own.ownShots
-  if (targetOwnerId) modifier += activeDefinition(game, targetOwnerId).enemyShots
+  if (targetOwnerId) {
+    const target = activeDefinition(game, targetOwnerId)
+    if (target.enemyShots !== 0 && (!target.enemyShotsOnOwnCellsOnly || !battleCoord
+      || cellOwner(game, battleCoord) === targetOwnerId)) {
+      modifier += target.enemyShots
+    }
+  }
   return modifier
+}
+
+function cellOwner(game: GameSnapshot, coord: HexCoord): string | null {
+  const key = hexKey(coord.q, coord.r)
+  return game.cells.find((cell) => hexKey(cell.coord.q, cell.coord.r) === key)?.controlOwnerId ?? null
 }
 
 function participants(game: GameSnapshot): string[] {
