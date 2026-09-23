@@ -30,6 +30,7 @@ import { getTurnModifiers, canRetreatFromBattle } from './events.js'
 import { hexDistance } from './map.js'
 import { transferControlIfEnemyOwned } from './claim.js'
 import { removeStaleProductionMarkerAt } from './markers.js'
+import { canBesiegeCell, siegeAt } from './siege.js'
 import { canSupportCombatSide, isCombatPrepSideReady, isEliminatedPlayer } from './surrender.js'
 import type { GameSnapshot, RuntimeCellState } from './save-file.js'
 import type { PendingCombat, PendingCombatAwaitingContinue } from './save-file.js'
@@ -85,6 +86,11 @@ export interface CombatSidePreview {
   diceTotal: number
   /** Ожидаемые попадания за раунд. */
   expectedHits: number
+  /**
+   * Перебросы кубиков за раунд: у осаждённого, дерущегося на своей клетке, — по одному на
+   * каждый корабль гарнизона (ADR 019).
+   */
+  rerollPool?: number
 }
 
 export interface CombatPreview {
@@ -110,7 +116,10 @@ export interface DetectedCombat {
 
 /** Один брошенный кубик. */
 export interface CombatDieRoll {
+  /** Итоговое значение — после перебросов, если они были. */
   value: number
+  /** Прежние значения кубика, если осаждённый его перебрасывал. */
+  rerolls?: number[]
   threshold: number
   /** По кому стреляли; `null` — целей не осталось. */
   targetShipId: string | null
@@ -176,6 +185,18 @@ export interface CombatPrepState {
   /** Оставшиеся цели обстрела после текущей клетки */
   queuedBombardmentPlans?: import('./bombardment.js').BombardmentPlan[]
   incomingAttackerShipIds?: string[]
+  /** Атакующий может вместо штурма осадить этот центр власти. */
+  siegeAvailable?: boolean
+  /**
+   * Бой на клетке, где уже стоят корабли обеих сторон: вылазка из осады или штурм осаждающими.
+   * Атакующие — корабли атакующего на этой клетке.
+   */
+  assaultFrom?: HexCoord
+  /**
+   * Ответ осаждённого на только что установленную осаду: нападать необязательно, отмена
+   * подготовки — законный отказ. Маркер действия не тратится.
+   */
+  siegeResponse?: boolean
 }
 
 export const COMBAT_PREP_COUNTDOWN_MS = 3000
@@ -429,6 +450,7 @@ export function isCombatDestination(
 ): boolean {
   const cell = cellAt(game, dest)
   if (!cell) return false
+  if (siegeAt(game, dest)?.besiegerId === attackerId) return false
 
   return cell.ships.some((s) => s.ownerId !== attackerId)
 }
@@ -441,6 +463,8 @@ export function isBombardmentDestination(
 ): boolean {
   const cell = cellAt(game, dest)
   if (!cell) return false
+  // В осаждённую клетку обстрел не ведут: там стоят вперемешку оба флота.
+  if (siegeAt(game, dest)) return false
 
   const enemyShips = cell.ships.some((s) => s.ownerId !== attackerId)
   const enemyControl = cell.controlOwnerId != null && cell.controlOwnerId !== attackerId
@@ -540,6 +564,8 @@ export function collectSupportShips(
       if (battleHexShipIds.has(ship.id)) continue
       const fromCoord = positionOverrides?.get(ship.id) ?? cell.coord
       if (hexKey(fromCoord.q, fromCoord.r) === battleKey) continue
+      // Из осаждённой клетки не поддерживают: флоты там связаны друг другом.
+      if (siegeAt(game, fromCoord)) continue
       const distance = hexDistance(battleCoord, fromCoord)
       const threshold = shipHitThreshold(ship.type, distance, modifier)
       if (threshold == null) continue
@@ -560,9 +586,15 @@ export function collectSupportShips(
 }
 
 function inferDefenderId(
+  game: GameSnapshot,
   cell: NonNullable<ReturnType<typeof cellAt>>,
   attackerId: string,
 ): string | null {
+  // Третий игрок, вошедший в осаждённую клетку, бьётся с осаждающим; гарнизон в стороне.
+  const siege = siegeAt(game, cell.coord)
+  if (siege && attackerId !== siege.besiegerId && attackerId !== siege.besiegedId) {
+    return siege.besiegerId
+  }
   const owners = distinctOwners(cell.ships.filter((s) => s.ownerId !== attackerId))
   if (owners.length === 1) return owners[0]
   if (cell.controlOwnerId && cell.controlOwnerId !== attackerId) {
@@ -672,7 +704,7 @@ export function buildCombatPreview(
     : isCombatDestination(game, attackerId, coord)
   if (!contested) return null
 
-  const defenderId = inferDefenderId(cell, attackerId)
+  const defenderId = inferDefenderId(game, cell, attackerId)
   if (!defenderId) return null
 
   const damage = options.damageByShipId ?? {}
@@ -704,13 +736,19 @@ export function buildCombatPreview(
     }
   }
 
+  const siege = siegeAt(game, coord)
+  const rerollPoolFor = (side: CombatSidePreview): CombatSidePreview =>
+    siege && side.playerId === siege.besiegedId && side.ships.length
+      ? { ...side, rerollPool: side.ships.length }
+      : side
+
   return {
     coord,
     coordKey: hexKey(coord.q, coord.r),
     trigger: 'movement',
     attackerId,
     defenderId,
-    attacker: buildSidePreview(
+    attacker: rerollPoolFor(buildSidePreview(
       game,
       coord,
       attackerId,
@@ -720,8 +758,8 @@ export function buildCombatPreview(
       damage,
       assignedAttackerSupport,
       attackerSupportOverrides,
-    ),
-    defender: buildSidePreview(
+    )),
+    defender: rerollPoolFor(buildSidePreview(
       game,
       coord,
       defenderId,
@@ -730,7 +768,7 @@ export function buildCombatPreview(
       attackerId,
       damage,
       assignedDefenderSupport,
-    ),
+    )),
     supportCandidates: [...supportCandidates.entries()].map(([playerId, ships]) => ({ playerId, ships })),
     notes: [
       'Каждый корабль бросает свои кубики и попадает по порогу своего класса.',
@@ -773,7 +811,7 @@ export function detectCombatsFromMoves(
     if (seen.has(key)) continue
     if (!isCombatDestination(game, attackerId, move.to)) continue
     const cell = cellAt(game, move.to)!
-    const defenderId = inferDefenderId(cell, attackerId)
+    const defenderId = inferDefenderId(game, cell, attackerId)
     if (!defenderId) continue
     seen.add(key)
     pending.push({
@@ -898,12 +936,23 @@ export function rollCombatRound(
       explicit: sideOptions?.diceTargets,
     })
 
+    const values = slots.map(() => rollDice(1, MAX_DIE_VALUE, rng, fixedDiceValue)[0]!)
+    const rerolled = rerollMisses(
+      slots.map((slot, index) => ({
+        value: values[index]!,
+        threshold: slot.threshold,
+        eligible: allocation[index] != null && owners[index]!.distance === 0,
+      })),
+      side.rerollPool ?? 0,
+      () => rollDice(1, MAX_DIE_VALUE, rng, fixedDiceValue)[0]!,
+    )
+
     const logs = new Map<string, ShipCombatRollLog>()
     slots.forEach((slot, index) => {
       const shooter = owners[index]!
-      const [value] = rollDice(1, MAX_DIE_VALUE, rng, fixedDiceValue)
+      const value = rerolled[index]!.value
       const targetShipId = allocation[index] ?? null
-      const hit = targetShipId != null && value! >= slot.threshold
+      const hit = targetShipId != null && value >= slot.threshold
       let log = logs.get(shooter.shipId)
       if (!log) {
         log = {
@@ -918,7 +967,14 @@ export function rollCombatRound(
         logs.set(shooter.shipId, log)
         shipRolls.push(log)
       }
-      log.dice.push({ value: value!, threshold: slot.threshold, targetShipId, hit })
+      const history = rerolled[index]!.history
+      log.dice.push({
+        value,
+        threshold: slot.threshold,
+        targetShipId,
+        hit,
+        ...(history.length ? { rerolls: history } : {}),
+      })
       if (hit) {
         log.hits += 1
         hitsBySide[side.role] += 1
@@ -945,6 +1001,36 @@ export function rollCombatRound(
     damageByShipId: nextDamage,
     destroyedShipIds,
   }
+}
+
+/**
+ * Перебросы осаждённого: сначала каждый промах по одному разу — так больше попаданий в сумме,
+ * — потом, если перебросы остались, снова по кругу. Человек мог бы и сливать все перебросы в
+ * один кубик; движок раздаёт их за него (интерфейса выбора пока нет).
+ */
+function rerollMisses(
+  dice: readonly { value: number; threshold: number; eligible: boolean }[],
+  pool: number,
+  roll: () => number,
+): { value: number; history: number[] }[] {
+  const out = dice.map((die) => ({ value: die.value, history: [] as number[] }))
+  let left = pool
+  let progressed = true
+  while (left > 0 && progressed) {
+    progressed = false
+    const order = dice
+      .map((die, index) => ({ die, index }))
+      .filter(({ die, index }) => die.eligible && out[index]!.value < die.threshold)
+      .sort((a, b) => a.die.threshold - b.die.threshold || a.index - b.index)
+    for (const { index } of order) {
+      if (left <= 0) break
+      out[index]!.history.push(out[index]!.value)
+      out[index]!.value = roll()
+      left -= 1
+      progressed = true
+    }
+  }
+  return out
 }
 
 /** Человекочитаемая строка итога раунда. */
@@ -1151,6 +1237,12 @@ export function validatePendingCombatPrepOptions(game: GameSnapshot): string[] {
     return validateCombatOptions(game, preview, incomingIds, opts)
   }
 
+  if (prep.assaultFrom) {
+    const preview = buildCombatPreview(game, coord, attackerId, attackerShipsAt(game, coord, attackerId))
+    if (!preview) return ['Не удалось проверить параметры боя']
+    return validateCombatOptions(game, preview, [], opts)
+  }
+
   if (prep.movementFrom && prep.movementPlans) {
     const fromCell = cellAt(game, prep.movementFrom)
     const incomingShips = incomingIds
@@ -1299,6 +1391,11 @@ export function defenderIdsOnCell(
 ): string[] {
   const cell = cellAt(game, coord)
   if (!cell) return []
+  // Третий игрок в осаждённой клетке бьётся только с осаждающим: гарнизон в его бою не участвует.
+  const siege = siegeAt(game, coord)
+  if (siege && attackerId !== siege.besiegerId && attackerId !== siege.besiegedId) {
+    return cell.ships.some((s) => s.ownerId === siege.besiegerId) ? [siege.besiegerId] : []
+  }
   return [...new Set(cell.ships.filter((s) => s.ownerId !== attackerId).map((s) => s.ownerId))]
 }
 
@@ -1319,7 +1416,11 @@ function incomingShipsForPendingContinuation(
   pending: NonNullable<GameSnapshot['pendingCombat']>,
 ): ShipUnit[] {
   const continuation = pending.continuation
-  if (!continuation) return []
+  if (!continuation) {
+    // Бой на общей клетке (вылазка, штурм осады): атакующие уже стоят на клетке боя.
+    const [q, r] = pending.cellKey.split(',').map(Number)
+    return cellAt(game, { q, r })?.ships.filter((ship) => ship.ownerId === pending.attackerId) ?? []
+  }
   const fromCell = cellAt(game, continuation.movementFrom)
   return continuation.incomingAttackerShipIds
     .map((id) => fromCell?.ships.find((ship) => ship.id === id))
@@ -1820,6 +1921,10 @@ export function stopPendingCombat(
   return []
 }
 
+function attackerShipsAt(game: GameSnapshot, coord: HexCoord, attackerId: string): ShipUnit[] {
+  return cellAt(game, coord)?.ships.filter((ship) => ship.ownerId === attackerId) ?? []
+}
+
 /** Превью боя из pendingCombat — по текущей фазе */
 export function buildCombatPreviewFromPending(game: GameSnapshot): CombatPreview | null {
   const pending = game.pendingCombat
@@ -1829,6 +1934,11 @@ export function buildCombatPreviewFromPending(game: GameSnapshot): CombatPreview
 
   if (pending.phase === 'prep') {
     const prep = pending.prep
+    if (prep.assaultFrom) {
+      return buildCombatPreview(game, coord, pending.attackerId, attackerShipsAt(game, coord, pending.attackerId), {
+        supportSides: prep.combatOptions.supportSides,
+      })
+    }
     if (pending.trigger === 'bombardment' && prep.bombardmentFrom && prep.bombardmentPlans?.length) {
       const fromCell = cellAt(game, prep.bombardmentFrom)
       if (!fromCell) return null
@@ -1893,9 +2003,51 @@ export function setupCombatPrepForMovement(
       movementFrom: from,
       movementPlans: moves.map((m) => ({ ...m, to: { ...m.to } })),
       incomingAttackerShipIds: [...incomingShipIds],
+      ...(canBesiegeCell(game, playerId, combatCoord) ? { siegeAvailable: true } : {}),
     },
   }
   pushCombatEvent(game, `Подготовка к бою на (${combatCoord.q},${combatCoord.r})`)
+  return []
+}
+
+/**
+ * Подготовка боя на общей клетке: вылазка осаждённого, штурм осаждающим или ответ осаждённого
+ * на только что установленную осаду.
+ */
+export function setupCombatPrepForAssault(
+  game: GameSnapshot,
+  playerId: string,
+  coord: HexCoord,
+  options: { siegeResponse?: boolean } = {},
+): string[] {
+  const attackers = attackerShipsAt(game, coord, playerId)
+  if (!attackers.length) return ['На клетке нет ваших кораблей']
+  const preview = buildCombatPreview(game, coord, playerId, attackers)
+  if (!preview) return ['На клетке нет противника']
+
+  game.pendingCombat = {
+    cellKey: hexKey(coord.q, coord.r),
+    attackerId: playerId,
+    defenderIds: [preview.defenderId],
+    roundNumber: 1,
+    phase: 'prep',
+    trigger: 'stack',
+    shipsDestroyedInCombat: false,
+    prep: {
+      phase: 'prep',
+      defenderId: preview.defenderId,
+      readyBy: {},
+      combatOptions: {},
+      assaultFrom: { ...coord },
+      ...(options.siegeResponse ? { siegeResponse: true } : {}),
+    },
+  }
+  pushCombatEvent(
+    game,
+    options.siegeResponse
+      ? `Осаждённый решает, нападать ли на осаждающих на (${coord.q},${coord.r})`
+      : `Подготовка к бою на общей клетке (${coord.q},${coord.r})`,
+  )
   return []
 }
 
@@ -2097,8 +2249,12 @@ export function cancelCombatPrep(game: GameSnapshot, playerId: string): { errors
   const pending = game.pendingCombat
   if (pending?.phase !== 'prep') return { errors: ['Нет подготовки к бою'] }
   if (pending.attackerId !== playerId) return { errors: ['Отменить подготовку может только атакующий'] }
+  const declinedResponse = pending.prep.siegeResponse === true
   game.pendingCombat = undefined
-  pushCombatEvent(game, 'Подготовка к бою отменена атакующим')
+  pushCombatEvent(
+    game,
+    declinedResponse ? 'Осаждённый не стал нападать на осаждающих' : 'Подготовка к бою отменена атакующим',
+  )
   return { errors: [] }
 }
 

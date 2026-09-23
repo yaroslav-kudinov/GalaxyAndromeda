@@ -66,6 +66,7 @@ const emit = defineEmits<{
     payload: { active: boolean; pickKeys: string[]; pickedKeys: string[] },
   ]
   removeMarker: []
+  assault: []
 }>()
 
 const SHIP_SHORT: Record<ShipType, string> = {
@@ -83,6 +84,21 @@ const {
   onDragHandlePointerDown,
   consumeDragClick,
 } = useDraggablePanel()
+
+/**
+ * На клетке маркера стоят и ваши корабли, и чужие — это осада. Маркер можно исполнить боем
+ * прямо на клетке: вылазкой гарнизона или штурмом осаждающих.
+ */
+const sharedCellEnemy = computed(() => {
+  const cell = props.snapshot.cells.find(
+    (c) => c.coord.q === props.source.q && c.coord.r === props.source.r,
+  )
+  if (!cell) return false
+  return (
+    cell.ships.some((ship) => ship.ownerId === props.playerId)
+    && cell.ships.some((ship) => ship.ownerId !== props.playerId)
+  )
+})
 
 /** Клик по фону закрывает окно, но не после перетаскивания за шапку */
 function onBackdropClick() {
@@ -828,6 +844,15 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
           Снять маркер без действия
         </button>
         <button type="button" class="btn-secondary" @click="emit('close')">Отмена</button>
+        <button
+          v-if="sharedCellEnemy"
+          type="button"
+          class="btn-primary"
+          title="Бой с чужими кораблями на этой клетке, без перемещения"
+          @click="emit('assault')"
+        >
+          Атаковать на клетке
+        </button>
         <button
           v-if="actionMode === 'build'"
           type="button"

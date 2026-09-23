@@ -60,6 +60,17 @@ const ownerName = computed(() =>
         </span>
 
         <span
+          v-if="cell.besiegedBy != null"
+          class="chip chip--siege"
+          role="listitem"
+          :title="`В осаде: ${ownerLabel(cell.besiegedBy, players)}. Гарнизон теряет по кораблю в начале каждого хода.`"
+          aria-label="В осаде"
+        >
+          <span class="chip-icon" aria-hidden="true">⛓</span>
+          <span class="chip-text">осада</span>
+        </span>
+
+        <span
           v-if="token"
           class="chip"
           role="listitem"
@@ -362,5 +373,9 @@ const ownerName = computed(() =>
 }
 .remove-marker-btn--production:hover {
   background: rgba(157, 23, 77, 0.65);
+}
+.chip--siege {
+  border-color: rgba(248, 113, 113, 0.7);
+  color: #fecaca;
 }
 </style>

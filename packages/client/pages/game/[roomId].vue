@@ -25,6 +25,7 @@ import {
   mustResolveActionMarkerBeforeAdvance,
   getLegalActionsForSnapshot,
   applyGameActionOnSnapshot,
+  canBesiegeCell,
   getActiveEventObservation,
   getTurnEventHistory,
   removeActionMarker,
@@ -1735,6 +1736,109 @@ async function submitCombatSupportSide(side: 'attacker' | 'defender' | null) {
   }
 }
 
+/**
+ * Осада вместо штурма доступна при входе на защищённый чужой центр власти. Онлайн это
+ * говорит подготовка боя; в локальной партии подготовки нет — проверяем по доске.
+ */
+const battleSiegeAvailable = computed(() => {
+  if (combatPrepState.value) return combatPrepState.value.siegeAvailable === true
+  const order = pendingOrderAfterBattle.value
+  const game = saveFile.value?.game
+  if (!order || order.kind !== 'movement' || !game) return false
+  const target = order.moves.find((move) =>
+    game.cells.some(
+      (cell) =>
+        cell.coord.q === move.to.q
+        && cell.coord.r === move.to.r
+        && cell.ships.some((ship) => ship.ownerId !== playerId.value),
+    ),
+  )
+  return !!target && canBesiegeCell(game, playerId.value, target.to)
+})
+
+async function establishSiegeAction() {
+  if (battleResolving.value || !saveFile.value?.game) return
+  battleResolving.value = true
+  markerActionHint.value = null
+  try {
+    if (serverStatus.value === 'online' && !roomId.value.startsWith('local-')) {
+      bumpObservationEpoch()
+      const obs = await submitGameAction(roomId.value, playerId.value, 'establish-siege')
+      applyObservation(obs)
+      persistLocal()
+    } else {
+      const order = pendingOrderAfterBattle.value
+      if (!order || order.kind !== 'movement') return
+      const game = saveFile.value.game
+      const map = saveFile.value.map
+      // Локально подготовки нет: ставим её ходом без параметров боя и сразу осаждаем.
+      const prep = applyGameActionOnSnapshot(game, map, playerId.value, 'execute-marker-movement', {
+        from: order.from,
+        moves: order.moves,
+      })
+      const siege = prep.errors.length
+        ? prep
+        : applyGameActionOnSnapshot(game, map, playerId.value, 'establish-siege')
+      if (siege.errors.length) {
+        markerActionHint.value = siege.errors[0] ?? null
+        return
+      }
+      // Ответ осаждённого в локальной партии не спрашиваем: он ответит вылазкой в свой ход.
+      if (game.pendingCombat?.phase === 'prep' && game.pendingCombat.prep.siegeResponse) {
+        applyGameActionOnSnapshot(game, map, game.pendingCombat.attackerId, 'cancel-combat-prep')
+      }
+      persistLocal()
+      refreshLocalLegalActions()
+    }
+    pendingOrderAfterBattle.value = null
+    battleResolution.value = null
+    closeBattleModal()
+    markerActionHint.value = 'Осада установлена: гарнизон будет терять по кораблю в начале хода'
+  } catch (e) {
+    markerActionHint.value = actionErrorMessage(e, 'Не удалось установить осаду')
+  } finally {
+    battleResolving.value = false
+  }
+}
+
+/** Маркер на клетке с чужими кораблями: бой прямо здесь — вылазка или штурм осады. */
+async function assaultFromMarker() {
+  const from = markerActionSource.value
+  if (!saveFile.value?.game || !from || markerActionBusy.value) return
+  markerActionBusy.value = true
+  markerActionHint.value = null
+  closeMarkerActionModal()
+  try {
+    if (serverStatus.value === 'online' && !roomId.value.startsWith('local-')) {
+      bumpObservationEpoch()
+      const obs = await submitGameAction(roomId.value, playerId.value, 'execute-marker-assault', { from })
+      applyObservation(obs)
+      persistLocal()
+      markerActionHint.value = 'Подготовка к бою на клетке'
+      return
+    }
+    const result = applyGameActionOnSnapshot(
+      saveFile.value.game,
+      saveFile.value.map,
+      playerId.value,
+      'execute-marker-assault',
+      { from, combatOptions: {} },
+    )
+    if (result.errors.length) {
+      markerActionHint.value = result.errors[0] ?? null
+      return
+    }
+    battleResolution.value = result.combatResult ?? null
+    persistLocal()
+    refreshLocalLegalActions()
+    markerActionHint.value = 'Бой на клетке'
+  } catch (e) {
+    markerActionHint.value = actionErrorMessage(e, 'Не удалось начать бой')
+  } finally {
+    markerActionBusy.value = false
+  }
+}
+
 async function cancelCombatPrepAction() {
   if (battleResolving.value) return
   battleResolving.value = true
@@ -2938,6 +3042,7 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
       @start-pick="startMarkerMapPick"
       @execute-build="confirmMarkerBuild($event.orders, $event.spentTokens)"
       @remove-marker="removeMarkerAtSourceFromModal"
+      @assault="assaultFromMarker"
     />
 
     <BattleModal
@@ -2956,6 +3061,9 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
       :continue-decision-role="combatDecisionRole"
       :retreat-allowed="combatRetreatAllowed"
       :retreat-destinations="retreatDestinations"
+      :siege-available="battleSiegeAvailable"
+      :siege-response="combatPrepState?.siegeResponse === true"
+      @establish-siege="establishSiegeAction"
       @close="closeBattleModal"
       @resolve="resolveBattleWithOptions"
       @prep-ready="resolveBattleWithOptions"

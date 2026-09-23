@@ -32,6 +32,7 @@ import {
   hexKey,
   hitProbability,
   rechargePicksRemaining,
+  siegeLossesOwedBy,
   SHIP_DICE,
   SHIP_HIT_THRESHOLD,
   SHIP_HULL,
@@ -230,7 +231,12 @@ function targetScore(
   if (cell.isPowerCenter) {
     if (cell.controlOwnerId === playerId) return defended && canWin ? 60 : 5
     if (!defended) return cell.controlOwnerId == null ? 120 : 110
-    return canWin ? 90 : -1
+    if (canWin) return 90
+    // Без перевеса центр можно осадить: гарнизон тает сам, лишь бы нас не выбили вылазкой.
+    const holds =
+      attackers.length > 0
+      && combatStrength(attackers) >= combatStrength(enemies.map((s) => s.type))
+    return holds && cell.controlOwnerId !== null ? 70 : -1
   }
 
   if (defended && !canWin) return -1
@@ -448,6 +454,13 @@ function stepActions(
  * Стоит ли стороне продолжать бой: оставшаяся сила (ожидаемые попадания на оставшуюся
  * прочность) не меньше вражеской. Отступление — чтобы не терять флот в заведомо проигранном бою.
  */
+/** Штурмовать, а не осаждать: сила атаки втрое больше обороны вместе с перебросами. */
+function overwhelms(preview: CombatPreview): boolean {
+  const strength = (side: CombatPreview['attacker']) =>
+    side.expectedHits * side.ships.reduce((sum, ship) => sum + ship.hull, 0)
+  return strength(preview.attacker) >= 3 * strength(preview.defender)
+}
+
 function sideHoldsOut(preview: CombatPreview, side: 'attacker' | 'defender'): boolean {
   const strength = (sidePreview: CombatPreview['attacker']) => {
     const hull = sidePreview.ships.reduce((sum, ship) => sum + Math.max(0, ship.hull - ship.damage), 0)
@@ -462,7 +475,12 @@ function sideHoldsOut(preview: CombatPreview, side: 'attacker' | 'defender'): bo
  * Один шаг боевого конечного автомата. Возвращает false, если продвинуться не удалось —
  * тогда вызывающий аварийно снимает бой, чтобы партия не зависла.
  */
-function stepCombat(game: GameSnapshot, map: MapDefinition, options: RunOptions): boolean {
+function stepCombat(
+  game: GameSnapshot,
+  map: MapDefinition,
+  options: RunOptions,
+  record?: GameRecord,
+): boolean {
   const pending = game.pendingCombat
   if (!pending) return true
 
@@ -476,6 +494,19 @@ function stepCombat(game: GameSnapshot, map: MapDefinition, options: RunOptions)
       return errors.length === 0
     }
     const attackerId = pending.attackerId
+    const preview = buildCombatPreviewFromPending(game)
+    if (prep.siegeAvailable && preview && !overwhelms(preview)) {
+      // Штурм без подавляющего перевеса стоит флота; осада берёт центр бесплатно, но дольше.
+      const siege = applyGameActionOnSnapshot(game, map, attackerId, 'establish-siege')
+      if (!siege.errors.length) {
+        if (record) record.sieges.established += 1
+        return true
+      }
+    }
+    if (prep.siegeResponse && preview && !sideHoldsOut(preview, 'attacker')) {
+      const decline = applyGameActionOnSnapshot(game, map, attackerId, 'cancel-combat-prep')
+      return decline.errors.length === 0
+    }
     const ready = applyGameActionOnSnapshot(game, map, attackerId, 'update-combat-prep', {
       ready: true,
     })
@@ -651,6 +682,7 @@ export function runGame(map: MapDefinition, seed: number, options: RunOptions): 
       firstUnlockTurn: {},
       eliminationTurns: [],
       battles: [],
+      sieges: { established: 0, captured: 0, lifted: 0 },
     }
 
     if (playerIds.length < 2) {
@@ -718,7 +750,20 @@ export function runGame(map: MapDefinition, seed: number, options: RunOptions): 
       orderIndex = 0
     }
 
+    let knownSieges: Record<string, { besiegerId: string }> = {}
+    const watchSieges = () => {
+      const now = game.sieges ?? {}
+      for (const [key, siege] of Object.entries(knownSieges)) {
+        if (now[key]) continue
+        const cell = indexCells(game).get(key)
+        if (cell?.controlOwnerId === siege.besiegerId) record.sieges.captured += 1
+        else record.sieges.lifted += 1
+      }
+      knownSieges = Object.fromEntries(Object.entries(now).map(([key, siege]) => [key, { besiegerId: siege.besiegerId }]))
+    }
+
     while (steps-- > 0) {
+      watchSieges()
       if (game.gameOver) break
       if (game.turnNumber > options.maxTurns) {
         record.hitTurnCap = true
@@ -728,7 +773,7 @@ export function runGame(map: MapDefinition, seed: number, options: RunOptions): 
       if (game.pendingCombat) {
         battle ??= watchBattle(game)
         combatGuard += 1
-        const progressed = stepCombat(game, map, options)
+        const progressed = stepCombat(game, map, options, record)
         if (!progressed || combatGuard > 200) {
           const attackerId = game.pendingCombat?.attackerId
           if (attackerId) applyGameActionOnSnapshot(game, map, attackerId, 'abort-combat')
@@ -757,7 +802,12 @@ export function runGame(map: MapDefinition, seed: number, options: RunOptions): 
       }
 
       let progressed = false
-      if (game.phase === 'planning' && claimPicksRemaining(game, active) > 0) {
+      if (game.phase === 'planning' && siegeLossesOwedBy(game, active).length > 0) {
+        progressed = applyGameActionOnSnapshot(
+          game, map, active, 'execute-siege-losses',
+        ).errors.length === 0
+      }
+      if (!progressed && game.phase === 'planning' && claimPicksRemaining(game, active) > 0) {
         progressed = applyGameActionOnSnapshot(
           game, map, active, 'execute-claim-picks',
         ).errors.length === 0

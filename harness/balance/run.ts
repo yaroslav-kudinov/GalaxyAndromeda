@@ -161,6 +161,9 @@ function report(mapId: string, summary: Summary, records: readonly GameRecord[])
     `Потери за бой по цене: атакующий ${num(summary.battles.meanAttackerLossValue)}, `
       + `защитник ${num(summary.battles.meanDefenderLossValue)}`,
   )
+  lines.push(
+    `Осад за партию: ${num(summary.sieges.perGame)}; доля взятых из завершённых: ${percent(summary.sieges.capturedShare)}`,
+  )
   lines.push('Исходы: ' + (Object.entries(summary.victoryReasons)
     .map(([reason, n]) => `${reason} ${n}`).join(', ') || '—'))
 

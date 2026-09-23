@@ -1,6 +1,6 @@
 import { MAX_SHIPS_PER_CELL, MAX_SHIPS_PER_CELL_PER_PLAYER, SHIP_LABELS } from './constants.js'
 import { trimGameEventLog } from './event-log.js'
-import { getCellKeys, HEX_DIRECTIONS } from './map.js'
+import { getCellKeys, HEX_DIRECTIONS, hexDistance } from './map.js'
 import {
   ACTION_MARKER_ALREADY_RESOLVED_MSG,
   ACTION_MARKER_MUST_RESOLVE_BEFORE_ADVANCE_MSG,
@@ -46,6 +46,7 @@ import {
   isCombatDestination,
   resolveCombatAtCell,
   removeOrphanedActionMarkersAt,
+  setupCombatPrepForAssault,
   setupCombatPrepForMovement,
   stopPendingCombat,
   syncEliminatedCombatAutomation,
@@ -72,6 +73,14 @@ import {
 import type { ResourceTokenRef } from './resource-recharge.js'
 import { applyVictoryAndDefeatChecks } from './victory.js'
 import { surrenderPlayer } from './surrender.js'
+import {
+  autoResolveSiegeLosses,
+  establishSiegeRecord,
+  executeSiegeLosses,
+  siegeLossesOwedBy,
+  syncSieges,
+  validateGarrisonDeparture,
+} from './siege.js'
 
 export interface ShipMovePlan {
   shipId: string
@@ -409,6 +418,7 @@ export function validateMarkerMovement(
   }
 
   errors.push(...validateSingleCombatDestination(game, moves, playerId))
+  errors.push(...validateGarrisonDeparture(game, playerId, from, moves, hexDistance))
 
   return errors
 }
@@ -648,7 +658,8 @@ export function resolveCombatPrep(
   const queuedBombardmentPlans = prep.queuedBombardmentPlans ?? []
 
   const isBombardment = trigger === 'bombardment' && bombardmentFrom && bombardmentPlans
-  if (!isBombardment && !(movementFrom && movementPlans)) {
+  const assaultFrom = prep.assaultFrom
+  if (!isBombardment && !assaultFrom && !(movementFrom && movementPlans)) {
     return { errors: ['Некорректное состояние подготовки боя'] }
   }
 
@@ -656,7 +667,11 @@ export function resolveCombatPrep(
   // оставил бы игроков без экрана боя и без возможности повторить.
   game.pendingCombat = undefined
 
-  const result = isBombardment
+  const result = assaultFrom
+    ? executeAssaultOnSharedCell(game, map, attackerId, assaultFrom, opts ?? {}, {
+        consumeMarker: !prep.siegeResponse,
+      })
+    : isBombardment
     ? executeMarkerBombardment(
         game,
         map,
@@ -675,7 +690,118 @@ export function resolveCombatPrep(
     prep.readyBy = {}
   }
 
+  settleSieges(game, map.id)
   return result
+}
+
+/**
+ * Бой на клетке, где уже стоят корабли обеих сторон: вылазка осаждённого, штурм осады или ответ
+ * осаждённого. Маркер действия тратится в момент начала боя — корабли никуда не летят, дожимать
+ * после боя нечего.
+ */
+export function executeAssaultOnSharedCell(
+  game: GameSnapshot,
+  map: MapDefinition,
+  playerId: string,
+  coord: HexCoord,
+  combatOptions: CombatOptions,
+  options: { consumeMarker: boolean },
+): MarkerActionExecution {
+  const cell = cellAt(game, coord)
+  const attackers = cell?.ships.filter((ship) => ship.ownerId === playerId) ?? []
+  const preview = buildCombatPreview(game, coord, playerId, attackers, {
+    supportSides: combatOptions.supportSides,
+  })
+  if (!cell || !preview) return { errors: ['На клетке нет противника'] }
+
+  if (options.consumeMarker) {
+    const marker = game.actionMarkers.find(
+      (m) => m.ownerId === playerId && hexKey(m.coord.q, m.coord.r) === hexKey(coord.q, coord.r),
+    )
+    if (marker) removeActionMarker(game, marker.id, playerId)
+    markActionMarkerResolvedThisTurn(game)
+  }
+
+  const first = resolveCombatAtCell(game, coord, playerId, attackers, combatOptions, Math.random, preview)
+  applyCombatResultToSnapshot(game, first, playerId, preview.defenderId)
+  const followUp = beginOrAwaitCombatContinuation(game, {
+    coord,
+    attackerId: playerId,
+    completedRoundNumber: 1,
+    trigger: 'stack',
+    combatOptions,
+    shipsDestroyedInCombat: first.destroyedShipIds.length > 0,
+    damageByShipId: first.damageByShipId,
+    seedCombatResult: first,
+  })
+  applyVictoryAndDefeatChecks(game, map.id)
+  return { errors: followUp.errors, combatResult: followUp.combatResult ?? first }
+}
+
+/** Маркер на клетке с кораблями противника: атаковать их, не двигаясь. */
+export function executeMarkerAssault(
+  game: GameSnapshot,
+  map: MapDefinition,
+  playerId: string,
+  from: HexCoord,
+  combatOptions?: CombatOptions,
+): MarkerActionExecution {
+  if (game.phase !== 'actions') return { errors: ['Атаковать можно только в фазе «Действия»'] }
+  if (game.activePlayerId !== playerId) return { errors: ['Сейчас ход другого игрока'] }
+  if (game.actionMarkerResolvedThisTurn) return { errors: [ACTION_MARKER_ALREADY_RESOLVED_MSG] }
+  const marker = game.actionMarkers.find(
+    (m) => m.ownerId === playerId && hexKey(m.coord.q, m.coord.r) === hexKey(from.q, from.r),
+  )
+  if (!marker) return { errors: ['На клетке нет вашего маркера действия'] }
+  const cell = cellAt(game, from)
+  if (!cell?.ships.some((ship) => ship.ownerId === playerId)) {
+    return { errors: ['На клетке нет ваших кораблей'] }
+  }
+  if (!cell.ships.some((ship) => ship.ownerId !== playerId)) {
+    return { errors: ['На клетке нет кораблей противника'] }
+  }
+  if (!combatOptions) return { errors: setupCombatPrepForAssault(game, playerId, from) }
+  return executeAssaultOnSharedCell(game, map, playerId, from, combatOptions, { consumeMarker: true })
+}
+
+/**
+ * Вместо штурма осадить центр власти: корабли входят на клетку, боя нет, маркер исполнен.
+ * Осаждённого сразу спрашивают, не нападёт ли он немедленно.
+ */
+export function establishSiege(game: GameSnapshot, map: MapDefinition, playerId: string): string[] {
+  const pending = game.pendingCombat
+  const prep = combatPrepOf(pending)
+  if (!pending || !prep) return ['Нет подготовки к бою']
+  if (pending.attackerId !== playerId) return ['Осадить может только атакующий']
+  if (!prep.siegeAvailable || !prep.movementFrom || !prep.movementPlans) {
+    return ['Эту клетку осадить нельзя']
+  }
+  const [q, r] = pending.cellKey.split(',').map(Number)
+  const coord = { q: q!, r: r! }
+  const besiegedId = prep.defenderId
+
+  game.pendingCombat = undefined
+  finishPendingMovementPlans(
+    game,
+    playerId,
+    prep.movementFrom,
+    prep.movementPlans,
+    { attackerWon: true },
+    pending.cellKey,
+  )
+  establishSiegeRecord(game, coord, playerId, besiegedId)
+
+  const besieged = game.players.find((player) => player.id === besiegedId)
+  if (besieged && !besieged.eliminated) {
+    // Ответ необязателен: если гарнизону нечем стрелять, спрашивать не о чем.
+    const responseErrors = setupCombatPrepForAssault(game, besiegedId, coord, { siegeResponse: true })
+    if (!responseErrors.length) {
+      const preview = buildCombatPreviewFromPending(game)
+      if (!preview || preview.attacker.diceTotal === 0) game.pendingCombat = undefined
+    }
+  }
+  applyVictoryAndDefeatChecks(game, map.id)
+  return []
 }
 
 function parseHexKeyFromCellKey(key: string): HexCoord {
@@ -699,6 +825,16 @@ export function getLegalActionsForSnapshot(
       type: 'claimPicks',
       description: `Занять клетки (осталось ${owedClaims}); без выбора займутся лучшие`,
       params: { remaining: owedClaims },
+    })
+  }
+
+  const owedSiege = siegeLossesOwedBy(game, playerId)
+  if (game.phase === 'planning' && owedSiege.length > 0 && !game.gameOver) {
+    actions.push({
+      id: 'execute-siege-losses',
+      type: 'siegeLosses',
+      description: `Осада: выбрать потери гарнизона (клеток ${owedSiege.length}); без выбора погибнут самые дешёвые`,
+      params: { cells: owedSiege },
     })
   }
 
@@ -781,6 +917,20 @@ function appendCombatParticipantActions(
       type: 'combat',
       description: 'Готовность к бою',
     })
+    if (isAttacker && prep.siegeAvailable) {
+      pushUnique({
+        id: 'establish-siege',
+        type: 'combat',
+        description: 'Осадить центр власти вместо штурма',
+      })
+    }
+    if (isAttacker && prep.siegeResponse) {
+      pushUnique({
+        id: 'cancel-combat-prep',
+        type: 'combat',
+        description: 'Не нападать на осаждающих',
+      })
+    }
     return
   }
 
@@ -801,7 +951,30 @@ function appendCombatParticipantActions(
   }
 }
 
+/**
+ * Привести осады в соответствие доске и, если что-то изменилось, перепроверить победу:
+ * гибель или уход гарнизона передаёт центр власти осаждающему.
+ */
+export function settleSieges(game: GameSnapshot, mapId: string): void {
+  if (!game.sieges || game.gameOver) return
+  const before = JSON.stringify(game.sieges)
+  syncSieges(game)
+  if (JSON.stringify(game.sieges ?? null) !== before) applyVictoryAndDefeatChecks(game, mapId)
+}
+
 export function applyGameActionOnSnapshot(
+  game: GameSnapshot,
+  map: MapDefinition,
+  playerId: string,
+  actionId: string,
+  params?: Record<string, unknown>,
+): { errors: string[]; combatResult?: CombatResolutionResult } {
+  const result = dispatchGameAction(game, map, playerId, actionId, params)
+  settleSieges(game, map.id)
+  return result
+}
+
+function dispatchGameAction(
   game: GameSnapshot,
   map: MapDefinition,
   playerId: string,
@@ -816,7 +989,10 @@ export function applyGameActionOnSnapshot(
     return { errors }
   }
 
-  const isPrepAction = actionId === 'update-combat-prep' || actionId === 'cancel-combat-prep'
+  const isPrepAction =
+    actionId === 'update-combat-prep'
+    || actionId === 'cancel-combat-prep'
+    || actionId === 'establish-siege'
   if (game.pendingCombat?.phase === 'prep' && !isPrepAction && actionId !== 'abort-combat') {
     return { errors: ['Ожидается подготовка к бою'] }
   }
@@ -908,6 +1084,10 @@ export function applyGameActionOnSnapshot(
     return { errors }
   }
 
+  if (actionId === 'establish-siege') {
+    return { errors: establishSiege(game, map, playerId) }
+  }
+
   if (actionId === 'update-combat-prep') {
     const ready = params?.ready
     const rawPriority = params?.targetPriority
@@ -944,6 +1124,29 @@ export function applyGameActionOnSnapshot(
     if (!from || !Array.isArray(moves)) return { errors: ['Некорректные параметры действия'] }
     const result = executeMarkerMovement(game, map, playerId, from, moves, combatOptions)
     return { errors: result.errors, combatResult: result.combatResult }
+  }
+
+  if (actionId === 'execute-marker-assault') {
+    const from = params?.from as HexCoord | undefined
+    const combatOptions = params?.combatOptions as CombatOptions | undefined
+    if (!from) return { errors: ['Некорректные параметры действия'] }
+    const result = executeMarkerAssault(game, map, playerId, from, combatOptions)
+    return { errors: result.errors, combatResult: result.combatResult }
+  }
+
+  if (actionId === 'execute-siege-losses') {
+    const shipIds = params?.shipIds
+    if (shipIds == null) {
+      autoResolveSiegeLosses(game, playerId)
+      applyVictoryAndDefeatChecks(game, map.id)
+      return { errors: [] }
+    }
+    if (!Array.isArray(shipIds) || shipIds.some((id) => typeof id !== 'string')) {
+      return { errors: ['Некорректные параметры действия'] }
+    }
+    const errors = executeSiegeLosses(game, playerId, shipIds as string[])
+    if (!errors.length) applyVictoryAndDefeatChecks(game, map.id)
+    return { errors }
   }
 
   if (actionId === 'execute-marker-bombardment') {

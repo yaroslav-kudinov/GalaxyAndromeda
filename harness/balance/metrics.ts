@@ -49,6 +49,8 @@ export interface GameRecord {
   firstUnlockTurn: Record<string, number>
   eliminationTurns: { playerId: string; turn: number }[]
   battles: BattleRecord[]
+  /** Осады: установлено, взято (центр перешёл осаждающему), снято без взятия. */
+  sieges: { established: number; captured: number; lifted: number }
   /** Кому выдали стартовую фору, если замер идёт с форой. */
   handicappedPlayerId?: string
   error?: string
@@ -199,6 +201,7 @@ export interface Summary {
     meanAttackerLossValue: number
     meanDefenderLossValue: number
   }
+  sieges: { perGame: number; capturedShare: number | null }
   /** Замеры с форой: null, если фора не выдавалась. */
   handicap: {
     winRate: number | null
@@ -322,6 +325,17 @@ export function summarize(records: readonly GameRecord[]): Summary {
       outcomes,
       meanAttackerLossValue: mean(fights.map((battle) => battle.attackerLossValue)),
       meanDefenderLossValue: mean(fights.map((battle) => battle.defenderLossValue)),
+    },
+    sieges: {
+      perGame: ok.length ? ok.reduce((sum, record) => sum + (record.sieges?.established ?? 0), 0) / ok.length : 0,
+      capturedShare: (() => {
+        const ended = ok.reduce(
+          (sum, record) => sum + (record.sieges?.captured ?? 0) + (record.sieges?.lifted ?? 0),
+          0,
+        )
+        const captured = ok.reduce((sum, record) => sum + (record.sieges?.captured ?? 0), 0)
+        return ended ? captured / ended : null
+      })(),
     },
     handicap: {
       winRate: handicapped.length ? handicapWins / handicapped.length : null,

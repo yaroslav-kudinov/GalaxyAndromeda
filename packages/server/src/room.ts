@@ -479,6 +479,10 @@ function roomObservation(
       room.status === 'playing' ? (s.rechargePicksRemainingByPlayer ?? null) : undefined,
     claimPicksRemainingByPlayer:
       room.status === 'playing' ? (s.claimPicksRemainingByPlayer ?? null) : undefined,
+    sieges: room.status === 'playing' ? (s.sieges ?? null) : undefined,
+    siegeLossesOwedByPlayer:
+      room.status === 'playing' ? (s.siegeLossesOwedByPlayer ?? null) : undefined,
+    siegeTickTurn: room.status === 'playing' ? (s.siegeTickTurn ?? null) : undefined,
     lastCombatResult: room.lastCombatResult ?? null,
     observationRevision: room.observationRevision,
     roomStatus: room.status,

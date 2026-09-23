@@ -24,6 +24,7 @@ import {
   SHIP_PRODUCTION_COST,
 } from './ships.js'
 import { applyVictoryAndDefeatChecks } from './victory.js'
+import { siegeAt } from './siege.js'
 import type { HexCoord, ResourceTokenDef, ResourceTokenType, ShipType } from './types.js'
 import { hexKey } from './types.js'
 
@@ -316,6 +317,8 @@ export function getBuildableShipsForMarker(
 
     if (!region) {
       disabledReason = 'Регион маркера не найден'
+    } else if (siegeAt(game, marker.coord)?.besiegedId === playerId) {
+      disabledReason = BESIEGED_BUILD_BLOCKED_MSG
     } else if (isShipTypeBuildBlocked(game, type)) {
       disabledReason = 'Событие хода запрещает постройку этого класса'
     } else if (fleetRemaining < 1) {
@@ -352,6 +355,9 @@ function tokenAt(game: GameSnapshot, ref: TokenSpendRef): ResourceTokenDef | nul
   return token
 }
 
+/** Осаждённый не строит в осаждённой клетке: верфь отрезана (ADR 019). */
+export const BESIEGED_BUILD_BLOCKED_MSG = 'Клетка в осаде: строить здесь нельзя'
+
 function validateMarkerResolutionPreconditions(
   game: GameSnapshot,
   playerId: string,
@@ -367,6 +373,9 @@ function validateMarkerResolutionPreconditions(
   const cell = cellAt(game, marker.coord)
   if (!cell?.actionMarkerId || cell.actionMarkerId !== marker.id) {
     return ['На клетке нет этого маркера действия']
+  }
+  if (siegeAt(game, marker.coord)?.besiegedId === playerId) {
+    return [BESIEGED_BUILD_BLOCKED_MSG]
   }
 
   return { marker }

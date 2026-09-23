@@ -7,6 +7,7 @@ import {
   validateActionMarkerBeforeAdvance,
 } from './markers.js'
 import { autoResolveAllRechargePicks, refreshRechargeBudgets, rechargePicksRemaining } from './resource-recharge.js'
+import { applySiegeTick, autoResolveAllSiegeLosses, siegeLossesOwedBy } from './siege.js'
 import { applyVictoryAndDefeatChecks } from './victory.js'
 import type { GameSnapshot } from './save-file.js'
 import { gameStateFromSnapshot } from './save-file.js'
@@ -156,6 +157,7 @@ function canPlayerActInPhase(game: GameSnapshot, state: GameState, playerId: str
   if (state.phase === 'planning') {
     // Долги по захвату и перезарядке — такие же действия фазы планирования,
     // как расстановка маркеров.
+    if (siegeLossesOwedBy(game, playerId).length > 0) return true
     if (claimPicksRemaining(game, playerId) > 0) return true
     if (rechargePicksRemaining(game, playerId) > 0) return true
     const canPlaceAction = game.cells.some(
@@ -189,6 +191,7 @@ function applyTurnState(game: GameSnapshot, state: GameState, prevPhase: Phase, 
   // Выход из планирования: несделанный выбор не должен подвешивать партию.
   // Захват первым: от него зависит число центров власти, а значит и бюджет.
   if (prevPhase === 'planning' && game.phase !== 'planning') {
+    autoResolveAllSiegeLosses(game)
     autoResolveAllClaimPicks(game, state.mapId)
     autoResolveAllRechargePicks(game)
   }
@@ -409,6 +412,9 @@ export function completeEventsPhaseIfActive(game: GameSnapshot, mapId: string): 
   const errors = applyTurnEventIfInEventsPhase(game)
   if (errors.length) return errors
   refreshActionMarkerCapacity(game)
+  // Тик осады — в самом начале хода: гибель последнего корабля гарнизона меняет число центров
+  // власти, а от него зависит бюджет перезарядки.
+  applySiegeTick(game)
   refreshRechargeBudgets(game, (playerId) => claimPicksRemaining(game, playerId) > 0)
   return advanceGameSnapshot(game, mapId)
 }
@@ -437,6 +443,7 @@ export function advanceGameSnapshot(game: GameSnapshot, mapId: string): string[]
   applyTurnState(game, state, prevPhase, prevActivePlayerId)
   if (game.phase === 'planning' && prevPhase === 'events') {
     refreshActionMarkerCapacity(game)
+    applySiegeTick(game)
     refreshRechargeBudgets(game, (playerId) => claimPicksRemaining(game, playerId) > 0)
   }
   applyVictoryAndDefeatChecks(game, mapId)

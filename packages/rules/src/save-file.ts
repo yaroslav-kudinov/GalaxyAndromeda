@@ -80,6 +80,7 @@ export interface PendingEvent {
 }
 
 import type { CombatOptions, CombatPrepState, CombatRoundResult } from './combat.js'
+import type { SiegeState } from './siege.js'
 import { migrateLegacyEventId, type EventCardId, type TurnEventState } from './events.js'
 import type { GameOverState } from './victory.js'
 
@@ -296,6 +297,15 @@ export interface GameSnapshot {
    * чего, клетки занимаются сразу в конце хода.
    */
   claimPicksRemainingByPlayer?: Record<string, number>
+  /** Осаждённые центры власти по ключу клетки (ADR 019). */
+  sieges?: Record<string, SiegeState>
+  /**
+   * Клетки, где осаждённому предстоит выбрать, какой корабль гарнизона потерять. Заводится,
+   * только когда в гарнизоне корабли разных классов.
+   */
+  siegeLossesOwedByPlayer?: Record<string, string[]>
+  /** Ход, в котором тик осады уже прошёл: тик идемпотентен. */
+  siegeTickTurn?: number
   /** Глобальное событие текущего хода (одно на всех игроков) */
   turnEvent?: TurnEventState
   /**
@@ -555,6 +565,15 @@ function normalizeGameSnapshot(game: GameSnapshot, _map?: MapDefinition): GameSn
     claimPicksRemainingByPlayer: game.claimPicksRemainingByPlayer
       ? { ...game.claimPicksRemainingByPlayer }
       : undefined,
+    sieges: game.sieges
+      ? Object.fromEntries(Object.entries(game.sieges).map(([key, siege]) => [key, { ...siege }]))
+      : undefined,
+    siegeLossesOwedByPlayer: game.siegeLossesOwedByPlayer
+      ? Object.fromEntries(
+          Object.entries(game.siegeLossesOwedByPlayer).map(([key, cells]) => [key, [...cells]]),
+        )
+      : undefined,
+    siegeTickTurn: game.siegeTickTurn,
   }
 
   ensureMarkerLimits(normalized)
@@ -803,6 +822,13 @@ export function gameSnapshotFromObservation(
       'claimPicksRemainingByPlayer',
       preserve?.claimPicksRemainingByPlayer,
     ),
+    sieges: fromObservationField(mech, 'sieges', preserve?.sieges),
+    siegeLossesOwedByPlayer: fromObservationField(
+      mech,
+      'siegeLossesOwedByPlayer',
+      preserve?.siegeLossesOwedByPlayer,
+    ),
+    siegeTickTurn: fromObservationField(mech, 'siegeTickTurn', preserve?.siegeTickTurn),
   }, map)
 
   if (hasServerMarkers || !preserve) return game

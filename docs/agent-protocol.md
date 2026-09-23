@@ -28,7 +28,10 @@ HTTP base: `http://127.0.0.1:3001` (env `GAME_SERVER_URL` for MCP).
 | `continue-combat` | `{ combatOptions? }` | Решение продолжать: сначала attacker, затем defender; после двух подтверждений — следующий раунд |
 | `stop-combat` | `{ retreatTo: { q, r } }` | Текущий решающий участник отступает в соседнюю клетку без вражеских кораблей (сначала attacker, затем defender; кроме «Стоять насмерть!») |
 | `update-combat-prep` | `{ ready: boolean, targetPriority?: string[], supportSide?: 'attacker' \| 'defender' }` | Участники объявляют порядок целей + ready; неучастник с доступной поддержкой выбирает `supportSide` без ready |
-| `cancel-combat-prep` | — | Attacker cancels prep before battle starts |
+| `cancel-combat-prep` | — | Attacker cancels prep before battle starts; для `prep.siegeResponse` — отказ осаждённого нападать |
+| `establish-siege` | — | Атакующий в подготовке боя (`prep.siegeAvailable`) осаждает центр власти вместо штурма: корабли входят без боя, маркер исполнен (ADR 019) |
+| `execute-marker-assault` | `{ from, combatOptions? }` | Бой на клетке маркера с чужими кораблями без перемещения: вылазка гарнизона или штурм осаждающих |
+| `execute-siege-losses` | `{ shipIds? }` | Планирование: какой корабль каждого осаждённого гарнизона потерять (по одному на клетку из `siegeLossesOwedByPlayer`); без `shipIds` — самые дешёвые |
 | `abort-combat` | — | Participant aborts a stuck combat; pending movement is finalized |
 | `surrender` | — | Сдаться в любой момент: `eliminated`, контроль и маркеры сняты, корабли остаются |
 | `execute-production` | `{ markerId, ships, spentTokens? }` | Постройка в регионе; `ships` не пустой. `spentTokens` — явный выбор фишек оплаты (`{ coord, tokenIndex }[]`, только лицом вверх и в регионе маркера); без него фишки подбираются автоматически от крупных к мелким |

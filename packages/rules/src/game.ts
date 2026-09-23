@@ -111,6 +111,9 @@ export function buildObservation(
     'productionMarkerLimitByPlayer',
     'rechargePicksRemainingByPlayer',
     'claimPicksRemainingByPlayer',
+    'sieges',
+    'siegeLossesOwedByPlayer',
+    'siegeTickTurn',
   ] as const) {
     if (key in stateExtra) {
       mechanicsExtra[key] = stateExtra[key] ?? null

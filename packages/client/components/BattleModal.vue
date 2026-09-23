@@ -37,6 +37,10 @@ const props = defineProps<{
   continueDecisionRole?: 'attacker' | 'defender' | null
   retreatAllowed?: boolean
   retreatDestinations?: { q: number; r: number }[]
+  /** Атакующий может вместо штурма осадить центр власти. */
+  siegeAvailable?: boolean
+  /** Это ответ осаждённого на новую осаду: нападать необязательно. */
+  siegeResponse?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -49,6 +53,7 @@ const emit = defineEmits<{
   countdownComplete: []
   continueCombat: []
   stopCombat: [{ q: number; r: number }]
+  establishSiege: []
 }>()
 
 const {
@@ -384,7 +389,9 @@ onUnmounted(() => {
               phase === 'pre'
                 ? isBombardment
                   ? 'Подготовка к обстрелу'
-                  : 'Подготовка к бою'
+                  : siegeResponse
+                    ? 'Ответ на осаду'
+                    : 'Подготовка к бою'
                 : isBombardment
                   ? 'Обстрел'
                   : 'Бой'
@@ -427,6 +434,14 @@ onUnmounted(() => {
           <template v-else>
           <p v-if="isDefenderObserver" class="observer-banner">
             Вы наблюдаете за обстрелом
+          </p>
+          <p v-if="siegeResponse && isLocalAttacker" class="observer-banner">
+            Ваш центр власти осадили. Можно напасть на осаждающих сейчас или отказаться — тогда
+            гарнизон будет терять по кораблю в начале каждого хода.
+          </p>
+          <p v-else-if="siegeAvailable && isLocalAttacker" class="observer-banner">
+            Центр власти защищён. Можно штурмовать или осадить: флот встанет рядом с гарнизоном,
+            а гарнизон будет терять по кораблю в начале каждого хода.
           </p>
 
           <div class="fleet-arena">
@@ -650,7 +665,16 @@ onUnmounted(() => {
             :disabled="resolving"
             @click="emit('cancelPrep')"
           >
-            {{ isBombardment ? 'Отменить обстрел' : 'Отменить бой' }}
+            {{ isBombardment ? 'Отменить обстрел' : siegeResponse ? 'Не нападать' : 'Отменить бой' }}
+          </button>
+          <button
+            v-if="siegeAvailable && localPlayerId === preview.attackerId && !selfReady"
+            type="button"
+            class="btn-secondary"
+            :disabled="resolving || prepPhase === 'countdown'"
+            @click="emit('establishSiege')"
+          >
+            Осадить
           </button>
           <button
             v-if="!selfReady"
@@ -672,15 +696,25 @@ onUnmounted(() => {
           </button>
         </template>
         <!-- «Начать бой» — только локальная игра: в онлайне бой запускает countdown -->
-        <button
-          v-else-if="phase === 'pre' && !isOnlinePrep"
-          type="button"
-          class="btn-primary"
-          :disabled="resolving"
-          @click="startBattle"
-        >
-          {{ resolving ? 'Разрешение…' : 'Начать бой' }}
-        </button>
+        <template v-else-if="phase === 'pre' && !isOnlinePrep">
+          <button
+            v-if="siegeAvailable"
+            type="button"
+            class="btn-secondary"
+            :disabled="resolving"
+            @click="emit('establishSiege')"
+          >
+            Осадить
+          </button>
+          <button
+            type="button"
+            class="btn-primary"
+            :disabled="resolving"
+            @click="startBattle"
+          >
+            {{ resolving ? 'Разрешение…' : 'Начать бой' }}
+          </button>
+        </template>
         <template v-else-if="showModalContinueActions">
           <button
             type="button"
