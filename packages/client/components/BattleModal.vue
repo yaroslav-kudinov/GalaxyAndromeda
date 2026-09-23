@@ -70,6 +70,7 @@ const emit = defineEmits<{
 }>()
 
 const tt = useUiStrings().combatTargets
+const garrisonText = useUiStrings().garrisonChoice
 
 const {
   panelRef,
@@ -463,7 +464,13 @@ onUnmounted(() => {
         <section v-if="phase === 'pre'" class="pre-phase">
           <template v-if="isThirdParty">
             <p class="observer-banner">
-              {{ localSupportCandidate ? 'Сейчас будет бой. Ваши корабли рядом могут поддержать одну сторону.' : 'Сейчас будет бой.' }}
+              {{
+                localSupportCandidate?.garrisonShipIds?.length
+                  ? garrisonText.banner
+                  : localSupportCandidate
+                    ? 'Сейчас будет бой. Ваши корабли рядом могут поддержать одну сторону.'
+                    : 'Сейчас будет бой.'
+              }}
             </p>
             <ul v-if="localSupportCandidate" class="support-choice-list">
               <li v-for="ship in localSupportCandidate.ships" :key="ship.shipId">

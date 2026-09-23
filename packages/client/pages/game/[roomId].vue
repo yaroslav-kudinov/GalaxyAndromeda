@@ -32,6 +32,7 @@ import {
   eligibleClaimCells,
   rechargePicksRemaining,
   siegeLossesOwedBy,
+  siegeWithdrawDestinations,
   doctrineChoiceOwed,
   removeActionMarker,
   canRemoveActionMarkerThisTurn,
@@ -1101,8 +1102,34 @@ function toggleClaimOnMap(key: string): boolean {
   return true
 }
 
+// Перебросы гарнизона идут в своём окне — окно боя с прошлым раундом не перекрывает его.
+watch(
+  () => snapshot.value?.pendingCombat?.phase,
+  (phase) => {
+    if (phase === 'awaiting-rerolls') battleModalOpen.value = false
+  },
+)
+
+/** Бой за осаждённый центр выигран — победитель решает, продолжать ли осаду. */
+const siegeContinuationMine = computed(() => {
+  const choice = snapshot.value?.siegeContinuationChoice
+  return choice && choice.playerId === playerId.value ? choice : null
+})
+const siegeContinuationCoord = computed(() => {
+  const key = siegeContinuationMine.value?.cellKey
+  if (!key) return null
+  const [q, r] = key.split(',').map(Number)
+  return { q: q!, r: r! }
+})
+const siegeWithdrawOptions = computed(() => {
+  const choice = siegeContinuationMine.value
+  if (!choice || !snapshot.value) return []
+  return siegeWithdrawDestinations(snapshot.value, playerId.value, choice.cellKey)
+})
+
 const phaseAdvanceBlockedReason = computed(() => {
   if (!saveFile.value?.game) return null
+  if (siegeContinuationMine.value) return ui.siegeContinuation.blocked
   if (planningDecisionsOwed.value) return ui.planningDecisions.blocked
   return actionMarkerAdvanceBlockMessage(saveFile.value.game, playerId.value)
 })
@@ -3187,6 +3214,47 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
             Отступить в ({{ coord.q }}, {{ coord.r }})
           </button>
         </template>
+      </div>
+    </div>
+
+    <CombatRerollsPanel
+      v-if="snapshot && snapshot.pendingCombat?.phase === 'awaiting-rerolls'"
+      :snapshot="snapshot"
+      :player-id="playerId"
+      :player-names="playerNameById"
+      :busy="doctrineBusy"
+      @reroll="submitPlanningDecision('reroll-combat-die', { dieIndex: $event })"
+      @finish="submitPlanningDecision('finish-combat-rerolls', { auto: $event })"
+    />
+
+    <div
+      v-if="siegeContinuationMine && siegeContinuationCoord"
+      class="map-pick-banner map-pick-banner--combat"
+      role="status"
+    >
+      <p class="map-pick-text">
+        <strong>{{ ui.siegeContinuation.title(siegeContinuationCoord.q, siegeContinuationCoord.r) }}</strong>
+      </p>
+      <p class="map-pick-text map-pick-text--hint">{{ ui.siegeContinuation.body }}</p>
+      <div class="map-pick-actions">
+        <button
+          type="button"
+          class="map-pick-primary"
+          :disabled="doctrineBusy"
+          @click="submitPlanningDecision('resolve-siege-continuation', { continue: true })"
+        >
+          {{ ui.siegeContinuation.keep }}
+        </button>
+        <button
+          v-for="coord in siegeWithdrawOptions"
+          :key="hexKey(coord.q, coord.r)"
+          type="button"
+          class="map-pick-secondary"
+          :disabled="doctrineBusy"
+          @click="submitPlanningDecision('resolve-siege-continuation', { continue: false, retreatTo: coord })"
+        >
+          {{ ui.siegeContinuation.withdraw(coord.q, coord.r) }}
+        </button>
       </div>
     </div>
 

@@ -131,6 +131,34 @@ export const uiStringsRu = {
     supportReady: 'Готов',
     assaultBlocked: 'Штурм невозможен: ни одна сторона не может стрелять. Можно только осадить.',
   },
+  combatRerolls: {
+    heading: (round: number) => `Раунд ${round}: перебросы гарнизона`,
+    left: (count: number) => `Перебросов: ${count}`,
+    mineHint:
+      'Ваш гарнизон может перебросить свои промахи — по одному на корабль. Щёлкните промах, посмотрите результат и решайте дальше.',
+    waiting: (name: string) => `${name} перебрасывает промахи гарнизона. Попадания применятся после.`,
+    support: 'поддержка',
+    noTarget: 'без цели',
+    dieTitle: (value: number, threshold: number, target: string, history: number[]) =>
+      `${value} (нужно ${threshold}+) → ${target}${history.length ? `; было ${history.join(', ')}` : ''}`,
+    auto: 'Перебросить остальное за меня',
+    done: 'Готово',
+    destroyed: 'будет уничтожен',
+    hitsNow: (count: number) => `+${count} попад. сейчас`,
+    shipTitle: (name: string, before: number, now: number, hull: number) =>
+      `${name}: до раунда попаданий ${before}, в этом броске ${now}, прочность ${hull}`,
+  },
+  siegeContinuation: {
+    title: (q: number, r: number) => `Бой за осаждённый центр (${q}, ${r}) выигран`,
+    body: 'Продолжить осаду — гарнизон снова решит, нападать ли. Или отойти всем флотом на соседнюю клетку, сняв осаду.',
+    keep: 'Продолжить осаду',
+    withdraw: (q: number, r: number) => `Отойти в (${q}, ${r})`,
+    waiting: (name: string) => `${name} решает, продолжать ли осаду`,
+    blocked: 'Сначала решите, продолжать ли осаду',
+  },
+  garrisonChoice: {
+    banner: 'Ваш гарнизон стоит на клетке этого боя. Встаньте на сторону одного из противников — тогда он будет биться на клетке — или не вмешивайтесь.',
+  },
   planningDecisions: {
     heading: 'Нужно решить',
     sub: 'Пока решения не приняты, ход не передаётся.',
