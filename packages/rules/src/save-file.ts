@@ -79,7 +79,7 @@ export interface PendingEvent {
   resolved?: boolean
 }
 
-import type { CombatOptions, CombatPrepState, CombatRoundResult } from './combat.js'
+import type { CombatOptions, CombatPrepState, CombatRoundResult, RolledCombatRound } from './combat.js'
 import type { SiegeState } from './siege.js'
 import type { ActiveDoctrine, DoctrineChoiceState } from './doctrines.js'
 import type { GameOverState } from './victory.js'
@@ -90,7 +90,7 @@ export type { GameOverState }
  * Фаза боя между запросами. Бросок кубов происходит синхронно внутри одного вызова,
  * а завершённый бой — это `pendingCombat === undefined`.
  */
-export type PendingCombatPhase = 'prep' | 'awaiting-continue'
+export type PendingCombatPhase = 'prep' | 'awaiting-continue' | 'awaiting-rerolls'
 
 interface PendingCombatBase {
   cellKey: string
@@ -144,12 +144,23 @@ export interface PendingCombatAwaitingContinue extends PendingCombatBase {
 }
 
 /**
+ * Раунд брошен, гарнизон осаждённой клетки перебрасывает промахи — по одному, видя каждый
+ * результат (ADR 019). Попадания применятся, когда перебросы кончатся или осаждённый закончит.
+ */
+export interface PendingCombatAwaitingRerolls extends PendingCombatBase {
+  phase: 'awaiting-rerolls'
+  /** Брошенные кубики раунда и оставшиеся перебросы. `damageByShipId` — урон до раунда. */
+  rolledRound: RolledCombatRound
+}
+
+/**
  * Дискриминированное объединение: поля, осмысленные только в одной фазе,
  * существуют только в её варианте.
  */
 export type PendingCombat =
   | PendingCombatPrep
   | PendingCombatAwaitingContinue
+  | PendingCombatAwaitingRerolls
 
 function cloneCombatOptions(options: CombatOptions): CombatOptions {
   const side = (s: CombatOptions['attacker']) =>
@@ -229,6 +240,15 @@ export function clonePendingCombat(pending: PendingCombat | undefined): PendingC
         continueDecisions: { ...pending.continueDecisions },
         ...(pending.supportReady ? { supportReady: { ...pending.supportReady } } : {}),
       }
+    case 'awaiting-rerolls':
+      return {
+        ...base,
+        phase: 'awaiting-rerolls',
+        rolledRound: {
+          dice: pending.rolledRound.dice.map((die) => ({ ...die, history: [...die.history] })),
+          rerolls: pending.rolledRound.rerolls ? { ...pending.rolledRound.rerolls } : null,
+        },
+      }
   }
 }
 
@@ -239,7 +259,9 @@ export function clonePendingCombat(pending: PendingCombat | undefined): PendingC
 export function migrateLegacyPendingCombat(raw: unknown): PendingCombat | undefined {
   if (!raw || typeof raw !== 'object') return undefined
   const phase = (raw as Record<string, unknown>).phase
-  if (phase === 'prep' || phase === 'awaiting-continue') return raw as PendingCombat
+  if (phase === 'prep' || phase === 'awaiting-continue' || phase === 'awaiting-rerolls') {
+    return raw as PendingCombat
+  }
   return undefined
 }
 

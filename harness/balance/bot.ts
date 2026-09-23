@@ -579,6 +579,13 @@ function stepCombat(
     return true
   }
 
+  if (pending.phase === 'awaiting-rerolls') {
+    // Перебросы гарнизона бот отдаёт игре: она перебрасывает промахи самых точных кубиков.
+    const playerId = pending.rolledRound.rerolls?.playerId
+    if (!playerId) return false
+    return act(game, map, playerId, 'finish-combat-rerolls', { auto: true }).errors.length === 0
+  }
+
   if (pending.phase === 'awaiting-continue') {
     const attackerId = pending.attackerId
     const defenderId = pending.defenderIds[0]

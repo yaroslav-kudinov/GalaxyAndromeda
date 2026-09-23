@@ -314,6 +314,82 @@ describe('осада: действия сторон', () => {
     expect(siegeAt(game, { q: 1, r: 0 })?.besiegerId).toBe('player-1')
   })
 
+  function withDice<T>(values: number[], fn: () => T): T {
+    const queue = [...values]
+    const original = Math.random
+    Math.random = () => ((queue.shift() ?? 1) - 1) / 6 + 0.01
+    try {
+      return fn()
+    } finally {
+      Math.random = original
+    }
+  }
+
+  function sortieWithMisses() {
+    const { map, game } = establishedSiege(['battleship', 'cruiser'])
+    game.activePlayerId = 'player-2'
+    placeMarker(game, 'player-2', 1, 0)
+    // Все девять кубиков раунда — единицы: гарнизон (линкор 3, крейсер 2) и осаждающие (4).
+    const result = withDice([1, 1, 1, 1, 1, 1, 1, 1, 1], () =>
+      applyGameActionOnSnapshot(game, map, 'player-2', 'execute-marker-assault', {
+        from: { q: 1, r: 0 },
+        combatOptions: {},
+      }),
+    )
+    expect(result.errors).toEqual([])
+    return { map, game }
+  }
+
+  it('перебросы: раунд встаёт, осаждённый перебрасывает промахи по одному, видя результат', () => {
+    const { map, game } = sortieWithMisses()
+    const pending = game.pendingCombat
+    expect(pending?.phase).toBe('awaiting-rerolls')
+    if (pending?.phase !== 'awaiting-rerolls') return
+    expect(pending.rolledRound.rerolls).toEqual({ playerId: 'player-2', left: 2 })
+    expect(getLegalActionsForSnapshot(game, 'siege', 'player-2').map((a) => a.id)).toContain('reroll-combat-die')
+    expect(applyGameActionOnSnapshot(game, map, 'player-1', 'continue-combat').errors[0]).toMatch(/перебрасывает/)
+    // Кубики осаждающих перебрасывать нельзя.
+    expect(applyGameActionOnSnapshot(game, map, 'player-2', 'reroll-combat-die', { dieIndex: 6 }).errors[0])
+      .toMatch(/нельзя/)
+
+    // Первый переброс — кубик линкора: шестёрка.
+    const first = withDice([6], () =>
+      applyGameActionOnSnapshot(game, map, 'player-2', 'reroll-combat-die', { dieIndex: 0 }),
+    )
+    expect(first.errors).toEqual([])
+    expect(game.pendingCombat?.phase).toBe('awaiting-rerolls')
+    if (game.pendingCombat?.phase !== 'awaiting-rerolls') return
+    expect(game.pendingCombat.rolledRound.dice[0]).toMatchObject({ value: 6, history: [1] })
+    expect(game.pendingCombat.rolledRound.rerolls?.left).toBe(1)
+    // Попадание перебрасывать нельзя.
+    expect(applyGameActionOnSnapshot(game, map, 'player-2', 'reroll-combat-die', { dieIndex: 0 }).errors[0])
+      .toMatch(/промах/)
+
+    // Второй — кубик крейсера: снова промах. Перебросов нет — раунд подсчитан.
+    const second = withDice([2], () =>
+      applyGameActionOnSnapshot(game, map, 'player-2', 'reroll-combat-die', { dieIndex: 3 }),
+    )
+    expect(second.errors).toEqual([])
+    expect(game.pendingCombat?.phase).toBe('awaiting-continue')
+    const round = second.combatResult?.rounds?.at(-1)
+    expect(round?.attackerHits).toBe(1)
+    expect(round?.shipRolls.flatMap((log) => log.dice).filter((die) => die.rerolls?.length)).toHaveLength(2)
+  })
+
+  it('перебросы: можно закончить досрочно или отдать остаток игре', () => {
+    const burned = sortieWithMisses()
+    expect(applyGameActionOnSnapshot(burned.game, burned.map, 'player-2', 'finish-combat-rerolls').errors).toEqual([])
+    expect(burned.game.pendingCombat?.phase).toBe('awaiting-continue')
+    expect(burned.game.pendingCombat?.lastRound?.attackerHits).toBe(0)
+
+    const auto = sortieWithMisses()
+    const result = withDice([6, 6], () =>
+      applyGameActionOnSnapshot(auto.game, auto.map, 'player-2', 'finish-combat-rerolls', { auto: true }),
+    )
+    expect(result.errors).toEqual([])
+    expect(auto.game.pendingCombat?.lastRound?.attackerHits).toBe(2)
+  })
+
   it('осаждённый не строит в осаждённой клетке', () => {
     const { map, game } = establishedSiege(['destroyer'])
     game.activePlayerId = 'player-2'
@@ -337,8 +413,8 @@ describe('осада: действия сторон', () => {
     expect(preview.attacker.rerollPool).toBe(2)
     expect(preview.defender.rerollPool).toBeUndefined()
 
-    // Гарнизон: 4 кубика — 1,1,1,1; два переброса — 6,6. Осаждающие: 4 промаха.
-    const values = [1, 1, 1, 1, 6, 6, 1, 1, 1, 1]
+    // Сначала бросают обе стороны — гарнизон 1,1,1,1, осаждающие 1,1,1,1, — потом перебросы: 6,6.
+    const values = [1, 1, 1, 1, 1, 1, 1, 1, 6, 6]
     const round = rollCombatRound(preview, {}, {}, () => ((values.shift() ?? 1) - 1) / 6 + 0.01)
     const garrisonDice = round.shipRolls.filter((r) => r.side === 'attacker').flatMap((r) => r.dice)
     expect(garrisonDice.filter((d) => d.rerolls?.length)).toHaveLength(2)

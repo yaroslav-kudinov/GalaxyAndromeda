@@ -107,6 +107,8 @@ export interface CombatPreview {
   attacker: CombatSidePreview
   defender: CombatSidePreview
   supportCandidates?: CombatSupportCandidate[]
+  /** Перебросы гарнизона осаждённой клетки в этом бою: по одному на его корабль в бою. */
+  siegeRerolls?: { playerId: string; pool: number }
   notes: string[]
 }
 
@@ -223,6 +225,8 @@ export interface CombatResolutionResult {
   damageByShipId?: Record<string, number>
   /** Ни одна сторона не может стрелять: бой невозможен, атакующий не входит. */
   stalemate?: boolean
+  /** Раунд брошен, но ждёт перебросов осаждённого (pendingCombat.phase === 'awaiting-rerolls'). */
+  paused?: boolean
   /** @deprecated всегда false */
   stub: boolean
 }
@@ -300,6 +304,9 @@ export function pendingCombatInvariantViolations(game: GameSnapshot): string[] {
     case 'awaiting-continue':
       if (!pending.continueDecisions) violations.push('Фаза awaiting-continue без continueDecisions')
       if (!pending.defenderIds.length) violations.push('Решение о продолжении без защитников')
+      break
+    case 'awaiting-rerolls':
+      if (!pending.rolledRound?.rerolls) violations.push('Фаза перебросов без перебросов')
       break
     default:
       violations.push(`Неизвестная фаза боя: ${(pending as { phase: string }).phase}`)
@@ -743,10 +750,36 @@ export function buildCombatPreview(
     }
   }
 
+  const attackerSide = buildSidePreview(
+    game,
+    coord,
+    attackerId,
+    'attacker',
+    attackerShips,
+    defenderId,
+    damage,
+    assignedAttackerSupport,
+    attackerSupportOverrides,
+  )
+  const defenderSide = buildSidePreview(
+    game,
+    coord,
+    defenderId,
+    'defender',
+    defenderShips,
+    attackerId,
+    damage,
+    assignedDefenderSupport,
+  )
+
+  // Гарнизон осаждённой клетки перебрасывает промахи — по одному перебросу на корабль в бою.
   const siege = siegeAt(game, coord)
-  const rerollPoolFor = (side: CombatSidePreview): CombatSidePreview =>
-    siege && side.playerId === siege.besiegedId && side.ships.length
-      ? { ...side, rerollPool: side.ships.length }
+  const garrisonInBattle = siege
+    ? [...attackerSide.ships, ...defenderSide.ships].filter((ship) => ship.ownerId === siege.besiegedId).length
+    : 0
+  const withPool = (side: CombatSidePreview): CombatSidePreview =>
+    siege && garrisonInBattle && side.ships.some((ship) => ship.ownerId === siege.besiegedId)
+      ? { ...side, rerollPool: garrisonInBattle }
       : side
 
   return {
@@ -755,27 +788,9 @@ export function buildCombatPreview(
     trigger: 'movement',
     attackerId,
     defenderId,
-    attacker: rerollPoolFor(buildSidePreview(
-      game,
-      coord,
-      attackerId,
-      'attacker',
-      attackerShips,
-      defenderId,
-      damage,
-      assignedAttackerSupport,
-      attackerSupportOverrides,
-    )),
-    defender: rerollPoolFor(buildSidePreview(
-      game,
-      coord,
-      defenderId,
-      'defender',
-      defenderShips,
-      attackerId,
-      damage,
-      assignedDefenderSupport,
-    )),
+    attacker: withPool(attackerSide),
+    defender: withPool(defenderSide),
+    ...(siege && garrisonInBattle ? { siegeRerolls: { playerId: siege.besiegedId, pool: garrisonInBattle } } : {}),
     supportCandidates: [...supportCandidates.entries()].map(([playerId, ships]) => ({ playerId, ships })),
     notes: [
       'Каждый корабль бросает свои кубики и попадает по порогу своего класса.',
@@ -918,32 +933,57 @@ export function isBattleUnresolvable(preview: CombatPreview): boolean {
   return combatSideFirepower(preview, 'attacker') === 0 && combatSideFirepower(preview, 'defender') === 0
 }
 
+/** Брошенный кубик раунда — до того, как попадания применены. */
+export interface RolledCombatDie {
+  side: CombatRole
+  shooterShipId: string
+  shooterType: ShipType
+  ownerId: string
+  /** 0 — стреляет с клетки боя, больше — поддержка или обстрел. */
+  distance: number
+  threshold: number
+  targetShipId: string | null
+  value: number
+  /** Прежние значения, если кубик перебрасывали. */
+  history: number[]
+  /** Кубик гарнизона осаждённой клетки: промах можно перебросить. */
+  rerollable: boolean
+}
+
+/** Перебросы осаждённого в раунде (ADR 019): по одному на корабль гарнизона в бою. */
+export interface CombatRerollPool {
+  playerId: string
+  left: number
+}
+
+export interface RolledCombatRound {
+  dice: RolledCombatDie[]
+  rerolls: CombatRerollPool | null
+}
+
 /**
- * Один раунд: обе стороны распределяют кубики по целям, бросают, попадания применяются
- * одновременно. При обстреле стреляет только атакующий.
+ * Бросок раунда без подсчёта: обе стороны распределяют кубики по целям и бросают. Перебросы
+ * осаждённого ещё не сделаны — их делает игрок (`rerollRolledDie`) или автоматика
+ * (`autoRerollMisses`). При обстреле стреляет только атакующий.
  */
-export function rollCombatRound(
+export function rollRoundDice(
   preview: CombatPreview,
   damageByShipId: Readonly<Record<string, number>> = {},
   options: CombatOptions = {},
   rng: () => number = Math.random,
   fixedDiceValue?: number,
-): CombatRoundResult {
-  const shipRolls: ShipCombatRollLog[] = []
-  const isBombardment = preview.trigger === 'bombardment'
-  const sides: CombatSidePreview[] = isBombardment
+): RolledCombatRound {
+  const dice: RolledCombatDie[] = []
+  const sides: CombatSidePreview[] = preview.trigger === 'bombardment'
     ? [preview.attacker]
     : [preview.attacker, preview.defender]
-  const hitsOn = new Map<string, number>()
-  const hitsBySide: Record<CombatRole, number> = { attacker: 0, defender: 0 }
 
   for (const side of sides) {
     const enemy = side.role === 'attacker' ? preview.defender : preview.attacker
     const targets = targetsOf(enemy, damageByShipId)
-    const shooters = shootersOf(side)
     const slots: CombatDieSlot[] = []
     const owners: SideShooter[] = []
-    for (const shooter of shooters) {
+    for (const shooter of shootersOf(side)) {
       for (let i = 0; i < shooter.dice; i++) {
         slots.push({ shooterShipId: shooter.shipId, threshold: shooter.threshold })
         owners.push(shooter)
@@ -954,52 +994,120 @@ export function rollCombatRound(
       targetPriority: sideOptions?.targetPriority,
       explicit: sideOptions?.diceTargets,
     })
-
-    const values = slots.map(() => rollDice(1, MAX_DIE_VALUE, rng, fixedDiceValue)[0]!)
-    const rerolled = rerollMisses(
-      slots.map((slot, index) => ({
-        value: values[index]!,
-        threshold: slot.threshold,
-        eligible: allocation[index] != null && owners[index]!.distance === 0,
-      })),
-      side.rerollPool ?? 0,
-      () => rollDice(1, MAX_DIE_VALUE, rng, fixedDiceValue)[0]!,
-    )
-
-    const logs = new Map<string, ShipCombatRollLog>()
     slots.forEach((slot, index) => {
       const shooter = owners[index]!
-      const value = rerolled[index]!.value
-      const targetShipId = allocation[index] ?? null
-      const hit = targetShipId != null && value >= slot.threshold
-      let log = logs.get(shooter.shipId)
-      if (!log) {
-        log = {
-          shipId: shooter.shipId,
-          shipType: shooter.type,
-          ownerId: shooter.ownerId,
-          side: side.role,
-          distance: shooter.distance,
-          dice: [],
-          hits: 0,
-        }
-        logs.set(shooter.shipId, log)
-        shipRolls.push(log)
-      }
-      const history = rerolled[index]!.history
-      log.dice.push({
-        value,
+      dice.push({
+        side: side.role,
+        shooterShipId: shooter.shipId,
+        shooterType: shooter.type,
+        ownerId: shooter.ownerId,
+        distance: shooter.distance,
         threshold: slot.threshold,
-        targetShipId,
-        hit,
-        ...(history.length ? { rerolls: history } : {}),
+        targetShipId: allocation[index] ?? null,
+        value: rollDice(1, MAX_DIE_VALUE, rng, fixedDiceValue)[0]!,
+        history: [],
+        rerollable: false,
       })
-      if (hit) {
-        log.hits += 1
-        hitsBySide[side.role] += 1
-        hitsOn.set(targetShipId!, (hitsOn.get(targetShipId!) ?? 0) + 1)
-      }
     })
+  }
+
+  const pool = preview.siegeRerolls
+  let rerolls: CombatRerollPool | null = null
+  if (pool && pool.pool > 0) {
+    for (const die of dice) {
+      die.rerollable = die.ownerId === pool.playerId && die.distance === 0 && die.targetShipId != null
+    }
+    if (dice.some((die) => die.rerollable)) rerolls = { playerId: pool.playerId, left: pool.pool }
+  }
+  return { dice, rerolls }
+}
+
+/** Этот кубик можно перебросить сейчас: он гарнизонный и промахнулся. */
+export function canRerollDie(die: RolledCombatDie): boolean {
+  return die.rerollable && die.value < die.threshold
+}
+
+/** Остались ли перебросы и есть ли что перебрасывать. */
+export function rerollsAvailable(rolled: RolledCombatRound): boolean {
+  return !!rolled.rerolls && rolled.rerolls.left > 0 && rolled.dice.some(canRerollDie)
+}
+
+/** Перебросить один кубик. Видно результат — следующий переброс решается по нему. */
+export function rerollRolledDie(
+  rolled: RolledCombatRound,
+  dieIndex: number,
+  roll: () => number,
+): string[] {
+  const die = rolled.dice[dieIndex]
+  if (!rolled.rerolls || rolled.rerolls.left <= 0) return ['Перебросов не осталось']
+  if (!die || !die.rerollable) return ['Этот кубик перебрасывать нельзя']
+  if (die.value >= die.threshold) return ['Перебрасывать можно только промах']
+  die.history.push(die.value)
+  die.value = roll()
+  rolled.rerolls.left -= 1
+  return []
+}
+
+/**
+ * Перебросы за игрока: сначала каждый промах по одному разу — так больше попаданий в сумме,
+ * — потом, если перебросы остались, снова по кругу. Самые точные кубики — первыми.
+ */
+export function autoRerollMisses(rolled: RolledCombatRound, roll: () => number): void {
+  if (!rolled.rerolls) return
+  let progressed = true
+  while (rolled.rerolls.left > 0 && progressed) {
+    progressed = false
+    const order = rolled.dice
+      .map((die, index) => ({ die, index }))
+      .filter(({ die }) => canRerollDie(die))
+      .sort((a, b) => a.die.threshold - b.die.threshold || a.index - b.index)
+    for (const { index } of order) {
+      if (rolled.rerolls.left <= 0) break
+      rerollRolledDie(rolled, index, roll)
+      progressed = true
+    }
+  }
+}
+
+/** Подсчёт раунда по брошенным кубикам: попадания обеих сторон применяются одновременно. */
+export function scoreRolledRound(
+  preview: CombatPreview,
+  damageByShipId: Readonly<Record<string, number>>,
+  rolled: RolledCombatRound,
+): CombatRoundResult {
+  const shipRolls: ShipCombatRollLog[] = []
+  const logs = new Map<string, ShipCombatRollLog>()
+  const hitsOn = new Map<string, number>()
+  const hitsBySide: Record<CombatRole, number> = { attacker: 0, defender: 0 }
+
+  for (const die of rolled.dice) {
+    const hit = die.targetShipId != null && die.value >= die.threshold
+    let log = logs.get(die.shooterShipId)
+    if (!log) {
+      log = {
+        shipId: die.shooterShipId,
+        shipType: die.shooterType,
+        ownerId: die.ownerId,
+        side: die.side,
+        distance: die.distance,
+        dice: [],
+        hits: 0,
+      }
+      logs.set(die.shooterShipId, log)
+      shipRolls.push(log)
+    }
+    log.dice.push({
+      value: die.value,
+      threshold: die.threshold,
+      targetShipId: die.targetShipId,
+      hit,
+      ...(die.history.length ? { rerolls: [...die.history] } : {}),
+    })
+    if (hit) {
+      log.hits += 1
+      hitsBySide[die.side] += 1
+      hitsOn.set(die.targetShipId!, (hitsOn.get(die.targetShipId!) ?? 0) + 1)
+    }
   }
 
   const nextDamage: Record<string, number> = { ...damageByShipId }
@@ -1023,33 +1131,19 @@ export function rollCombatRound(
 }
 
 /**
- * Перебросы осаждённого: сначала каждый промах по одному разу — так больше попаданий в сумме,
- * — потом, если перебросы остались, снова по кругу. Человек мог бы и сливать все перебросы в
- * один кубик; движок раздаёт их за него (интерфейса выбора пока нет).
+ * Один раунд целиком: бросок, перебросы осаждённого за него, подсчёт. Для оценки исхода и
+ * для случаев, когда решать перебросы некому.
  */
-function rerollMisses(
-  dice: readonly { value: number; threshold: number; eligible: boolean }[],
-  pool: number,
-  roll: () => number,
-): { value: number; history: number[] }[] {
-  const out = dice.map((die) => ({ value: die.value, history: [] as number[] }))
-  let left = pool
-  let progressed = true
-  while (left > 0 && progressed) {
-    progressed = false
-    const order = dice
-      .map((die, index) => ({ die, index }))
-      .filter(({ die, index }) => die.eligible && out[index]!.value < die.threshold)
-      .sort((a, b) => a.die.threshold - b.die.threshold || a.index - b.index)
-    for (const { index } of order) {
-      if (left <= 0) break
-      out[index]!.history.push(out[index]!.value)
-      out[index]!.value = roll()
-      left -= 1
-      progressed = true
-    }
-  }
-  return out
+export function rollCombatRound(
+  preview: CombatPreview,
+  damageByShipId: Readonly<Record<string, number>> = {},
+  options: CombatOptions = {},
+  rng: () => number = Math.random,
+  fixedDiceValue?: number,
+): CombatRoundResult {
+  const rolled = rollRoundDice(preview, damageByShipId, options, rng, fixedDiceValue)
+  autoRerollMisses(rolled, () => rollDice(1, MAX_DIE_VALUE, rng, fixedDiceValue)[0]!)
+  return scoreRolledRound(preview, damageByShipId, rolled)
 }
 
 /** Человекочитаемая строка итога раунда. */
@@ -1135,64 +1229,22 @@ function shipLabels(ids: readonly string[], preview: CombatPreview): string {
     .join(', ')
 }
 
-/**
- * Один раунд боя на клетке. Не перемещает корабли — возвращает уничтоженные с обеих сторон,
- * накопленный урон выживших и исход, если бой им решился.
- *
- * @param damageByShipId — урон, накопленный в предыдущих раундах этого же боя
- */
-export function resolveCombatAtCell(
-  game: GameSnapshot,
+/** Контекст раунда, нужный, чтобы продолжить его после перебросов осаждённого. */
+export interface RoundPauseContext {
+  trigger: PendingCombat['trigger']
+  continuation?: PendingCombat['continuation']
+  combatOptions?: CombatOptions
+  shipsDestroyedInCombat?: boolean
+}
+
+/** Итог раунда: победитель, уничтоженные, урон выживших. */
+function resolutionFromRound(
   coord: HexCoord,
-  attackerId: string,
-  incomingAttackerShips: ShipUnit[] = [],
-  options: CombatOptions = {},
-  rng: () => number = Math.random,
-  previewOverride?: CombatPreview,
-  damageByShipId: Readonly<Record<string, number>> = {},
-  roundNumber = 1,
+  preview: CombatPreview,
+  round: CombatRoundResult,
+  roundNumber: number,
 ): CombatResolutionResult {
-  const preview =
-    previewOverride
-    ?? buildCombatPreview(game, coord, attackerId, incomingAttackerShips, {
-      supportSides: options.supportSides,
-      damageByShipId,
-    })
-
-  if (!preview) {
-    return {
-      coord,
-      winnerId: null,
-      attackerWon: false,
-      log: [{ step: 'no-fire', message: 'Нет боя на этой клетке' }],
-      destroyedShipIds: [],
-      stub: false,
-    }
-  }
-
   const isBombardment = preview.trigger === 'bombardment'
-  const attackerFire = combatSideFirepower(preview, 'attacker')
-  const defenderFire = combatSideFirepower(preview, 'defender')
-  if (attackerFire === 0 && defenderFire === 0) {
-    return {
-      coord,
-      winnerId: null,
-      attackerWon: false,
-      log: [{ step: 'no-fire', message: 'Ни одна сторона не может стрелять — бой не состоялся' }],
-      destroyedShipIds: [],
-      damageByShipId: { ...damageByShipId },
-      stalemate: true,
-      stub: false,
-    }
-  }
-
-  const round = rollCombatRound(
-    preview,
-    damageByShipId,
-    options,
-    rng,
-    game.scriptedDiceValue,
-  )
   const log: BattleLogEntry[] = [
     {
       step: 'dice-roll',
@@ -1210,8 +1262,11 @@ export function resolveCombatAtCell(
     data: { destroyedShipIds: round.destroyedShipIds },
   })
 
-  const defendersLeft = preview.defender.ships.filter((s) => !destroyed.has(s.shipId)).length
-  const attackersLeft = preview.attacker.ships.filter((s) => !destroyed.has(s.shipId)).length
+  // Исход решают корабли самих сторон: союзный гарнизон бой за них не выигрывает.
+  const alive = (side: CombatSidePreview) =>
+    side.ships.filter((s) => s.ownerId === side.playerId && !destroyed.has(s.shipId)).length
+  const defendersLeft = alive(preview.defender)
+  const attackersLeft = alive(preview.attacker)
   const attackerWon = defendersLeft === 0 && (isBombardment || attackersLeft > 0)
   const defenderWon = !isBombardment && attackersLeft === 0 && defendersLeft > 0
   const winnerId = attackerWon ? preview.attackerId : defenderWon ? preview.defenderId : null
@@ -1231,6 +1286,187 @@ export function resolveCombatAtCell(
     rounds: [round],
     damageByShipId: survivingDamage,
     stub: false,
+  }
+}
+
+/**
+ * Один раунд боя на клетке. Не перемещает корабли — возвращает уничтоженные с обеих сторон,
+ * накопленный урон выживших и исход, если бой им решился.
+ *
+ * Если в бою гарнизон осаждённой клетки и передан `pause`, после броска раунд встаёт:
+ * `pendingCombat` переходит в `awaiting-rerolls`, осаждённый перебрасывает промахи сам
+ * (`rerollCombatDie`, `finishCombatRerolls`), а результат возвращается с `paused`.
+ *
+ * @param damageByShipId — урон, накопленный в предыдущих раундах этого же боя
+ */
+export function resolveCombatAtCell(
+  game: GameSnapshot,
+  coord: HexCoord,
+  attackerId: string,
+  incomingAttackerShips: ShipUnit[] = [],
+  options: CombatOptions = {},
+  rng: () => number = Math.random,
+  previewOverride?: CombatPreview,
+  damageByShipId: Readonly<Record<string, number>> = {},
+  roundNumber = 1,
+  pause?: RoundPauseContext,
+): CombatResolutionResult {
+  const preview =
+    previewOverride
+    ?? buildCombatPreview(game, coord, attackerId, incomingAttackerShips, {
+      supportSides: options.supportSides,
+      damageByShipId,
+    })
+
+  if (!preview) {
+    return {
+      coord,
+      winnerId: null,
+      attackerWon: false,
+      log: [{ step: 'no-fire', message: 'Нет боя на этой клетке' }],
+      destroyedShipIds: [],
+      stub: false,
+    }
+  }
+
+  const attackerFire = combatSideFirepower(preview, 'attacker')
+  const defenderFire = combatSideFirepower(preview, 'defender')
+  if (attackerFire === 0 && defenderFire === 0) {
+    return {
+      coord,
+      winnerId: null,
+      attackerWon: false,
+      log: [{ step: 'no-fire', message: 'Ни одна сторона не может стрелять — бой не состоялся' }],
+      destroyedShipIds: [],
+      damageByShipId: { ...damageByShipId },
+      stalemate: true,
+      stub: false,
+    }
+  }
+
+  const rolled = rollRoundDice(preview, damageByShipId, options, rng, game.scriptedDiceValue)
+  if (pause && rerollsAvailable(rolled) && !isEliminatedPlayer(game, rolled.rerolls!.playerId)) {
+    game.pendingCombat = {
+      cellKey: hexKey(coord.q, coord.r),
+      attackerId,
+      defenderIds: defenderIdsOnCell(game, coord, attackerId),
+      roundNumber,
+      phase: 'awaiting-rerolls',
+      trigger: pause.trigger,
+      continuation: pause.continuation,
+      ...(pause.combatOptions ? { combatOptions: pause.combatOptions } : {}),
+      shipsDestroyedInCombat: pause.shipsDestroyedInCombat ?? false,
+      damageByShipId: { ...damageByShipId },
+      rolledRound: rolled,
+    }
+    pushCombatEvent(game, `Раунд ${roundNumber}: осаждённый перебрасывает промахи`)
+    return {
+      coord,
+      winnerId: null,
+      attackerWon: false,
+      log: [{ step: 'dice-roll', message: 'Осаждённый перебрасывает промахи' }],
+      destroyedShipIds: [],
+      damageByShipId: { ...damageByShipId },
+      paused: true,
+      stub: false,
+    }
+  }
+
+  autoRerollMisses(rolled, () => rollDice(1, MAX_DIE_VALUE, rng, game.scriptedDiceValue)[0]!)
+  const round = scoreRolledRound(preview, damageByShipId, rolled)
+  return resolutionFromRound(coord, preview, round, roundNumber)
+}
+
+export const REROLL_ERRORS = {
+  none: 'Сейчас перебрасывать нечего',
+  notYours: 'Перебрасывает осаждённый',
+} as const
+
+/** Осаждённый перебрасывает один свой промах. Когда перебрасывать больше нечего — раунд идёт дальше. */
+export function rerollCombatDie(
+  game: GameSnapshot,
+  playerId: string,
+  dieIndex: unknown,
+  rng: () => number = Math.random,
+): { errors: string[]; combatResult?: CombatResolutionResult; combatVanished?: boolean } {
+  const pending = game.pendingCombat
+  if (pending?.phase !== 'awaiting-rerolls') return { errors: [REROLL_ERRORS.none] }
+  if (pending.rolledRound.rerolls?.playerId !== playerId) return { errors: [REROLL_ERRORS.notYours] }
+  if (typeof dieIndex !== 'number' || !Number.isInteger(dieIndex)) {
+    return { errors: ['Не удалось выполнить действие — обновите страницу и попробуйте снова'] }
+  }
+  const errors = rerollRolledDie(
+    pending.rolledRound,
+    dieIndex,
+    () => rollDice(1, MAX_DIE_VALUE, rng, game.scriptedDiceValue)[0]!,
+  )
+  if (errors.length) return { errors }
+  if (rerollsAvailable(pending.rolledRound)) return { errors: [] }
+  return completeCombatRerolls(game, rng)
+}
+
+/**
+ * Осаждённый закончил перебрасывать. `auto` — оставшиеся перебросы раздаёт игра (боты,
+ * выбывший игрок); без него неиспользованные перебросы сгорают.
+ */
+export function finishCombatRerolls(
+  game: GameSnapshot,
+  playerId: string,
+  options: { auto?: boolean } = {},
+  rng: () => number = Math.random,
+): { errors: string[]; combatResult?: CombatResolutionResult; combatVanished?: boolean } {
+  const pending = game.pendingCombat
+  if (pending?.phase !== 'awaiting-rerolls') return { errors: [REROLL_ERRORS.none] }
+  if (pending.rolledRound.rerolls?.playerId !== playerId) return { errors: [REROLL_ERRORS.notYours] }
+  if (options.auto) {
+    autoRerollMisses(pending.rolledRound, () => rollDice(1, MAX_DIE_VALUE, rng, game.scriptedDiceValue)[0]!)
+  }
+  return completeCombatRerolls(game, rng)
+}
+
+/** Подсчитать отложенный раунд и вести бой дальше — как после обычного раунда. */
+function completeCombatRerolls(
+  game: GameSnapshot,
+  rng: () => number,
+): { errors: string[]; combatResult?: CombatResolutionResult; combatVanished?: boolean } {
+  const pending = game.pendingCombat
+  if (pending?.phase !== 'awaiting-rerolls') return { errors: [REROLL_ERRORS.none] }
+  const [q, r] = pending.cellKey.split(',').map(Number)
+  const coord = { q: q!, r: r! }
+  const damageBefore = { ...(pending.damageByShipId ?? {}) }
+  const incoming = incomingShipsForPendingContinuation(game, pending)
+  const preview = buildCombatPreview(game, coord, pending.attackerId, incoming, {
+    attackerMovementPlans: pending.continuation?.movementPlans,
+    supportSides: pending.combatOptions?.supportSides,
+    damageByShipId: damageBefore,
+  })
+  if (!preview) {
+    game.pendingCombat = undefined
+    return { errors: [], combatVanished: true }
+  }
+  const round = scoreRolledRound(preview, damageBefore, pending.rolledRound)
+  const result = resolutionFromRound(coord, preview, round, pending.roundNumber)
+  applyCombatResultToSnapshot(game, result, pending.attackerId, preview.defenderId)
+  game.pendingCombat = undefined
+  const followUp = beginOrAwaitCombatContinuation(
+    game,
+    {
+      coord,
+      attackerId: pending.attackerId,
+      completedRoundNumber: pending.roundNumber,
+      trigger: pending.trigger,
+      continuation: pending.continuation,
+      combatOptions: pending.combatOptions,
+      shipsDestroyedInCombat: (pending.shipsDestroyedInCombat ?? false) || result.destroyedShipIds.length > 0,
+      damageByShipId: result.damageByShipId,
+      seedCombatResult: result,
+    },
+    rng,
+  )
+  return {
+    errors: followUp.errors,
+    combatResult: followUp.combatResult ?? result,
+    combatVanished: followUp.combatVanished,
   }
 }
 
@@ -1524,6 +1760,8 @@ type ContinuedRoundStep = {
   shouldContinue: boolean
   combatOptions?: CombatOptions
   damageByShipId: Record<string, number>
+  /** Раунд брошен и ждёт перебросов осаждённого — pendingCombat уже в awaiting-rerolls. */
+  paused?: boolean
 }
 
 /** Опции следующего раунда: цели выбираются заново, порядок целей и поддержка остаются. */
@@ -1700,7 +1938,23 @@ function executeContinuedCombatRound(
     preview,
     damageBefore,
     pending.roundNumber,
+    {
+      trigger: pending.trigger,
+      continuation: pending.continuation,
+      combatOptions: opts,
+      shipsDestroyedInCombat: pending.shipsDestroyedInCombat,
+    },
   )
+  if (result.paused) {
+    return {
+      errors: [],
+      paused: true,
+      shipsDestroyedInCombat: pending.shipsDestroyedInCombat === true,
+      completedRoundNumber: pending.roundNumber,
+      shouldContinue: false,
+      damageByShipId: damageBefore,
+    }
+  }
 
   const shipsDestroyedInCombat =
     (pending.shipsDestroyedInCombat ?? false) || result.destroyedShipIds.length > 0
@@ -1856,6 +2110,7 @@ function finishContinueAfterBothSidesReady(
   if (step.errors.length) {
     return { errors: step.errors, combatResult: step.combatResult }
   }
+  if (step.paused) return { errors: [] }
   if (step.combatVanished) {
     return { errors: [], combatResult: step.combatResult, combatVanished: true }
   }

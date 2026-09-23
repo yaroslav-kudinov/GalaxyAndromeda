@@ -56,6 +56,8 @@ import {
   syncEliminatedCombatAutomation,
   updateCombatPrep,
   cancelCombatPrep,
+  finishCombatRerolls,
+  rerollCombatDie,
   validateCombatOptions,
   validatePendingCombatPrepOptions,
   validateSingleCombatDestination,
@@ -549,7 +551,20 @@ export function executeMarkerMovement(
         combatOptions,
         Math.random,
         preview,
+        {},
+        1,
+        {
+          trigger: 'movement',
+          continuation: {
+            movementFrom: { ...from },
+            movementPlans: moves.map((move) => ({ ...move, to: { ...move.to } })),
+            incomingAttackerShipIds: incomingShips.map((ship) => ship.id),
+          },
+          combatOptions,
+        },
       )
+      // Гарнизон перебрасывает промахи — раунд доиграется после его решений.
+      if (combatResult.paused) return { errors: [] }
 
       applyCombatResultToSnapshot(
         game,
@@ -729,7 +744,14 @@ export function executeAssaultOnSharedCell(
     markActionMarkerResolvedThisTurn(game)
   }
 
-  const first = resolveCombatAtCell(game, coord, playerId, attackers, combatOptions, Math.random, preview)
+  const first = resolveCombatAtCell(game, coord, playerId, attackers, combatOptions, Math.random, preview, {}, 1, {
+    trigger: 'stack',
+    combatOptions,
+  })
+  if (first.paused) {
+    applyVictoryAndDefeatChecks(game, map.id)
+    return { errors: [] }
+  }
   applyCombatResultToSnapshot(game, first, playerId, preview.defenderId)
   const followUp = beginOrAwaitCombatContinuation(game, {
     coord,
@@ -950,6 +972,13 @@ function appendCombatParticipantActions(
     return
   }
 
+  if (pending.phase === 'awaiting-rerolls') {
+    if (pending.rolledRound.rerolls?.playerId !== playerId) return
+    pushUnique({ id: 'reroll-combat-die', type: 'combat', description: 'Перебросить промах гарнизона' })
+    pushUnique({ id: 'finish-combat-rerolls', type: 'combat', description: 'Закончить перебросы' })
+    return
+  }
+
   if (pending.phase === 'awaiting-continue') {
     const isAttacker = pending.attackerId === playerId
     const isDefender = pending.defenderIds.includes(playerId)
@@ -1020,6 +1049,31 @@ function dispatchGameAction(
     || actionId === 'establish-siege'
   if (game.pendingCombat?.phase === 'prep' && !isPrepAction && actionId !== 'abort-combat') {
     return { errors: ['Ожидается подготовка к бою'] }
+  }
+  const isRerollAction = actionId === 'reroll-combat-die' || actionId === 'finish-combat-rerolls'
+  if (game.pendingCombat?.phase === 'awaiting-rerolls' && !isRerollAction && actionId !== 'abort-combat') {
+    return { errors: ['Осаждённый перебрасывает промахи — дождитесь конца раунда'] }
+  }
+  if (isRerollAction) {
+    const pending = game.pendingCombat
+    const continuation = pending?.continuation
+    const combatKey = pending?.cellKey
+    const attackerId = pending?.attackerId
+    const result = actionId === 'reroll-combat-die'
+      ? rerollCombatDie(game, playerId, params?.dieIndex)
+      : finishCombatRerolls(game, playerId, { auto: params?.auto === true })
+    if (!result.errors.length && !game.pendingCombat && continuation && combatKey && attackerId) {
+      finishPendingMovementPlans(
+        game,
+        attackerId,
+        continuation.movementFrom,
+        continuation.movementPlans,
+        result.combatResult ?? null,
+        combatKey,
+      )
+    }
+    applyVictoryAndDefeatChecks(game, map.id)
+    return result
   }
   // Боевые решения может делать участник боя (победитель / attacker / defender),
   // а не только activePlayer текущей фазы.
