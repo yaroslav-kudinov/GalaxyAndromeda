@@ -7,6 +7,8 @@
  * решают на копии состояния (та же логика, что в замерах баланса) и шлют действия на сервер.
  *
  *   pnpm tsx harness/scripts/play-bots.ts --map reference-cross-4-13 [--human player-1]
+ *   pnpm tsx harness/scripts/play-bots.ts --room <roomId> --map <карта комнаты> [--human player-1]
+ *     — вернуть ботов в уже идущую партию (например, после перезапуска)
  *   GAME_SERVER_URL=http://127.0.0.1:3001 (по умолчанию)
  */
 
@@ -103,9 +105,18 @@ async function main(): Promise<void> {
   const map = normalizeMapDefinition(raw)
   const seats = Number((raw as { playerCount?: number }).playerCount ?? 2)
 
-  const { roomId, code } = await post<{ roomId: string; code: string }>('/rooms', { map: raw, maxPlayers: seats })
+  const existingRoom = flag('room', '')
   const botIds: string[] = []
-  for (let i = 1; i <= seats; i++) {
+  let roomId = existingRoom
+  let code = ''
+  if (existingRoom) {
+    const boot = await api<{ code: string; joinedPlayerIds: string[] }>(`/rooms/${existingRoom}/bootstrap`)
+    code = boot.code
+    botIds.push(...boot.joinedPlayerIds.filter((id) => id !== humanSeat))
+  } else {
+    ;({ roomId, code } = await post<{ roomId: string; code: string }>('/rooms', { map: raw, maxPlayers: seats }))
+  }
+  for (let i = 1; i <= seats && !existingRoom; i++) {
     const seat = `player-${i}`
     if (seat === humanSeat) continue
     const joined = await post<{ playerId: string }>(`/rooms/${roomId}/join`, {
