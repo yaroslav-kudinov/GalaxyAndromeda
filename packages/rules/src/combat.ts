@@ -80,6 +80,11 @@ export interface CombatSupportShip {
 export interface CombatSupportCandidate {
   playerId: string
   ships: CombatSupportShip[]
+  /**
+   * Это гарнизон осаждённой клетки, где третий игрок бьётся с осаждающим: его корабли стоят на
+   * клетке боя и, выбрав сторону, бьются на ней сами — стреляют и служат целями (ADR 019).
+   */
+  garrisonShipIds?: string[]
 }
 
 export interface CombatSidePreview {
@@ -737,6 +742,20 @@ export function buildCombatPreview(
     if (ships.length) supportCandidates.set(player.id, ships)
   }
 
+  // Третий игрок бьётся с осаждающим: гарнизон выбирает сторону и бьётся на клетке сам.
+  const contestedSiege = siegeAt(game, coord)
+  const garrison = contestedSiege
+    && attackerId !== contestedSiege.besiegerId
+    && attackerId !== contestedSiege.besiegedId
+    && !isEliminatedPlayer(game, contestedSiege.besiegedId)
+    ? cell.ships.filter((s) => s.ownerId === contestedSiege.besiegedId)
+    : []
+  const garrisonOwnerId = garrison.length ? contestedSiege!.besiegedId : null
+  if (garrisonOwnerId && !supportCandidates.has(garrisonOwnerId)) supportCandidates.set(garrisonOwnerId, [])
+  const garrisonSide = garrisonOwnerId ? options.supportSides?.[garrisonOwnerId] : undefined
+  if (garrisonSide === 'attacker') attackerShips.push(...garrison)
+  if (garrisonSide === 'defender') defenderShips.push(...garrison)
+
   const assignedAttackerSupport: CombatSupportShip[] = []
   const assignedDefenderSupport: CombatSupportShip[] = []
   for (const [playerId, ships] of supportCandidates) {
@@ -791,7 +810,11 @@ export function buildCombatPreview(
     attacker: withPool(attackerSide),
     defender: withPool(defenderSide),
     ...(siege && garrisonInBattle ? { siegeRerolls: { playerId: siege.besiegedId, pool: garrisonInBattle } } : {}),
-    supportCandidates: [...supportCandidates.entries()].map(([playerId, ships]) => ({ playerId, ships })),
+    supportCandidates: [...supportCandidates.entries()].map(([playerId, ships]) => ({
+      playerId,
+      ships,
+      ...(playerId === garrisonOwnerId ? { garrisonShipIds: garrison.map((ship) => ship.id) } : {}),
+    })),
     notes: [
       'Каждый корабль бросает свои кубики и попадает по порогу своего класса.',
       'Кубики стреляющий распределяет по вражеским кораблям; попадания обеих сторон применяются одновременно.',
@@ -1792,7 +1815,7 @@ export function combatSupportersAwaited(game: GameSnapshot, preview: CombatPrevi
   const main = new Set([pending.attackerId, ...pending.defenderIds])
   const out = new Set<string>()
   for (const side of [preview.attacker, preview.defender]) {
-    for (const ship of side.supportingShips) {
+    for (const ship of [...side.supportingShips, ...side.ships]) {
       if (main.has(ship.ownerId) || ship.dice <= 0) continue
       if (isEliminatedPlayer(game, ship.ownerId)) continue
       out.add(ship.ownerId)

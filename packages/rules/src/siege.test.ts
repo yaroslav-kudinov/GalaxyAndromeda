@@ -8,6 +8,7 @@ import {
   rollCombatRound,
   collectSupportShips,
   isBombardmentDestination,
+  buildCombatPreviewFromPending,
 } from './combat.js'
 import { applyGameActionOnSnapshot, getLegalActionsForSnapshot } from './movement.js'
 import { addActionMarker } from './markers.js'
@@ -454,5 +455,87 @@ describe('осада: третий игрок', () => {
     expect(result.combatResult?.attackerWon).toBe(true)
     expect(siegeAt(game, { q: 1, r: 0 })?.besiegerId).toBe('player-3')
     expect(cellAt(game, 1, 0).controlOwnerId).toBe('player-2')
+    // Победитель решает судьбу осады; пока не решил, партия ждёт.
+    expect(game.siegeContinuationChoice).toEqual({ cellKey: '1,0', playerId: 'player-3' })
+  })
+
+  function thirdPartyWon() {
+    const { map, game } = besiege(['battleship'])
+    applyGameActionOnSnapshot(game, map, 'player-1', 'establish-siege')
+    applyGameActionOnSnapshot(game, map, 'player-2', 'cancel-combat-prep')
+    addShip(game, 2, 0, 'player-3', 'battleship', 'third-bb1')
+    addShip(game, 2, 0, 'player-3', 'battleship', 'third-bb2')
+    game.activePlayerId = 'player-3'
+    game.actionMarkerResolvedThisTurn = false
+    placeMarker(game, 'player-3', 2, 0)
+    withRandom(5 / 6, () =>
+      applyGameActionOnSnapshot(game, map, 'player-3', 'execute-marker-movement', {
+        from: { q: 2, r: 0 },
+        moves: [
+          { shipId: 'third-bb1', to: { q: 1, r: 0 } },
+          { shipId: 'third-bb2', to: { q: 1, r: 0 } },
+        ],
+        combatOptions: {},
+      }),
+    )
+    return { map, game }
+  }
+
+  it('победитель продолжает осаду — гарнизон снова спрашивают о вылазке', () => {
+    const { map, game } = thirdPartyWon()
+    expect(applyGameActionOnSnapshot(game, map, 'player-3', 'advance-phase').errors[0]).toMatch(/осаду/)
+    expect(applyGameActionOnSnapshot(game, map, 'player-2', 'resolve-siege-continuation', { continue: true }).errors[0])
+      .toMatch(/победитель/)
+    expect(applyGameActionOnSnapshot(game, map, 'player-3', 'resolve-siege-continuation', { continue: true }).errors)
+      .toEqual([])
+    expect(game.siegeContinuationChoice).toBeUndefined()
+    expect(siegeAt(game, { q: 1, r: 0 })).toEqual({ besiegerId: 'player-3', besiegedId: 'player-2', sinceTurn: game.turnNumber })
+    expect(game.pendingCombat?.attackerId).toBe('player-2')
+    expect(combatPrepOf(game.pendingCombat)?.siegeResponse).toBe(true)
+  })
+
+  it('победитель отходит на соседнюю клетку — осада снята', () => {
+    const { map, game } = thirdPartyWon()
+    const survivors = cellAt(game, 1, 0).ships.filter((ship) => ship.ownerId === 'player-3').map((ship) => ship.id).sort()
+    expect(survivors.length).toBeGreaterThan(0)
+    expect(applyGameActionOnSnapshot(game, map, 'player-3', 'resolve-siege-continuation', {
+      continue: false,
+      retreatTo: { q: 3, r: 0 },
+    }).errors[0]).toMatch(/соседнюю/)
+    expect(applyGameActionOnSnapshot(game, map, 'player-3', 'resolve-siege-continuation', {
+      continue: false,
+      retreatTo: { q: 2, r: 0 },
+    }).errors).toEqual([])
+    expect(siegeAt(game, { q: 1, r: 0 })).toBeUndefined()
+    expect(cellAt(game, 2, 0).ships.map((ship) => ship.id).sort()).toEqual(survivors)
+    expect(cellAt(game, 1, 0).ships.every((ship) => ship.ownerId === 'player-2')).toBe(true)
+  })
+
+  it('гарнизон выбирает сторону в бою третьего игрока с осаждающим и бьётся на клетке', () => {
+    const { map, game } = besiege(['battleship'])
+    applyGameActionOnSnapshot(game, map, 'player-1', 'establish-siege')
+    applyGameActionOnSnapshot(game, map, 'player-2', 'cancel-combat-prep')
+    addShip(game, 2, 0, 'player-3', 'battleship', 'third-bb1')
+    game.activePlayerId = 'player-3'
+    game.actionMarkerResolvedThisTurn = false
+    placeMarker(game, 'player-3', 2, 0)
+    expect(applyGameActionOnSnapshot(game, map, 'player-3', 'execute-marker-movement', {
+      from: { q: 2, r: 0 },
+      moves: [{ shipId: 'third-bb1', to: { q: 1, r: 0 } }],
+    }).errors).toEqual([])
+
+    const before = buildCombatPreviewFromPending(game)!
+    const garrison = before.supportCandidates?.find((candidate) => candidate.playerId === 'player-2')
+    expect(garrison?.garrisonShipIds).toEqual(['gar-0'])
+    expect(before.attacker.ships.map((ship) => ship.shipId)).toEqual(['third-bb1'])
+
+    expect(applyGameActionOnSnapshot(game, map, 'player-2', 'update-combat-prep', {
+      ready: true,
+      supportSide: 'attacker',
+    }).errors).toEqual([])
+    const after = buildCombatPreviewFromPending(game)!
+    expect(after.attacker.ships.map((ship) => ship.shipId).sort()).toEqual(['gar-0', 'third-bb1'])
+    // Гарнизон на клетке перебрасывает промахи и в чужом бою.
+    expect(after.siegeRerolls).toEqual({ playerId: 'player-2', pool: 1 })
   })
 })

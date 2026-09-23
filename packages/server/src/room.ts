@@ -488,6 +488,7 @@ function roomObservation(
     siegeLossesOwedByPlayer:
       room.status === 'playing' ? (s.siegeLossesOwedByPlayer ?? null) : undefined,
     siegeTickTurn: room.status === 'playing' ? (s.siegeTickTurn ?? null) : undefined,
+    siegeContinuationChoice: room.status === 'playing' ? (s.siegeContinuationChoice ?? null) : undefined,
     lastCombatResult: room.lastCombatResult ?? null,
     observationRevision: room.observationRevision,
     roomStatus: room.status,

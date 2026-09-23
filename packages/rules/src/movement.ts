@@ -90,6 +90,11 @@ import {
   executeSiegeLosses,
   siegeLossesOwedBy,
   SIEGE_LOSS_ERRORS,
+  SIEGE_CONTINUATION_ERRORS,
+  openSiegeContinuationChoice,
+  resolveSiegeContinuation,
+  siegeContestKey,
+  siegeWithdrawDestinations,
   syncSieges,
   validateGarrisonDeparture,
 } from './siege.js'
@@ -661,6 +666,7 @@ export function resolveCombatPrep(
   const pending = game.pendingCombat
   const prep = combatPrepOf(pending)
   if (!pending || !prep) return { errors: ['Нет подготовки к бою'] }
+  const contestKey = siegeContestKey(game)
 
   const validationErrors = validatePendingCombatPrepOptions(game)
   if (validationErrors.length) {
@@ -713,6 +719,7 @@ export function resolveCombatPrep(
   }
 
   settleSieges(game, map.id)
+  if (contestKey && !game.pendingCombat) openSiegeContinuationChoice(game, contestKey)
   return result
 }
 
@@ -820,15 +827,8 @@ export function establishSiege(game: GameSnapshot, map: MapDefinition, playerId:
   )
   establishSiegeRecord(game, coord, playerId, besiegedId)
 
-  const besieged = game.players.find((player) => player.id === besiegedId)
-  if (besieged && !besieged.eliminated) {
-    // Ответ необязателен: если гарнизону нечем стрелять, спрашивать не о чем.
-    const responseErrors = setupCombatPrepForAssault(game, besiegedId, coord, { siegeResponse: true })
-    if (!responseErrors.length) {
-      const preview = buildCombatPreviewFromPending(game)
-      if (!preview || preview.attacker.diceTotal === 0) game.pendingCombat = undefined
-    }
-  }
+  // Ответ необязателен: если гарнизону нечем стрелять, спрашивать не о чем.
+  askGarrisonToRespond(game, coord, besiegedId)
   applyVictoryAndDefeatChecks(game, map.id)
   return []
 }
@@ -863,6 +863,16 @@ export function getLegalActionsForSnapshot(
       type: 'doctrine',
       description: 'Выбрать доктрину на это окно ходов; соперники увидят её, когда выберут все',
       params: { options: DOCTRINES.map((doctrine) => doctrine.id) },
+    })
+  }
+
+  const continuation = game.siegeContinuationChoice
+  if (continuation?.playerId === playerId && !game.gameOver) {
+    actions.push({
+      id: 'resolve-siege-continuation',
+      type: 'siegeContinuation',
+      description: 'Бой за осаждённый центр выигран: продолжить осаду или отойти',
+      params: { destinations: siegeWithdrawDestinations(game, playerId, continuation.cellKey) },
     })
   }
 
@@ -1023,9 +1033,30 @@ export function applyGameActionOnSnapshot(
   actionId: string,
   params?: Record<string, unknown>,
 ): { errors: string[]; combatResult?: CombatResolutionResult } {
+  const contestKey = siegeContestKey(game)
+  const siegesBefore = { ...(game.sieges ?? {}) }
   const result = dispatchGameAction(game, map, playerId, actionId, params)
   settleSieges(game, map.id)
+  // Бой за осаждённую клетку мог и начаться, и кончиться в этом же действии (без подготовки).
+  const foughtKey = result.combatResult ? hexKey(result.combatResult.coord.q, result.combatResult.coord.r) : null
+  const foughtSiege = foughtKey ? siegesBefore[foughtKey] : undefined
+  const inlineContest = foughtSiege && playerId !== foughtSiege.besiegerId && playerId !== foughtSiege.besiegedId
+    ? foughtKey
+    : null
+  const finishedContest = contestKey ?? inlineContest
+  if (finishedContest && !game.pendingCombat) openSiegeContinuationChoice(game, finishedContest)
   return result
+}
+
+/** Спросить гарнизон, нападёт ли он на осаждающих; если стрелять нечем — не спрашивать. */
+function askGarrisonToRespond(game: GameSnapshot, coord: HexCoord, besiegedId: string): void {
+  const besieged = game.players.find((player) => player.id === besiegedId)
+  if (!besieged || besieged.eliminated) return
+  const responseErrors = setupCombatPrepForAssault(game, besiegedId, coord, { siegeResponse: true })
+  if (!responseErrors.length) {
+    const preview = buildCombatPreviewFromPending(game)
+    if (!preview || preview.attacker.diceTotal === 0) game.pendingCombat = undefined
+  }
 }
 
 function dispatchGameAction(
@@ -1049,6 +1080,24 @@ function dispatchGameAction(
     || actionId === 'establish-siege'
   if (game.pendingCombat?.phase === 'prep' && !isPrepAction && actionId !== 'abort-combat') {
     return { errors: ['Ожидается подготовка к бою'] }
+  }
+  if (actionId === 'resolve-siege-continuation') {
+    const retreatTo = params?.retreatTo as HexCoord | undefined
+    const outcome = resolveSiegeContinuation(game, playerId, {
+      continue: params?.continue === true,
+      ...(retreatTo ? { retreatTo } : {}),
+    })
+    if (outcome.errors.length) return { errors: outcome.errors }
+    if (outcome.withdrawnTo) {
+      const destination = cellAt(game, outcome.withdrawnTo)
+      if (destination) transferControlIfEnemyOwned(game, destination, playerId)
+    }
+    if (outcome.continued) askGarrisonToRespond(game, outcome.continued.coord, outcome.continued.besiegedId)
+    applyVictoryAndDefeatChecks(game, map.id)
+    return { errors: [] }
+  }
+  if (game.siegeContinuationChoice && actionId !== 'surrender') {
+    return { errors: [SIEGE_CONTINUATION_ERRORS.waiting] }
   }
   const isRerollAction = actionId === 'reroll-combat-die' || actionId === 'finish-combat-rerolls'
   if (game.pendingCombat?.phase === 'awaiting-rerolls' && !isRerollAction && actionId !== 'abort-combat') {

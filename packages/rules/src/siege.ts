@@ -1,4 +1,5 @@
 import { trimGameEventLog } from './event-log.js'
+import { hexDistance } from './map.js'
 import { removeStaleProductionMarkerAt } from './markers.js'
 import type { GameSnapshot, RuntimeCellState } from './save-file.js'
 import { SHIP_PRODUCTION_COST } from './ships.js'
@@ -208,6 +209,85 @@ export function applySiegeTick(game: GameSnapshot): void {
   game.siegeLossesOwedByPlayer = {}
   for (const [playerId, keys] of owed) setSiegeLossesOwed(game, playerId, keys)
   syncSieges(game)
+}
+
+/**
+ * Идёт бой третьего игрока с осаждающим за осаждённую клетку — ключ этой клетки. Когда такой
+ * бой кончится, победитель решает судьбу осады.
+ */
+export function siegeContestKey(game: GameSnapshot): string | null {
+  const pending = game.pendingCombat
+  if (!pending) return null
+  const siege = game.sieges?.[pending.cellKey]
+  if (!siege) return null
+  if (pending.attackerId === siege.besiegerId || pending.attackerId === siege.besiegedId) return null
+  return pending.cellKey
+}
+
+/** Бой за осаждённую клетку кончился: если гарнизон жив, победитель решает, продолжать ли осаду. */
+export function openSiegeContinuationChoice(game: GameSnapshot, cellKey: string): void {
+  const siege = game.sieges?.[cellKey]
+  if (!siege) return
+  const winner = game.players.find((player) => player.id === siege.besiegerId)
+  if (!winner || winner.eliminated) return
+  game.siegeContinuationChoice = { cellKey, playerId: siege.besiegerId }
+  appendSiegeEvent(game, `Бой за осаждённый центр на (${cellKey}) окончен — победитель решает, продолжать ли осаду`)
+}
+
+/** Куда победитель может отойти, сняв осаду: соседние клетки без чужих кораблей. */
+export function siegeWithdrawDestinations(game: GameSnapshot, playerId: string, cellKey: string): HexCoord[] {
+  const cell = cellByKey(game, cellKey)
+  if (!cell) return []
+  return game.cells
+    .filter((candidate) => hexDistance(candidate.coord, cell.coord) === 1)
+    .filter((candidate) => candidate.ships.every((ship) => ship.ownerId === playerId))
+    .map((candidate) => ({ ...candidate.coord }))
+}
+
+export const SIEGE_CONTINUATION_ERRORS = {
+  none: 'Решать судьбу осады сейчас не нужно',
+  notYours: 'Судьбу осады решает победитель боя',
+  badDestination: 'Отойти можно только на соседнюю клетку без чужих кораблей',
+  waiting: 'Сначала победитель боя решает, продолжать ли осаду',
+} as const
+
+/**
+ * Решение победителя: продолжить осаду (цепочка как при установке — вызывающий спрашивает
+ * гарнизон о вылазке) или отойти всем флотом на соседнюю клетку, сняв осаду.
+ */
+export function resolveSiegeContinuation(
+  game: GameSnapshot,
+  playerId: string,
+  choice: { continue: boolean; retreatTo?: HexCoord },
+): { errors: string[]; continued?: { coord: HexCoord; besiegedId: string }; withdrawnTo?: HexCoord } {
+  const pending = game.siegeContinuationChoice
+  if (!pending) return { errors: [SIEGE_CONTINUATION_ERRORS.none] }
+  if (pending.playerId !== playerId) return { errors: [SIEGE_CONTINUATION_ERRORS.notYours] }
+  const siege = game.sieges?.[pending.cellKey]
+  const cell = cellByKey(game, pending.cellKey)
+  delete game.siegeContinuationChoice
+  if (!siege || !cell) return { errors: [] }
+
+  if (choice.continue) {
+    game.sieges![pending.cellKey] = { ...siege, besiegerId: playerId, sinceTurn: game.turnNumber }
+    appendSiegeEvent(game, `Осада центра власти на (${cell.coord.q},${cell.coord.r}) продолжена`)
+    return { errors: [], continued: { coord: { ...cell.coord }, besiegedId: siege.besiegedId } }
+  }
+
+  const to = choice.retreatTo
+  const allowed = siegeWithdrawDestinations(game, playerId, pending.cellKey)
+  if (!to || !allowed.some((coord) => coord.q === to.q && coord.r === to.r)) {
+    game.siegeContinuationChoice = pending
+    return { errors: [SIEGE_CONTINUATION_ERRORS.badDestination] }
+  }
+  const destination = cellByKey(game, keyOf(to))!
+  const leaving = cell.ships.filter((ship) => ship.ownerId === playerId)
+  cell.ships = cell.ships.filter((ship) => ship.ownerId !== playerId)
+  destination.ships.push(...leaving)
+  delete game.sieges![pending.cellKey]
+  if (Object.keys(game.sieges!).length === 0) delete game.sieges
+  appendSiegeEvent(game, `Осада с (${cell.coord.q},${cell.coord.r}) снята: флот отошёл в (${to.q},${to.r})`)
+  return { errors: [], withdrawnTo: { ...to } }
 }
 
 export const SIEGE_LOSS_ERRORS = {

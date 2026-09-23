@@ -111,6 +111,7 @@ export function buildObservation(
     'sieges',
     'siegeLossesOwedByPlayer',
     'siegeTickTurn',
+    'siegeContinuationChoice',
     'doctrineWindow',
     'doctrineByPlayer',
     'doctrineChoice',

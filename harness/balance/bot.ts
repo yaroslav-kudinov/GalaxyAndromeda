@@ -572,7 +572,10 @@ function stepCombat(
         if (prep.readyBy[candidate.playerId]) continue
         act(game, map, candidate.playerId, 'update-combat-prep', {
           ready: true,
-          supportSide: supportSideFor(game, candidate.playerId, attackerId, prep.defenderId),
+          // Гарнизон встаёт против своего осаждающего; прочие — против лидера.
+          supportSide: candidate.garrisonShipIds?.length
+            ? 'attacker'
+            : supportSideFor(game, candidate.playerId, attackerId, prep.defenderId),
         })
       }
     }
@@ -656,6 +659,11 @@ export function botStepLive(
   attempts: MarkerAttempts,
 ): void {
   if (game.gameOver) return
+  if (game.siegeContinuationChoice) {
+    const { playerId } = game.siegeContinuationChoice
+    if (botIds.has(playerId)) act(game, map, playerId, 'resolve-siege-continuation', { continue: true })
+    return
+  }
   if (game.pendingCombat) {
     stepCombat(game, map, DEFAULT_RUN_OPTIONS)
     return
@@ -937,6 +945,12 @@ export function runGame(map: MapDefinition, seed: number, options: RunOptions): 
         continue
       }
       combatGuard = 0
+
+      if (game.siegeContinuationChoice) {
+        // Победитель боя за осаждённый центр осаду продолжает.
+        act(game, map, game.siegeContinuationChoice.playerId, 'resolve-siege-continuation', { continue: true })
+        continue
+      }
 
       if (game.turnNumber !== currentTurn) closeTurn()
 

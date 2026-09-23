@@ -338,6 +338,11 @@ export interface GameSnapshot {
   /** Ход, в котором тик осады уже прошёл: тик идемпотентен. */
   siegeTickTurn?: number
   /**
+   * Бой за осаждённую клетку кончился, гарнизон жив: победитель решает — продолжать осаду или
+   * отойти на соседнюю клетку (ADR 019). Пока решение не принято, партия ждёт.
+   */
+  siegeContinuationChoice?: { cellKey: string; playerId: string }
+  /**
    * Длина окна доктрин в ходах (ADR 020). Нет поля — доктрин в партии нет (обучение).
    */
   doctrineWindow?: number
@@ -611,6 +616,7 @@ function normalizeGameSnapshot(game: GameSnapshot, _map?: MapDefinition): GameSn
         )
       : undefined,
     siegeTickTurn: game.siegeTickTurn,
+    siegeContinuationChoice: game.siegeContinuationChoice ? { ...game.siegeContinuationChoice } : undefined,
   }
 
   ensureMarkerLimits(normalized)
@@ -867,6 +873,11 @@ export function gameSnapshotFromObservation(
       preserve?.siegeLossesOwedByPlayer,
     ),
     siegeTickTurn: fromObservationField(mech, 'siegeTickTurn', preserve?.siegeTickTurn),
+    siegeContinuationChoice: fromObservationField(
+      mech,
+      'siegeContinuationChoice',
+      preserve?.siegeContinuationChoice,
+    ),
   }, map)
 
   if (hasServerMarkers || !preserve) return game
