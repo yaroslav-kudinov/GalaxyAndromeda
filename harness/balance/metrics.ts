@@ -55,6 +55,8 @@ export interface GameRecord {
   doctrines: Record<string, Record<string, number>>
   /** Кому выдали стартовую фору, если замер идёт с форой. */
   handicappedPlayerId?: string
+  /** Игрок с особой доктриной в замере силы доктрины: остальные играют как обычно. */
+  deviantPlayerId?: string
   error?: string
 }
 
@@ -186,6 +188,8 @@ export interface Summary {
   turns: { mean: number; p10: number; median: number; p90: number }
   hitTurnCapShare: number
   winRateBySeat: Record<string, number>
+  /** Доля побед игрока с особой доктриной; справедливая доля — 1 / число игроков. */
+  deviantWinRate: number | null
   winRateByOrderPosition: Record<string, number>
   meanLeadChanges: number
   pointOfNoReturn: { mean: number; meanShareOfGame: number | null }
@@ -286,6 +290,11 @@ export function summarize(records: readonly GameRecord[]): Summary {
     winRateByOrderPosition[key] = (winsByPosition[key] ?? 0) / games
   }
 
+  const deviantGames = ok.filter((record) => record.deviantPlayerId && record.winnerId)
+  const deviantWinRate = deviantGames.length
+    ? deviantGames.filter((record) => record.winnerId === record.deviantPlayerId).length / deviantGames.length
+    : null
+
   const handicapped = ok.filter((record) => record.handicappedPlayerId)
   const handicapWins = handicapped.filter(
     (record) => record.winnerId && record.winnerId === record.handicappedPlayerId,
@@ -311,6 +320,7 @@ export function summarize(records: readonly GameRecord[]): Summary {
     },
     hitTurnCapShare: ok.length ? ok.filter((record) => record.hitTurnCap).length / ok.length : 0,
     winRateBySeat,
+    deviantWinRate,
     winRateByOrderPosition,
     meanLeadChanges: mean(ok.map(countLeadChanges)),
     pointOfNoReturn: {

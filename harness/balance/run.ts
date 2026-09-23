@@ -61,6 +61,10 @@ function parseArgs(argv: readonly string[]): Args {
       maxSteps: Math.max(1000, Math.floor(number('maxSteps', DEFAULT_RUN_OPTIONS.maxSteps))),
       doctrines: !flags.has('noDoctrines'),
       forcedDoctrine: (flags.get('doctrine') as DoctrineId | undefined) ?? null,
+      deviantDoctrine: (flags.get('deviant') as DoctrineId | undefined) ?? null,
+      doctrineWindow: flags.has('doctrineWindow')
+        ? Math.max(1, Math.floor(number('doctrineWindow', 5)))
+        : undefined,
       turnLimit: flags.has('noTurnLimit')
         ? null
         : flags.has('turnLimit')
@@ -143,6 +147,9 @@ function report(mapId: string, summary: Summary, records: readonly GameRecord[])
   }
 
   lines.push('')
+  if (summary.deviantWinRate != null) {
+    lines.push(`Особая доктрина: побед ${percent(summary.deviantWinRate)} (справедливо — ${percent(1 / Math.max(1, records[0]?.playerIds.length ?? 2))})`)
+  }
   lines.push('Винрейт по месту: ' + (Object.entries(summary.winRateBySeat)
     .map(([id, v]) => `${id} ${percent(v)}`).join(', ') || '—'))
   lines.push('Винрейт по позиции в очереди: ' + (Object.entries(summary.winRateByOrderPosition)

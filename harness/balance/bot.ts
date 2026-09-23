@@ -20,6 +20,7 @@ import {
   buildCombatPreviewFromPending,
   canPlaceActionMarkerOnCell,
   combatPrepOf,
+  combatSupportersAwaited,
   countControlledPowerCenters,
   gameSnapshotFromMap,
   getBuildableShipsForMarker,
@@ -67,6 +68,13 @@ export interface RunOptions {
   doctrines?: boolean
   /** Все боты берут одну доктрину — чтобы замерить её в чистом виде. */
   forcedDoctrine?: DoctrineId | null
+  /**
+   * Замер силы доктрины: одному игроку (место меняется от партии к партии) — эта доктрина
+   * во всех окнах, остальным — как обычно (`forcedDoctrine` или выбор бота).
+   */
+  deviantDoctrine?: DoctrineId | null
+  /** Длина окна доктрин в ходах; не задано — из правил. */
+  doctrineWindow?: number
   /** Подмена порога победы для подбора: карта своего порога может не задавать. */
   victoryPowerCenters: number | null
   /** Аварийный предохранитель: партия не должна крутиться бесконечно. */
@@ -544,6 +552,14 @@ function stepCombat(
     if (ready.errors.length) return false
     if (pending.trigger !== 'bombardment' && prep.defenderId) {
       applyGameActionOnSnapshot(game, map, prep.defenderId, 'update-combat-prep', { ready: true })
+      // Третьи игроки: без их ответа бой не начнётся.
+      for (const candidate of preview?.supportCandidates ?? []) {
+        if (prep.readyBy[candidate.playerId]) continue
+        applyGameActionOnSnapshot(game, map, candidate.playerId, 'update-combat-prep', {
+          ready: true,
+          supportSide: supportSideFor(game, candidate.playerId, attackerId, prep.defenderId),
+        })
+      }
     }
     return true
   }
@@ -552,6 +568,13 @@ function stepCombat(
     const attackerId = pending.attackerId
     const defenderId = pending.defenderIds[0]
     const decided = pending.continueDecisions ?? {}
+    if (decided.attacker !== undefined && decided.defender !== undefined) {
+      // Стороны решили — ждём поддерживающих; их кубики раздаёт автоматика.
+      const supporter = combatSupportersAwaited(game, buildCombatPreviewFromPending(game))
+        .find((playerId) => !pending.supportReady?.[playerId])
+      if (!supporter) return false
+      return applyGameActionOnSnapshot(game, map, supporter, 'continue-combat').errors.length === 0
+    }
     const side = decided.attacker === undefined ? 'attacker' : 'defender'
     const playerId = side === 'attacker' ? attackerId : defenderId
     if (!playerId) return false
@@ -578,6 +601,26 @@ function stepCombat(
   }
 
   return false
+}
+
+/**
+ * Кого поддержать третьему игроку: того, кто отстаёт по центрам власти, — чтобы не растить
+ * лидера. При равенстве не вмешиваться.
+ */
+function supportSideFor(
+  game: GameSnapshot,
+  playerId: string,
+  attackerId: string,
+  defenderId: string,
+): 'attacker' | 'defender' | null {
+  const attackerCenters = countControlledPowerCenters(game, attackerId)
+  const defenderCenters = countControlledPowerCenters(game, defenderId)
+  const mine = countControlledPowerCenters(game, playerId)
+  // Лидер не помогает никому: ему выгодно, чтобы соперники тратили флот друг на друга.
+  if (mine > Math.max(attackerCenters, defenderCenters)) return null
+  if (attackerCenters > defenderCenters) return 'defender'
+  if (defenderCenters > attackerCenters) return 'attacker'
+  return null
 }
 
 function sampleTurn(
@@ -722,6 +765,10 @@ export function runGame(map: MapDefinition, seed: number, options: RunOptions): 
       return record
     }
 
+    if (options.deviantDoctrine) {
+      record.deviantPlayerId = playerIds[Math.abs(seed) % playerIds.length]!
+    }
+
     if (options.handicapCells > 0) {
       record.handicappedPlayerId = playerIds[0]!
       applyHandicap(game, playerIds[0]!, options.handicapCells)
@@ -732,7 +779,11 @@ export function runGame(map: MapDefinition, seed: number, options: RunOptions): 
 
     beginMatchForParticipants(game, map.id, playerIds, {
       turnLimit: options.turnLimit,
-      ...(options.doctrines === false ? { doctrineWindow: null } : {}),
+      ...(options.doctrines === false
+        ? { doctrineWindow: null }
+        : options.doctrineWindow != null
+          ? { doctrineWindow: options.doctrineWindow }
+          : {}),
     })
 
     const tally: SpendTally = { tokenFaceValue: 0, shipCost: 0 }
@@ -839,7 +890,9 @@ export function runGame(map: MapDefinition, seed: number, options: RunOptions): 
       if (game.phase === 'planning' && game.doctrineChoice) {
         for (const playerId of playerIds) {
           if (!doctrineChoiceOwed(game, playerId)) continue
-          const doctrineId = options.forcedDoctrine ?? pickDoctrine(game, playerId)
+          const doctrineId = playerId === record.deviantPlayerId && options.deviantDoctrine
+            ? options.deviantDoctrine
+            : options.forcedDoctrine ?? pickDoctrine(game, playerId)
           const window = String(game.doctrineChoice?.windowStart ?? game.turnNumber)
           if (!applyGameActionOnSnapshot(game, map, playerId, 'choose-doctrine', { doctrineId }).errors.length) {
             record.doctrines[window] ??= {}
