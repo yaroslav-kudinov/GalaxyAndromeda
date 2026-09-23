@@ -14,7 +14,7 @@ import type { DoctrineId } from '../../packages/rules/src/index.js'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { normalizeMapDefinition } from '../../packages/rules/src/index.js'
+import { DOCTRINES, normalizeMapDefinition } from '../../packages/rules/src/index.js'
 import type { MapDefinition } from '../../packages/rules/src/index.js'
 import { DEFAULT_RUN_OPTIONS, runGame } from './bot.js'
 import type { RunOptions } from './bot.js'
@@ -203,7 +203,23 @@ function report(mapId: string, summary: Summary, records: readonly GameRecord[])
   return lines.join('\n')
 }
 
+/**
+ * Подбор чисел доктрин без правки правил: `--tune maneuvers.claimLimit=-2,attack.claimLimit=-1`.
+ * Меняет таблицу только в этом процессе.
+ */
+function applyDoctrineTuning(raw: string | undefined): void {
+  if (!raw) return
+  for (const entry of raw.split(',').map((part) => part.trim()).filter(Boolean)) {
+    const match = entry.match(/^(\w+)\.(\w+)=(-?\d+)$/)
+    const doctrine = match && DOCTRINES.find((candidate) => candidate.id === match[1])
+    if (!match || !doctrine || !(match[2]! in doctrine)) throw new Error(`Не понял настройку доктрины: ${entry}`)
+    ;(doctrine as unknown as Record<string, number>)[match[2]!] = Number(match[3])
+  }
+}
+
 function main(): void {
+  const tuneIndex = process.argv.indexOf('--tune')
+  applyDoctrineTuning(tuneIndex > 0 ? process.argv[tuneIndex + 1] : undefined)
   const args = parseArgs(process.argv.slice(2))
   const blocks: string[] = []
   const payload: Record<string, { summary: Summary; records: GameRecord[] }> = {}
