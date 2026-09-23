@@ -87,6 +87,7 @@ import {
   establishSiegeRecord,
   executeSiegeLosses,
   siegeLossesOwedBy,
+  SIEGE_LOSS_ERRORS,
   syncSieges,
   validateGarrisonDeparture,
 } from './siege.js'
@@ -848,7 +849,7 @@ export function getLegalActionsForSnapshot(
     actions.push({
       id: 'execute-siege-losses',
       type: 'siegeLosses',
-      description: `Осада: выбрать потери гарнизона (клеток ${owedSiege.length}); без выбора погибнут самые дешёвые`,
+      description: `Осада: выбрать, какой корабль гарнизона погибнет (клеток ${owedSiege.length}); без выбора ход не передаётся`,
       params: { cells: owedSiege },
     })
   }
@@ -1139,6 +1140,10 @@ function dispatchGameAction(
   }
 
   if (actionId === 'advance-phase') {
+    // Потерю в осаде выбирает сам осаждённый — без выбора ход не передаётся.
+    if (game.phase === 'planning' && siegeLossesOwedBy(game, playerId).length > 0) {
+      return { errors: [SIEGE_LOSS_ERRORS.chooseFirst] }
+    }
     return { errors: advanceGameSnapshot(game, map.id) }
   }
 

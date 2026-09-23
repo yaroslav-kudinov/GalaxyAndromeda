@@ -100,6 +100,20 @@ export const DEFAULT_RUN_OPTIONS: RunOptions = {
   handicapCells: 0,
 }
 
+type ActionSink = typeof applyGameActionOnSnapshot
+
+let actionSink: ActionSink = applyGameActionOnSnapshot
+
+/**
+ * Живой прогон против сервера (`harness/scripts/play-bots.ts`) подменяет исполнение действий:
+ * бот решает на копии состояния, а действие уходит на сервер.
+ */
+export function setActionSink(sink: ActionSink | null): void {
+  actionSink = sink ?? applyGameActionOnSnapshot
+}
+
+const act: ActionSink = (...args) => actionSink(...args)
+
 function parseKey(key: string): HexCoord {
   const [q, r] = key.split(',').map(Number)
   return { q: q ?? 0, r: r ?? 0 }
@@ -325,7 +339,7 @@ function tryPlaceMarker(game: GameSnapshot, map: MapDefinition, playerId: string
   )
   if (!best) return false
 
-  const { errors } = applyGameActionOnSnapshot(game, map, playerId, 'toggle-marker', {
+  const { errors } = act(game, map, playerId, 'toggle-marker', {
     coord: best.coord,
     kind: 'action',
   })
@@ -358,7 +372,7 @@ function tryBuild(
   const ships = Array.from({ length: count }, () => ({ type: best.type, coord: markerCoord }))
 
   const before = faceUpValueFor(game, playerId)
-  const { errors } = applyGameActionOnSnapshot(game, map, playerId, 'execute-production', {
+  const { errors } = act(game, map, playerId, 'execute-production', {
     markerId,
     ships,
   })
@@ -424,7 +438,7 @@ function tryMove(
   }
   if (moves.length === 0) return false
 
-  const { errors } = applyGameActionOnSnapshot(game, map, playerId, 'execute-marker-movement', {
+  const { errors } = act(game, map, playerId, 'execute-marker-movement', {
     from: markerCoord,
     moves,
   })
@@ -438,7 +452,7 @@ function dropMarker(
   playerId: string,
   coord: HexCoord,
 ): boolean {
-  const { errors } = applyGameActionOnSnapshot(game, map, playerId, 'toggle-marker', {
+  const { errors } = act(game, map, playerId, 'toggle-marker', {
     coord,
     kind: 'action',
   })
@@ -537,26 +551,26 @@ function stepCombat(
     const preview = buildCombatPreviewFromPending(game)
     if (prep.siegeAvailable && preview && !overwhelms(preview)) {
       // Штурм без подавляющего перевеса стоит флота; осада берёт центр бесплатно, но дольше.
-      const siege = applyGameActionOnSnapshot(game, map, attackerId, 'establish-siege')
+      const siege = act(game, map, attackerId, 'establish-siege')
       if (!siege.errors.length) {
         if (record) record.sieges.established += 1
         return true
       }
     }
     if (prep.siegeResponse && preview && !sideHoldsOut(preview, 'attacker')) {
-      const decline = applyGameActionOnSnapshot(game, map, attackerId, 'cancel-combat-prep')
+      const decline = act(game, map, attackerId, 'cancel-combat-prep')
       return decline.errors.length === 0
     }
-    const ready = applyGameActionOnSnapshot(game, map, attackerId, 'update-combat-prep', {
+    const ready = act(game, map, attackerId, 'update-combat-prep', {
       ready: true,
     })
     if (ready.errors.length) return false
     if (pending.trigger !== 'bombardment' && prep.defenderId) {
-      applyGameActionOnSnapshot(game, map, prep.defenderId, 'update-combat-prep', { ready: true })
+      act(game, map, prep.defenderId, 'update-combat-prep', { ready: true })
       // Третьи игроки: без их ответа бой не начнётся.
       for (const candidate of preview?.supportCandidates ?? []) {
         if (prep.readyBy[candidate.playerId]) continue
-        applyGameActionOnSnapshot(game, map, candidate.playerId, 'update-combat-prep', {
+        act(game, map, candidate.playerId, 'update-combat-prep', {
           ready: true,
           supportSide: supportSideFor(game, candidate.playerId, attackerId, prep.defenderId),
         })
@@ -574,7 +588,7 @@ function stepCombat(
       const supporter = combatSupportersAwaited(game, buildCombatPreviewFromPending(game))
         .find((playerId) => !pending.supportReady?.[playerId])
       if (!supporter) return false
-      return applyGameActionOnSnapshot(game, map, supporter, 'continue-combat').errors.length === 0
+      return act(game, map, supporter, 'continue-combat').errors.length === 0
     }
     const side = decided.attacker === undefined ? 'attacker' : 'defender'
     const playerId = side === 'attacker' ? attackerId : defenderId
@@ -586,12 +600,12 @@ function stepCombat(
       pending.roundNumber < options.maxCombatRounds
       && (!preview || !retreats.length || sideHoldsOut(preview, side))
     if (keepFighting) {
-      const { errors } = applyGameActionOnSnapshot(game, map, playerId, 'continue-combat')
+      const { errors } = act(game, map, playerId, 'continue-combat')
       return errors.length === 0
     }
 
     const retreatTo = retreats[0]
-    const { errors } = applyGameActionOnSnapshot(
+    const { errors } = act(
       game,
       map,
       playerId,
@@ -622,6 +636,46 @@ function supportSideFor(
   if (attackerCenters > defenderCenters) return 'defender'
   if (defenderCenters > attackerCenters) return 'attacker'
   return null
+}
+
+/**
+ * Один шаг ботов на живой партии: бой, выбор доктрин, долги планирования, маркеры, действия.
+ * Ходит только за `botIds`; ход человека не трогает.
+ */
+export function botStepLive(
+  game: GameSnapshot,
+  map: MapDefinition,
+  botIds: ReadonlySet<string>,
+  attempts: MarkerAttempts,
+): void {
+  if (game.gameOver) return
+  if (game.pendingCombat) {
+    stepCombat(game, map, DEFAULT_RUN_OPTIONS)
+    return
+  }
+  if (game.phase === 'planning' && game.doctrineChoice) {
+    for (const playerId of botIds) {
+      if (doctrineChoiceOwed(game, playerId)) {
+        act(game, map, playerId, 'choose-doctrine', { doctrineId: pickDoctrine(game, playerId) })
+      }
+    }
+  }
+  const active = game.activePlayerId
+  if (!active || !botIds.has(active)) return
+  let progressed = false
+  if (game.phase === 'planning' && siegeLossesOwedBy(game, active).length > 0) {
+    progressed = act(game, map, active, 'execute-siege-losses').errors.length === 0
+  }
+  if (!progressed && game.phase === 'planning' && claimPicksRemaining(game, active) > 0) {
+    progressed = act(game, map, active, 'execute-claim-picks').errors.length === 0
+  }
+  if (!progressed && game.phase === 'planning' && rechargePicksRemaining(game, active) > 0) {
+    progressed = act(game, map, active, 'execute-recharge-picks').errors.length === 0
+  }
+  const tally: SpendTally = { tokenFaceValue: 0, shipCost: 0 }
+  if (!progressed && game.phase === 'planning') progressed = tryPlaceMarker(game, map, active)
+  else if (!progressed && game.phase === 'actions') progressed = stepActions(game, map, active, tally, attempts)
+  if (!progressed && !game.pendingCombat) act(game, map, active, 'advance-phase')
 }
 
 function sampleTurn(
@@ -863,7 +917,7 @@ export function runGame(map: MapDefinition, seed: number, options: RunOptions): 
         const progressed = stepCombat(game, map, options, record)
         if (!progressed || combatGuard > 200) {
           const attackerId = game.pendingCombat?.attackerId
-          if (attackerId) applyGameActionOnSnapshot(game, map, attackerId, 'abort-combat')
+          if (attackerId) act(game, map, attackerId, 'abort-combat')
           if (game.pendingCombat) {
             record.error = 'Бой не удалось разрешить'
             break
@@ -895,7 +949,7 @@ export function runGame(map: MapDefinition, seed: number, options: RunOptions): 
             ? options.deviantDoctrine
             : options.forcedDoctrine ?? pickDoctrine(game, playerId)
           const window = String(game.doctrineChoice?.windowStart ?? game.turnNumber)
-          if (!applyGameActionOnSnapshot(game, map, playerId, 'choose-doctrine', { doctrineId }).errors.length) {
+          if (!act(game, map, playerId, 'choose-doctrine', { doctrineId }).errors.length) {
             record.doctrines[window] ??= {}
             record.doctrines[window]![doctrineId] = (record.doctrines[window]![doctrineId] ?? 0) + 1
           }
@@ -904,17 +958,17 @@ export function runGame(map: MapDefinition, seed: number, options: RunOptions): 
 
       let progressed = false
       if (game.phase === 'planning' && siegeLossesOwedBy(game, active).length > 0) {
-        progressed = applyGameActionOnSnapshot(
+        progressed = act(
           game, map, active, 'execute-siege-losses',
         ).errors.length === 0
       }
       if (!progressed && game.phase === 'planning' && claimPicksRemaining(game, active) > 0) {
-        progressed = applyGameActionOnSnapshot(
+        progressed = act(
           game, map, active, 'execute-claim-picks',
         ).errors.length === 0
       }
       if (!progressed && game.phase === 'planning' && rechargePicksRemaining(game, active) > 0) {
-        progressed = applyGameActionOnSnapshot(
+        progressed = act(
           game, map, active, 'execute-recharge-picks',
         ).errors.length === 0
       }
@@ -931,7 +985,7 @@ export function runGame(map: MapDefinition, seed: number, options: RunOptions): 
       // Бой мог подняться прямо сейчас — передавать фазу поверх него нельзя.
       if (game.pendingCombat) continue
 
-      const { errors } = applyGameActionOnSnapshot(game, map, active, 'advance-phase')
+      const { errors } = act(game, map, active, 'advance-phase')
       if (errors.length) {
         record.error = `Фаза не продвигается: ${errors[0]}`
         break

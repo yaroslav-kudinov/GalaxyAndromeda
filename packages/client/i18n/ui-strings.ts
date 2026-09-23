@@ -131,6 +131,25 @@ export const uiStringsRu = {
     supportReady: 'Готов',
     assaultBlocked: 'Штурм невозможен: ни одна сторона не может стрелять. Можно только осадить.',
   },
+  planningDecisions: {
+    heading: 'Нужно решить',
+    sub: 'Пока решения не приняты, ход не передаётся.',
+    blocked: 'Сначала примите решения в карточке «Нужно решить» над картой',
+    doctrineTitle: 'Доктрина на ближайшие ходы — соперники увидят её, когда выберут все',
+    costs: 'платите',
+    claimsTitle: (need: number, total: number) =>
+      `Захват: ваши корабли стоят на ${total} клетках, занять можно ${need}. Выберите здесь или щелчком по клетке на карте — подходящие обведены пунктиром.`,
+    claimsConfirm: (picked: number, need: number) => `Занять (${picked} из ${need})`,
+    rechargeTitle: (need: number, total: number) =>
+      `Перезарядка: поднимите лицом вверх ${need} из ${total} перевёрнутых фишек.`,
+    rechargeConfirm: (picked: number, need: number) => `Поднять (${picked} из ${need})`,
+    siegeTitle: 'Осада: гарнизон теряет по кораблю на каждой осаждённой клетке. Выберите, какой.',
+    siegeConfirm: 'Потерять выбранные',
+    powerCenter: 'центр власти',
+    noTokens: 'без фишек',
+    credits: (value: number) => `кредиты ${value}`,
+    production: (value: number) => `производство ${value}`,
+  },
   turnAnnounce: {
     matchStart: 'Начало партии',
     rechargeHint:

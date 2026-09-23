@@ -28,6 +28,10 @@ import {
   getLegalActionsForSnapshot,
   applyGameActionOnSnapshot,
   canBesiegeCell,
+  claimPicksRemaining,
+  eligibleClaimCells,
+  rechargePicksRemaining,
+  siegeLossesOwedBy,
   doctrineChoiceOwed,
   removeActionMarker,
   canRemoveActionMarkerThisTurn,
@@ -1064,8 +1068,42 @@ const mustResolveActionMarker = computed(() =>
     : false,
 )
 
+/** Обязательные решения планирования, без которых ход не передаётся. */
+const planningDecisionsOwed = computed(() => {
+  const game = snapshot.value
+  if (!game || game.phase !== 'planning' || game.gameOver) return false
+  const me = playerId.value
+  return doctrineChoiceOwed(game, me)
+    || claimPicksRemaining(game, me) > 0
+    || rechargePicksRemaining(game, me) > 0
+    || siegeLossesOwedBy(game, me).length > 0
+})
+
+/** Выбор клеток захвата: подходящие обведены на карте, выбранные — кольцом. */
+const claimSelection = ref<string[]>([])
+const claimCandidateKeys = computed(() => {
+  const game = snapshot.value
+  if (!game || game.phase !== 'planning' || claimPicksRemaining(game, playerId.value) <= 0) return [] as string[]
+  return eligibleClaimCells(game, playerId.value).map((cell) => hexKey(cell.coord.q, cell.coord.r))
+})
+watch(claimCandidateKeys, (keys) => {
+  claimSelection.value = claimSelection.value.filter((key) => keys.includes(key))
+})
+
+function toggleClaimOnMap(key: string): boolean {
+  if (!claimCandidateKeys.value.includes(key) || !snapshot.value) return false
+  const need = Math.min(claimPicksRemaining(snapshot.value, playerId.value), claimCandidateKeys.value.length)
+  if (claimSelection.value.includes(key)) {
+    claimSelection.value = claimSelection.value.filter((entry) => entry !== key)
+  } else if (claimSelection.value.length < need) {
+    claimSelection.value = [...claimSelection.value, key]
+  }
+  return true
+}
+
 const phaseAdvanceBlockedReason = computed(() => {
   if (!saveFile.value?.game) return null
+  if (planningDecisionsOwed.value) return ui.planningDecisions.blocked
   return actionMarkerAdvanceBlockMessage(saveFile.value.game, playerId.value)
 })
 
@@ -1338,6 +1376,38 @@ const turnNumber = computed(() => snapshot.value?.turnNumber ?? 1)
 
 const doctrineBusy = ref(false)
 
+/** Решение планирования из карточки «Нужно решить»: захват, перезарядка, потери в осаде. */
+async function submitPlanningDecision(actionId: string, params: Record<string, unknown>) {
+  if (doctrineBusy.value || !saveFile.value?.game) return
+  doctrineBusy.value = true
+  try {
+    if (serverStatus.value === 'online' && !roomId.value.startsWith('local-')) {
+      bumpObservationEpoch()
+      const obs = await submitGameAction(roomId.value, playerId.value, actionId, params)
+      applyObservation(obs)
+      persistLocal()
+    } else {
+      const result = applyGameActionOnSnapshot(
+        saveFile.value.game,
+        saveFile.value.map,
+        playerId.value,
+        actionId,
+        params,
+      )
+      if (result.errors.length) {
+        markerActionHint.value = result.errors[0] ?? null
+        return
+      }
+      persistLocal()
+      refreshLocalLegalActions()
+    }
+  } catch (e) {
+    markerActionHint.value = actionErrorMessage(e, 'Не удалось выполнить действие')
+  } finally {
+    doctrineBusy.value = false
+  }
+}
+
 /** Доктрину выбирают все одновременно — в любой момент планирования, не только в свой ход. */
 async function chooseDoctrineAction(doctrineId: import('@galaxy/rules').DoctrineId) {
   if (doctrineBusy.value || !saveFile.value?.game) return
@@ -1474,10 +1544,10 @@ const boardInteractiveKeys = computed(() => {
 })
 
 const boardTokenPickKeys = computed(() =>
-  buildTokenPick.value.active ? buildTokenPick.value.pickKeys : [],
+  buildTokenPick.value.active ? buildTokenPick.value.pickKeys : claimCandidateKeys.value,
 )
 const boardTokenPickedKeys = computed(() =>
-  buildTokenPick.value.active ? buildTokenPick.value.pickedKeys : [],
+  buildTokenPick.value.active ? buildTokenPick.value.pickedKeys : claimSelection.value,
 )
 
 const boardReachableKeys = computed(() => {
@@ -2602,6 +2672,8 @@ async function selectCell(q: number, r: number) {
     return
   }
 
+  if (toggleClaimOnMap(hexKey(q, r))) return
+
   if (markerMapPickActive.value) {
     markerMapPick.handleMapSelect(q, r)
     return
@@ -3117,6 +3189,19 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
         </template>
       </div>
     </div>
+
+    <PlanningDecisionsPanel
+      v-if="snapshot && !battleModalOpen"
+      :snapshot="snapshot"
+      :player-id="playerId"
+      v-model:claim-selected="claimSelection"
+      :busy="doctrineBusy"
+      @doctrine="chooseDoctrineAction"
+      @claims="submitPlanningDecision('execute-claim-picks', { picks: $event })"
+      @recharge="submitPlanningDecision('execute-recharge-picks', { picks: $event })"
+      @siege-losses="submitPlanningDecision('execute-siege-losses', { shipIds: $event })"
+      @focus-cell="selectedKey = hexKey($event.q, $event.r)"
+    />
 
     <TurnEventAnnounceModal
       v-if="rechargeIntroVisible && resourceRechargeBanner"
