@@ -2,6 +2,7 @@ import {
   MAX_LOBBY_PLAYERS,
   MAX_SHIPS_PER_CELL,
   MAX_SHIPS_PER_CELL_PER_PLAYER,
+  SHIP_LABELS,
   SHIP_TYPES,
 } from './constants.js'
 import type { MapCellDefinition, MapDefinition, ResourceTokenDef, ShipType, StartingShipDef } from './types.js'
@@ -224,4 +225,71 @@ export function validateMapDefinition(map: MapDefinition): string[] {
     }
   }
   return errors
+}
+
+interface StartSummary {
+  cells: number
+  powerCenters: number
+  credits: number
+  production: number
+  ships: Record<string, number>
+}
+
+/**
+ * Предупреждения о неравном старте: у игроков разное число клеток, центров власти, фишек или
+ * кораблей. Не ошибка — учебные карты асимметричны намеренно, — но на обычной карте такое
+ * почти всегда недосмотр: в репозитории лежала карта, где второй игрок стартовал без кредитов.
+ */
+export function mapBalanceWarnings(map: MapDefinition): string[] {
+  const summaries = new Map<number, StartSummary>()
+  const summaryOf = (player: number) => {
+    let summary = summaries.get(player)
+    if (!summary) {
+      summary = { cells: 0, powerCenters: 0, credits: 0, production: 0, ships: {} }
+      summaries.set(player, summary)
+    }
+    return summary
+  }
+
+  let totalPowerCenters = 0
+  for (const cell of map.cells) {
+    if (cell.isPowerCenter) totalPowerCenters += 1
+    for (const ship of cell.startingShips ?? []) {
+      const summary = summaryOf(ship.player)
+      summary.ships[ship.type] = (summary.ships[ship.type] ?? 0) + 1
+    }
+    if (cell.startPlayer == null) continue
+    const summary = summaryOf(cell.startPlayer)
+    summary.cells += 1
+    if (cell.isPowerCenter) summary.powerCenters += 1
+    const token = getCellResourceToken(cell)
+    if (token?.type === 'credits') summary.credits += token.value
+    if (token?.type === 'production') summary.production += token.value
+  }
+
+  const warnings: string[] = []
+  if (map.victoryPowerCenters != null && map.victoryPowerCenters > totalPowerCenters) {
+    warnings.push(
+      `Порог победы ${map.victoryPowerCenters} больше числа центров власти на карте (${totalPowerCenters})`,
+    )
+  }
+
+  const players = [...summaries.keys()].sort((a, b) => a - b)
+  if (players.length < 2) return warnings
+  const compare = (label: string, value: (s: StartSummary) => number) => {
+    const values = players.map((player) => value(summaries.get(player)!))
+    if (new Set(values).size > 1) {
+      warnings.push(`Неравный старт — ${label}: ${players.map((p, i) => `игрок ${p}: ${values[i]}`).join(', ')}`)
+    }
+  }
+  compare('клетки', (s) => s.cells)
+  compare('центры власти', (s) => s.powerCenters)
+  compare('кредиты', (s) => s.credits)
+  compare('производство', (s) => s.production)
+  const shipTypes = new Set(players.flatMap((player) => Object.keys(summaries.get(player)!.ships)))
+  for (const type of shipTypes) {
+    const label = SHIP_LABELS[type as ShipType]?.toLowerCase() ?? type
+    compare(label, (s) => s.ships[type] ?? 0)
+  }
+  return warnings
 }
