@@ -74,6 +74,7 @@ function parseArgs(argv: readonly string[]): Args {
 
 function loadMap(name: string): MapDefinition {
   const candidates = [
+    resolve(HERE, 'maps', `${name}.json`),
     resolve(REPO_ROOT, 'maps/bundled', `${name}.json`),
     resolve(REPO_ROOT, 'maps', `${name}.json`),
     resolve(process.cwd(), name),
@@ -85,7 +86,7 @@ function loadMap(name: string): MapDefinition {
       continue
     }
   }
-  throw new Error(`Карта не найдена: ${name} (искал в maps/bundled, maps и по прямому пути)`)
+  throw new Error(`Карта не найдена: ${name} (искал в harness/balance/maps, maps/bundled, maps и по прямому пути)`)
 }
 
 function percent(value: number | null | undefined): string {

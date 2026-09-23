@@ -217,24 +217,46 @@ function targetScore(
   return 1
 }
 
+/**
+ * Выбор среди равноценных вариантов — случайный (по сиду прогона).
+ *
+ * Если брать «первый по порядку», бот оказывается несимметричен: порядок клеток в файле карты
+ * и порядок обхода соседей при зеркальном отражении карты не отражаются, и одна сторона
+ * систематически получает лучшие ничьи. На идеально симметричной карте это давало одной
+ * стороне 62–70 % побед — перекос бота, а не игры.
+ */
+function pickAmongBest<T>(items: readonly T[], score: (item: T) => number): T | null {
+  let bestScore = -Infinity
+  let best: T[] = []
+  for (const item of items) {
+    const value = score(item)
+    if (value > bestScore) {
+      bestScore = value
+      best = [item]
+    } else if (value === bestScore) {
+      best.push(item)
+    }
+  }
+  if (best.length === 0 || bestScore <= -Infinity) return null
+  return best[Math.floor(Math.random() * best.length)]!
+}
+
 function tryPlaceMarker(game: GameSnapshot, map: MapDefinition, playerId: string): boolean {
   const limit = actionMarkerLimitForPlayer(game, playerId)
   const owned = game.actionMarkers.filter((marker) => marker.ownerId === playerId).length
   if (owned >= limit) return false
 
-  let best: { cell: RuntimeCellState; score: number } | null = null
-  for (const cell of game.cells) {
-    if (cell.actionMarkerId) continue
-    if (!canPlaceActionMarkerOnCell(cell, playerId)) continue
-    // Клетки с кораблями полезнее: маркер на них двигает флот, а не только держит центр.
-    const own = cell.ships.filter((ship) => ship.ownerId === playerId).length
-    const score = own * 10 + (cell.isPowerCenter ? 3 : 0)
-    if (!best || score > best.score) best = { cell, score }
-  }
+  const candidates = game.cells.filter(
+    (cell) => !cell.actionMarkerId && canPlaceActionMarkerOnCell(cell, playerId),
+  )
+  // Клетки с кораблями полезнее: маркер на них двигает флот, а не только держит центр.
+  const best = pickAmongBest(candidates, (cell) =>
+    cell.ships.filter((ship) => ship.ownerId === playerId).length * 10 + (cell.isPowerCenter ? 3 : 0),
+  )
   if (!best) return false
 
   const { errors } = applyGameActionOnSnapshot(game, map, playerId, 'toggle-marker', {
-    coord: best.cell.coord,
+    coord: best.coord,
     kind: 'action',
   })
   return errors.length === 0
@@ -296,17 +318,10 @@ function tryMove(
   const moves: ShipMovePlan[] = []
 
   for (const option of movable) {
-    const reachable = [...option.reachableKeys, ...option.combatReachableKeys]
-    let bestKey: string | null = null
-    let bestScore = 0
-    for (const key of reachable) {
-      if (taken.has(key)) continue
-      const score = targetScore(cells.get(key), playerId, ownStackSize)
-      if (score > bestScore) {
-        bestScore = score
-        bestKey = key
-      }
-    }
+    const reachable = [...option.reachableKeys, ...option.combatReachableKeys].filter(
+      (key) => !taken.has(key) && targetScore(cells.get(key), playerId, ownStackSize) > 0,
+    )
+    const bestKey = pickAmongBest(reachable, (key) => targetScore(cells.get(key), playerId, ownStackSize))
     if (!bestKey) continue
     taken.add(bestKey)
     moves.push({ shipId: option.ship.id, to: parseKey(bestKey) })

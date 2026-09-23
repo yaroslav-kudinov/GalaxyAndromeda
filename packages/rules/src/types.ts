@@ -94,6 +94,8 @@ export interface GameState {
   victoryPowerCenters?: number
   /** Жёсткий лимит ходов, зафиксированный при старте партии. */
   turnLimit?: number
+  /** Сид партии: от него перемешивается порядок хода. */
+  matchSeed?: number
 }
 
 export interface GameEvent {

@@ -32,6 +32,11 @@ export interface BeginMatchOptions {
    * урока. По умолчанию `DEFAULT_TURN_LIMIT`.
    */
   turnLimit?: number | null
+  /**
+   * Сид партии. `null` — без сида: порядок хода остаётся привязан к карте, как рассчитывают
+   * обучающие сценарии. По умолчанию — случайный.
+   */
+  matchSeed?: number | null
 }
 
 export function beginMatchForParticipants(
@@ -45,7 +50,9 @@ export function beginMatchForParticipants(
 
   // Сид партии: разрешение ничьих должно быть одинаковым при повторной загрузке сейва,
   // но разным от партии к партии — иначе одно и то же место выигрывало бы все ничьи.
-  game.matchSeed ??= Math.floor(Math.random() * 0xffffffff) >>> 0
+  if (options?.matchSeed === null) delete game.matchSeed
+  else if (options?.matchSeed != null) game.matchSeed = options.matchSeed >>> 0
+  else game.matchSeed ??= Math.floor(Math.random() * 0xffffffff) >>> 0
   const turnLimit = options?.turnLimit === undefined ? DEFAULT_TURN_LIMIT : options.turnLimit
   if (turnLimit == null) game.turnLimit = undefined
   else game.turnLimit ??= turnLimit

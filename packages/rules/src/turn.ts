@@ -31,8 +31,21 @@ export function nextPhase(current: Phase): Phase {
   return PHASE_ORDER[(idx + 1) % PHASE_ORDER.length]
 }
 
-function mixTurnOrderSeed(turnNumber: number, mapId: string): number {
+/**
+ * Сид порядка хода. От сида партии, если он есть: иначе порядок зависит только от карты и
+ * номера хода и совпадает во всех партиях на этой карте — одно и то же место систематически
+ * оказывалось в выгодной позиции (замер: 70 % побед одного места на эталонной дуэли).
+ *
+ * Без сида партии (обучение, снимки из тестов) остаётся прежнее поведение: обучающие сценарии
+ * рассчитаны на конкретную очередь.
+ */
+function mixTurnOrderSeed(turnNumber: number, mapId: string, matchSeed?: number): number {
   let h = ((turnNumber + 1) * 0x9e3779b9) >>> 0
+  if (matchSeed != null) {
+    h = Math.imul(h ^ (matchSeed >>> 0), 0x01000193) >>> 0
+    h = Math.imul(h ^ (h >>> 13), 0x5bd1e995) >>> 0
+    return h >>> 0
+  }
   for (let i = 0; i < mapId.length; i++) {
     h = Math.imul(h ^ mapId.charCodeAt(i), 0x01000193) >>> 0
   }
@@ -80,7 +93,9 @@ export function activePlayerOrder(
     const shuffled = [...base]
     shuffleInPlace(
       shuffled,
-      mulberry32(mixTurnOrderSeed(context.state.turnNumber, context.state.mapId)),
+      mulberry32(
+        mixTurnOrderSeed(context.state.turnNumber, context.state.mapId, context.state.matchSeed),
+      ),
     )
     return shuffled.filter((id) => eligible.has(id))
   }

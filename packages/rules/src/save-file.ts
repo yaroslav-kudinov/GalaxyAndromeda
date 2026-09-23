@@ -489,6 +489,7 @@ export function gameStateFromSnapshot(snapshot: GameSnapshot, mapId: string): Ga
     eventLog: snapshot.eventLog,
     victoryPowerCenters: snapshot.victoryPowerCenters,
     turnLimit: snapshot.turnLimit,
+    matchSeed: snapshot.matchSeed,
   }
 }
 

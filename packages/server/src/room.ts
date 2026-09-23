@@ -781,8 +781,10 @@ export function startRoom(roomId: string, playerId: string): RoomStartResult {
   syncParticipatingPlayerIds(room.state, room.playerIds)
   if (isPristineMatchSnapshot(room.state)) {
     beginMatchForParticipants(room.state, room.map.id, room.playerIds, {
-      // Обучение не обрывается лимитом ходов: урок важнее темпа.
+      // Обучение не обрывается лимитом ходов: урок важнее темпа. И сценарий рассчитан на
+      // конкретную очередь хода, поэтому сид партии ему не выдаётся.
       turnLimit: room.mode === 'tutorial' ? null : undefined,
+      matchSeed: room.mode === 'tutorial' ? null : undefined,
     })
   } else {
     ensureActivePlayerParticipating(room.state)

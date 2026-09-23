@@ -1247,6 +1247,30 @@ describe('turn flow', () => {
     expect(seen.has('player-2,player-1')).toBe(true)
   })
 
+  it('turn order follows the match seed, not only the map', () => {
+    const map = createEmptyMap()
+    map.cells = [
+      { q: 0, r: 0, startPlayer: 1 },
+      { q: 1, r: 0, startPlayer: 2 },
+    ]
+    const state = gameStateFromMap(map, ['P1', 'P2'])
+    const sequence = (matchSeed?: number) =>
+      Array.from({ length: 24 }, (_, i) =>
+        activePlayerOrder(state.players, null, {
+          state: { ...state, turnNumber: i + 1, matchSeed },
+          phase: 'planning',
+        }).join(','),
+      ).join(' ')
+
+    // Без сида партии порядок привязан к карте — как рассчитывают обучающие сценарии.
+    expect(sequence()).toEqual(sequence())
+    // С сидом партии очередь своя в каждой партии, иначе одно место систематически
+    // оказывалось в выгодной позиции во всех партиях на карте.
+    expect(sequence(1)).toEqual(sequence(1))
+    const distinct = new Set([1, 2, 3, 4, 5, 6].map((seed) => sequence(seed)))
+    expect(distinct.size).toBeGreaterThan(1)
+  })
+
   it('skips non-participating players when only two joined', () => {
     const map = createEmptyMap()
     const game = gameSnapshotFromGameState(gameStateFromMap(map, ['P1', 'P2', 'P3']))
