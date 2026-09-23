@@ -314,6 +314,8 @@ export interface GameSnapshot {
   doctrineByPlayer?: Record<string, ActiveDoctrine>
   /** Незакрытый выбор доктрин на новое окно. Чужие выборы до вскрытия не показываются. */
   doctrineChoice?: DoctrineChoiceState
+  /** Обучение: все кубики в боях выпадают этим значением (см. `ScenarioScript`). */
+  scriptedDiceValue?: number
   /** Игра завершена */
   gameOver?: GameOverState
   /** Незавершённый многoroundовый бой */
@@ -535,6 +537,7 @@ function normalizeGameSnapshot(game: GameSnapshot, _map?: MapDefinition): GameSn
     turnLimit: game.turnLimit,
     matchSeed: game.matchSeed,
     doctrineWindow: game.doctrineWindow,
+    scriptedDiceValue: game.scriptedDiceValue,
     doctrineByPlayer: game.doctrineByPlayer
       ? Object.fromEntries(Object.entries(game.doctrineByPlayer).map(([id, d]) => [id, { ...d }]))
       : undefined,

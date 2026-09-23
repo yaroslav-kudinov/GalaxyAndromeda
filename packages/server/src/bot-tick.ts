@@ -134,6 +134,7 @@ export function initTutorialRoomState(
   room.botPlayerIds = bots.map((bot) => bot.playerId)
   room.botPlayerId = room.botPlayerIds[0]
   room.state.scenarioProgress = initScenarioProgress(scenarioId)
+  if (script?.scriptedDiceValue != null) room.state.scriptedDiceValue = script.scriptedDiceValue
 }
 
 export function manualAdvanceScenarioStep(room: Room): boolean {

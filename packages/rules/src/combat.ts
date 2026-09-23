@@ -1172,6 +1172,7 @@ export function resolveCombatAtCell(
     damageByShipId,
     options,
     rng,
+    game.scriptedDiceValue,
   )
   const log: BattleLogEntry[] = [
     {

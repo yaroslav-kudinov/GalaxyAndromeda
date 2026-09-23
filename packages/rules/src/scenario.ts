@@ -61,6 +61,11 @@ export interface ScenarioScript {
   /** Несколько учебных флотов; старые botPlayerId/botName остаются совместимыми. */
   bots?: ScenarioBot[]
   initialSave?: Record<string, unknown>
+  /**
+   * Все кубики в боях сценария выпадают этим значением. Обучение показывает правило, а не
+   * везение: шаг «обстрел уничтожил эсминец» должен сбываться всегда.
+   */
+  scriptedDiceValue?: number
   steps: ScenarioStep[]
 }
 
