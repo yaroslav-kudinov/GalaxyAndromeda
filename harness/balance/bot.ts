@@ -17,10 +17,9 @@ import {
   actionMarkerLimitForPlayer,
   applyGameActionOnSnapshot,
   beginMatchForParticipants,
-  buildDestructionSelectionState,
+  buildCombatPreviewFromPending,
   canPlaceActionMarkerOnCell,
   combatPrepOf,
-  combatRoundStateOf,
   countControlledPowerCenters,
   gameSnapshotFromMap,
   getBuildableShipsForMarker,
@@ -31,11 +30,16 @@ import {
   computeClaimLimit,
   getShipProductionRegionMin,
   hexKey,
+  hitProbability,
   rechargePicksRemaining,
+  SHIP_DICE,
+  SHIP_HIT_THRESHOLD,
+  SHIP_HULL,
   SHIP_PRODUCTION_COST,
   resolveCombatPrep,
 } from '../../packages/rules/src/index.js'
 import type {
+  CombatPreview,
   GameSnapshot,
   HexCoord,
   MapDefinition,
@@ -44,7 +48,7 @@ import type {
   ShipType,
   ShipUnit,
 } from '../../packages/rules/src/index.js'
-import type { GameRecord, PlayerSample, TurnSample } from './metrics.js'
+import type { BattleRecord, GameRecord, PlayerSample, TurnSample } from './metrics.js'
 import { withSeededRandom } from './rng.js'
 
 export interface RunOptions {
@@ -76,7 +80,7 @@ export const DEFAULT_RUN_OPTIONS: RunOptions = {
   turnLimit: undefined,
   victoryPowerCenters: null,
   maxSteps: 250_000,
-  maxCombatRounds: 3,
+  maxCombatRounds: 12,
   handicapCells: 0,
 }
 
@@ -190,19 +194,39 @@ function enemyShipsOn(cell: RuntimeCellState, playerId: string): ShipUnit[] {
 }
 
 /**
+ * Боевая сила группы: ожидаемые попадания за раунд, умноженные на суммарную прочность.
+ * Грубая оценка по Ланчестеру — сколько группа успеет нанести, прежде чем её выбьют.
+ * Бонус авианосца и поддержку не учитывает: бот осторожнее, чем мог бы быть.
+ */
+function combatStrength(types: readonly ShipType[]): number {
+  let hits = 0
+  let hull = 0
+  for (const type of types) {
+    hits += (SHIP_DICE[type] ?? 0) * hitProbability(SHIP_HIT_THRESHOLD[type] ?? null)
+    hull += SHIP_HULL[type] ?? 1
+  }
+  return hits * hull
+}
+
+/** Нападать стоит с заметным перевесом: бой идёт до конца, а урон копится у обеих сторон. */
+const ATTACK_STRENGTH_MARGIN = 1.5
+
+/**
  * Ценность клетки как цели хода. Центры власти — валюта победы, поэтому они дороже всего;
  * дальше идут нейтральные клетки с фишками, потом просто нейтральные.
+ *
+ * @param attackers — корабли маркера, способные дойти до этой клетки: в бой идут все вместе.
  */
 function targetScore(
   cell: RuntimeCellState | undefined,
   playerId: string,
-  ownStackSize: number,
+  attackers: readonly ShipType[],
 ): number {
   if (!cell) return -1
   const enemies = enemyShipsOn(cell, playerId)
   const defended = enemies.length > 0
-  const canWin = ownStackSize > enemies.length
-
+  const canWin =
+    combatStrength(attackers) > ATTACK_STRENGTH_MARGIN * combatStrength(enemies.map((s) => s.type))
   if (cell.isPowerCenter) {
     if (cell.controlOwnerId === playerId) return defended && canWin ? 60 : 5
     if (!defended) return cell.controlOwnerId == null ? 120 : 110
@@ -312,18 +336,44 @@ function tryMove(
   if (movable.length === 0) return false
 
   const cells = indexCells(game)
-  const ownStackSize = movable.length
   const originKey = hexKey(markerCoord.q, markerCoord.r)
   const taken = new Set<string>([originKey])
+  const assigned = new Set<string>()
   const moves: ShipMovePlan[] = []
+  let combatChosen = false
+
+  // Кто из кораблей маркера дотягивается до клетки боя: в бой они идут все вместе.
+  const attackersFor = (key: string) =>
+    movable
+      .filter((option) => !assigned.has(option.ship.id) && option.combatReachableKeys.includes(key))
+      .map((option) => option.ship.type)
+  const scoreFor = (key: string) => {
+    const cell = cells.get(key)
+    const isCombat = !!cell && enemyShipsOn(cell, playerId).length > 0
+    if (isCombat && combatChosen) return -1
+    return targetScore(cell, playerId, isCombat ? attackersFor(key) : [])
+  }
 
   for (const option of movable) {
+    if (assigned.has(option.ship.id)) continue
     const reachable = [...option.reachableKeys, ...option.combatReachableKeys].filter(
-      (key) => !taken.has(key) && targetScore(cells.get(key), playerId, ownStackSize) > 0,
+      (key) => !taken.has(key) && scoreFor(key) > 0,
     )
-    const bestKey = pickAmongBest(reachable, (key) => targetScore(cells.get(key), playerId, ownStackSize))
+    const bestKey = pickAmongBest(reachable, scoreFor)
     if (!bestKey) continue
     taken.add(bestKey)
+    const cell = cells.get(bestKey)
+    if (cell && enemyShipsOn(cell, playerId).length > 0) {
+      // Один маркер — один бой, и идти в него поодиночке бессмысленно.
+      combatChosen = true
+      for (const other of movable) {
+        if (assigned.has(other.ship.id) || !other.combatReachableKeys.includes(bestKey)) continue
+        assigned.add(other.ship.id)
+        moves.push({ shipId: other.ship.id, to: parseKey(bestKey) })
+      }
+      continue
+    }
+    assigned.add(option.ship.id)
     moves.push({ shipId: option.ship.id, to: parseKey(bestKey) })
   }
   if (moves.length === 0) return false
@@ -394,25 +444,18 @@ function stepActions(
   return dropMarker(game, map, playerId, (stuck ?? markers[0]!).coord) && consumed()
 }
 
-/** Корабли на уничтожение: фронт приоритета, помещающийся в остаток урона. */
-function pickDestruction(game: GameSnapshot): string[] {
-  const pending = game.pendingCombat
-  const round = combatRoundStateOf(pending)
-  if (!pending || !round) return []
-
-  const cells = indexCells(game)
-  const battleCell = cells.get(pending.cellKey)
-  const loserShips = round.attackerWon
-    ? (battleCell?.ships ?? []).filter((ship) => ship.ownerId === round.defenderId)
-    : round.incomingAttackerShipIds
-        .map((id) => game.cells.flatMap((cell) => cell.ships).find((ship) => ship.id === id))
-        .filter((ship): ship is ShipUnit => !!ship)
-
-  const skipTypes = new Set<ShipType>(
-    (round.attackerWon ? round.defenderSkipTypes : round.attackerSkipTypes) ?? [],
-  )
-  const state = buildDestructionSelectionState(game, loserShips, round.remainingDamage, skipTypes)
-  return state.immediatelyDestroyableIds.slice(0, 1)
+/**
+ * Стоит ли стороне продолжать бой: оставшаяся сила (ожидаемые попадания на оставшуюся
+ * прочность) не меньше вражеской. Отступление — чтобы не терять флот в заведомо проигранном бою.
+ */
+function sideHoldsOut(preview: CombatPreview, side: 'attacker' | 'defender'): boolean {
+  const strength = (sidePreview: CombatPreview['attacker']) => {
+    const hull = sidePreview.ships.reduce((sum, ship) => sum + Math.max(0, ship.hull - ship.damage), 0)
+    return sidePreview.expectedHits * hull
+  }
+  const own = strength(side === 'attacker' ? preview.attacker : preview.defender)
+  const enemy = strength(side === 'attacker' ? preview.defender : preview.attacker)
+  return own >= enemy
 }
 
 /**
@@ -443,19 +486,6 @@ function stepCombat(game: GameSnapshot, map: MapDefinition, options: RunOptions)
     return true
   }
 
-  if (pending.phase === 'awaiting-destruction') {
-    const round = combatRoundStateOf(pending)
-    if (!round) return false
-    const { errors } = applyGameActionOnSnapshot(
-      game,
-      map,
-      round.winnerId,
-      'confirm-combat-destruction',
-      { destructionSelection: pickDestruction(game) },
-    )
-    return errors.length === 0
-  }
-
   if (pending.phase === 'awaiting-continue') {
     const attackerId = pending.attackerId
     const defenderId = pending.defenderIds[0]
@@ -464,12 +494,16 @@ function stepCombat(game: GameSnapshot, map: MapDefinition, options: RunOptions)
     const playerId = side === 'attacker' ? attackerId : defenderId
     if (!playerId) return false
 
-    if (pending.roundNumber < options.maxCombatRounds) {
+    const retreats = getCombatRetreatDestinations(game, playerId)
+    const preview = buildCombatPreviewFromPending(game)
+    const keepFighting =
+      pending.roundNumber < options.maxCombatRounds
+      && (!preview || !retreats.length || sideHoldsOut(preview, side))
+    if (keepFighting) {
       const { errors } = applyGameActionOnSnapshot(game, map, playerId, 'continue-combat')
       return errors.length === 0
     }
 
-    const retreats = getCombatRetreatDestinations(game, playerId)
     const retreatTo = retreats[0]
     const { errors } = applyGameActionOnSnapshot(
       game,
@@ -506,6 +540,89 @@ function sampleTurn(
   return { turn, byPlayer }
 }
 
+interface BattleWatch {
+  trigger: BattleRecord['trigger']
+  cellKey: string
+  attackerId: string
+  defenderId: string
+  attackerShips: Map<string, ShipType>
+  defenderShips: Map<string, ShipType>
+  /** Корабли, вступившие в бой: атакующие из приказа, защитники с клетки боя. */
+  incomingIds: string[]
+  defenderCellIds: string[]
+}
+
+function shipsOf(game: GameSnapshot, playerId: string): Map<string, ShipType> {
+  const out = new Map<string, ShipType>()
+  for (const cell of game.cells) {
+    for (const ship of cell.ships) if (ship.ownerId === playerId) out.set(ship.id, ship.type)
+  }
+  return out
+}
+
+function watchBattle(game: GameSnapshot): BattleWatch {
+  const pending = game.pendingCombat!
+  const defenderId = pending.defenderIds[0] ?? combatPrepOf(pending)?.defenderId ?? ''
+  return {
+    trigger: pending.trigger ?? 'movement',
+    cellKey: pending.cellKey,
+    attackerId: pending.attackerId,
+    defenderId,
+    attackerShips: shipsOf(game, pending.attackerId),
+    defenderShips: shipsOf(game, defenderId),
+    incomingIds: [
+      ...(combatPrepOf(pending)?.incomingAttackerShipIds ?? pending.continuation?.incomingAttackerShipIds ?? []),
+    ],
+    defenderCellIds: (indexCells(game).get(pending.cellKey)?.ships ?? [])
+      .filter((ship) => ship.ownerId === defenderId)
+      .map((ship) => ship.id),
+  }
+}
+
+/** Итог боя по доске: потери — корабли, которых больше нет; исход — кто остался на клетке. */
+function finishBattle(game: GameSnapshot, watch: BattleWatch): BattleRecord {
+  const lost = (before: Map<string, ShipType>, after: Map<string, ShipType>) => {
+    let count = 0
+    let value = 0
+    for (const [id, type] of before) {
+      if (after.has(id)) continue
+      count += 1
+      const cost = SHIP_PRODUCTION_COST[type]
+      value += cost.credits + cost.production
+    }
+    return { count, value }
+  }
+  const attackerAfter = shipsOf(game, watch.attackerId)
+  const defenderAfter = shipsOf(game, watch.defenderId)
+  const attackerLoss = lost(watch.attackerShips, attackerAfter)
+  const defenderLoss = lost(watch.defenderShips, defenderAfter)
+
+  const cell = indexCells(game).get(watch.cellKey)
+  const attackerOnCell = cell?.ships.some((ship) => ship.ownerId === watch.attackerId) ?? false
+  const defenderOnCell = cell?.ships.some((ship) => ship.ownerId === watch.defenderId) ?? false
+  const incomingAlive = watch.incomingIds.some((id) => attackerAfter.has(id))
+  const defendersAlive = watch.defenderCellIds.some((id) => defenderAfter.has(id))
+  let outcome: BattleRecord['outcome'] = 'none'
+  if (watch.trigger === 'bombardment') {
+    outcome = defenderOnCell ? 'none' : 'attacker'
+  } else if (!incomingAlive && !defendersAlive) {
+    outcome = 'mutual'
+  } else if (attackerOnCell && !defenderOnCell) {
+    outcome = defendersAlive ? 'retreat' : 'attacker'
+  } else if (defenderOnCell && !attackerOnCell) {
+    outcome = incomingAlive ? (attackerLoss.count + defenderLoss.count > 0 ? 'retreat' : 'none') : 'defender'
+  }
+
+  return {
+    trigger: watch.trigger,
+    outcome,
+    attackerLosses: attackerLoss.count,
+    defenderLosses: defenderLoss.count,
+    attackerLossValue: attackerLoss.value,
+    defenderLossValue: defenderLoss.value,
+  }
+}
+
 export function runGame(map: MapDefinition, seed: number, options: RunOptions): GameRecord {
   return withSeededRandom(seed, () => {
     const game = gameSnapshotFromMap(map)
@@ -533,6 +650,7 @@ export function runGame(map: MapDefinition, seed: number, options: RunOptions): 
       shipCostPaid: 0,
       firstUnlockTurn: {},
       eliminationTurns: [],
+      battles: [],
     }
 
     if (playerIds.length < 2) {
@@ -562,6 +680,7 @@ export function runGame(map: MapDefinition, seed: number, options: RunOptions): 
     let orderIndex = 0
     let steps = options.maxSteps
     let combatGuard = 0
+    let battle: BattleWatch | null = null
     // Кольцевой журнал последних шагов: без него зацикливание видно только как
     // «исчерпан лимит шагов», и непонятно, где именно бот встал.
     const attempts: MarkerAttempts = new Map()
@@ -607,6 +726,7 @@ export function runGame(map: MapDefinition, seed: number, options: RunOptions): 
       }
 
       if (game.pendingCombat) {
+        battle ??= watchBattle(game)
         combatGuard += 1
         const progressed = stepCombat(game, map, options)
         if (!progressed || combatGuard > 200) {
@@ -616,6 +736,10 @@ export function runGame(map: MapDefinition, seed: number, options: RunOptions): 
             record.error = 'Бой не удалось разрешить'
             break
           }
+        }
+        if (!game.pendingCombat && battle) {
+          record.battles.push(finishBattle(game, battle))
+          battle = null
         }
         continue
       }

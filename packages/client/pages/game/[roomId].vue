@@ -36,7 +36,6 @@ import {
   actionMarkerLimitForPlayer,
   buildCombatPreviewFromPending,
   combatPrepOf,
-  combatRoundStateOf,
   combatResolutionFingerprint,
   combatResolutionFromPending,
   computeRechargeBudget,
@@ -365,7 +364,7 @@ const markerMapPickBannerSlots = computed(() => {
 })
 const markerMapPickError = markerMapPick.error
 const markerMapPickCombatPreview = markerMapPick.combatPreview
-const markerMapPickRoundOneOdds = markerMapPick.roundOneOdds
+const markerMapPickBattleOdds = markerMapPick.battleOdds
 const markerMapPickOrderReady = markerMapPick.orderReady
 const markerMapPickHasPendingCombat = markerMapPick.hasPendingCombat
 const markerMapPickConfirmLabel = markerMapPick.confirmButtonLabel
@@ -594,10 +593,6 @@ watch(gameOverState, (go) => {
 const pendingCombatState = computed(() => snapshot.value?.pendingCombat ?? null)
 const combatPhase = computed(() => pendingCombatState.value?.phase ?? null)
 const combatPrepState = computed(() => combatPrepOf(pendingCombatState.value ?? undefined) ?? null)
-const combatRoundState = computed(
-  () => combatRoundStateOf(pendingCombatState.value ?? undefined) ?? null,
-)
-
 const combatPrepPreview = computed(() => {
   if (!snapshot.value) return null
   return buildCombatPreviewFromPending(snapshot.value)
@@ -624,23 +619,6 @@ const combatParticipantRole = computed<'attacker' | 'defender' | 'supporter' | n
   if (isCombatDefender(pending, playerId.value)) return 'defender'
   if (combatSupportCandidate.value) return 'supporter'
   return null
-})
-
-/** Победитель раунда — только он выбирает уничтожаемые корабли */
-const isCombatDestructionChooser = computed(
-  () =>
-    combatPhase.value === 'awaiting-destruction'
-    && combatRoundState.value?.winnerId === playerId.value,
-)
-
-const combatPrepAttackerSkips = computed((): import('@galaxy/rules').ShipType[] => {
-  const skips = combatPrepState.value?.combatOptions?.attacker?.prioritySkips ?? []
-  return skips.map((s) => s.shipType)
-})
-
-const combatPrepDefenderSkips = computed((): import('@galaxy/rules').ShipType[] => {
-  const skips = combatPrepState.value?.combatOptions?.defender?.prioritySkips ?? []
-  return skips.map((s) => s.shipType)
 })
 
 const combatPrepSelfReady = computed(() => {
@@ -695,7 +673,7 @@ const roundResultsPendingView = computed(() => {
 })
 
 /**
- * Модалка: prep, итоги раунда (всем клиентам) и выбор уничтожения победителем.
+ * Модалка: prep и итоги раунда (всем клиентам).
  * Решение «продолжить / отступить» — баннером после закрытия итогов, чтобы не перекрывать карту.
  * Итог держится и после конца pendingCombat (обстрел / бой без continue).
  */
@@ -704,8 +682,6 @@ const needsBattleModal = computed(() => {
   if (combatParticipantRole.value === null) return false
   switch (combatPhase.value) {
     case 'prep':
-      return true
-    case 'awaiting-destruction':
       return true
     default:
       return false
@@ -729,7 +705,6 @@ const combatUiExpectation = computed((): CombatUiExpectation => {
   return combatContinueUiExpectation({
     hasPendingCombat: hasActivePendingCombat.value,
     decisionRole: combatDecisionRole.value,
-    isDestructionChooser: isCombatDestructionChooser.value,
     phase: combatPhase.value,
     isParticipant: combatParticipantRole.value != null,
     battleModalOpen: battleModalOpen.value,
@@ -742,7 +717,6 @@ const combatUiPresentation = computed((): CombatUiPresentation => {
   if (showCombatContinueDecision.value) return 'continue-banner'
   if (!battleModalOpen.value) return 'none'
   if (combatPhase.value === 'prep') return 'prep-modal'
-  if (combatPhase.value === 'awaiting-destruction') return 'destruction-modal'
   if (combatPhase.value === 'awaiting-continue') {
     if (combatDecisionRole.value != null && !roundResultsPendingView.value) return 'continue-modal'
     return 'results-modal'
@@ -772,11 +746,6 @@ const foreignCombatBannerText = computed(() => {
   if (!pending) return ''
   const cell = pending.cellKey
   if (combatPhase.value === 'prep') return `Идёт подготовка к бою на (${cell})`
-  if (combatPhase.value === 'awaiting-destruction') {
-    const winner = combatRoundState.value?.winnerId
-    const winnerName = winner ? playerNameById.value[winner] ?? winner : ''
-    return `Бой на (${cell}): победитель раунда${winnerName ? ` ${winnerName}` : ''} выбирает потери`
-  }
   if (pending.phase === 'awaiting-continue') {
     const mustContinue = pending.shipsDestroyedInCombat !== true
     if (pending.continueDecisions.attacker !== true) {
@@ -911,7 +880,7 @@ function recoverCombatUiForExpectation(expectation: CombatUiExpectation) {
     battleModalOpen.value = false
     return
   }
-  if (expectation === 'destruction' || expectation === 'prep') {
+  if (expectation === 'prep') {
     openBattleModalFromPending()
   }
 }
@@ -1010,7 +979,7 @@ watch(
       pendingCombatState.value?.roundNumber,
     ] as const,
   ([phase, key], [prevPhase, prevKey]) => {
-    if (phase !== 'awaiting-destruction' && phase !== 'awaiting-continue') return
+    if (phase !== 'awaiting-continue') return
     if (!key || key === prevKey) return
     if (battleModalOpen.value || needsBattleModal.value) return
     if (phase === prevPhase && key === dismissedCombatResultKey.value) return
@@ -1203,7 +1172,7 @@ function applyObservation(
       battleResolution.value = next
     }
   }
-  // Наблюдатели: если lastCombatResult не пришёл, восстановить броски из pendingCombat.roundState
+  // Наблюдатели: если lastCombatResult не пришёл, восстановить броски из pendingCombat.lastRound
   if (
     (!battleResolution.value || combatResultRollsKey(battleResolution.value) == null)
     && game.pendingCombat
@@ -1217,7 +1186,7 @@ function applyObservation(
   } else if (
     battleResolution.value
     && game.pendingCombat
-    && (game.pendingCombat.phase === 'awaiting-destruction' || game.pendingCombat.phase === 'awaiting-continue')
+    && game.pendingCombat.phase === 'awaiting-continue'
   ) {
     const fromPending = combatResolutionFromPending(game.pendingCombat)
     const pendingRolls = combatResultRollsKey(fromPending)
@@ -1664,7 +1633,7 @@ function closeBattleModal() {
   battleModalOpen.value = false
   markerMapPick.afterBattleModalClosed()
   pendingOrderAfterBattle.value = null
-  if (combatPhase.value !== 'awaiting-destruction' && combatPhase.value !== 'awaiting-continue') {
+  if (combatPhase.value !== 'awaiting-continue') {
     battleResolution.value = null
   }
   battleResolving.value = false
@@ -1690,15 +1659,9 @@ async function resolveBattleWithOptions(combatOptions: CombatOptions) {
     }
     if (saveFile.value?.game) {
       const lastEvt = saveFile.value.game.eventLog.at(-1)
-      if (lastEvt && !battleResolution.value?.needsDestructionSelection) {
-        markerActionHint.value = lastEvt.message
-      }
+      if (lastEvt) markerActionHint.value = lastEvt.message
     }
-    if (battleResolution.value?.needsDestructionSelection) {
-      markerActionHint.value = 'Выберите корабли для уничтожения'
-    } else if (!battleResolution.value?.needsDestructionSelection) {
-      pendingOrderAfterBattle.value = null
-    }
+    pendingOrderAfterBattle.value = null
   } catch (e) {
     markerActionHint.value = actionErrorMessage(e, 'Не удалось разрешить бой')
   } finally {
@@ -1716,12 +1679,12 @@ async function submitCombatPrepReady(combatOptions: CombatOptions) {
     if (!prep || !pending) return
 
     const isAttacker = pending.attackerId === playerId.value
-    const sideSkips = isAttacker
-      ? combatOptions.attacker?.prioritySkips
-      : combatOptions.defender?.prioritySkips
+    const targetPriority = isAttacker
+      ? combatOptions.attacker?.targetPriority
+      : combatOptions.defender?.targetPriority
 
     bumpObservationEpoch()
-    const obs = await updateCombatPrepAction(roomId.value, playerId.value, true, sideSkips)
+    const obs = await updateCombatPrepAction(roomId.value, playerId.value, true, targetPriority)
     applyObservation(obs)
     persistLocal()
     markerActionHint.value = 'Готовность отправлена'
@@ -1789,67 +1752,6 @@ async function cancelCombatPrepAction() {
   }
 }
 
-async function confirmBattleDestruction(destructionSelection: string[]) {
-  if (battleResolving.value) return
-  battleResolving.value = true
-  markerActionHint.value = null
-
-  try {
-    if (serverStatus.value === 'online' && !roomId.value.startsWith('local-')) {
-      bumpObservationEpoch()
-      const obs = await submitGameAction(
-        roomId.value,
-        playerId.value,
-        'confirm-combat-destruction',
-        { destructionSelection },
-      )
-      applyObservation(obs)
-      battleResolution.value =
-        (obs.mechanics as { lastCombatResult?: CombatResolutionResult }).lastCombatResult ?? null
-      persistLocal()
-    } else if (saveFile.value?.game && saveFile.value.map) {
-      const result = applyGameActionOnSnapshot(
-        saveFile.value.game,
-        saveFile.value.map,
-        playerId.value,
-        'confirm-combat-destruction',
-        { destructionSelection },
-      )
-      if (result.errors.length) {
-        markerActionHint.value = result.errors[0] ?? null
-        return
-      }
-      battleResolution.value = result.combatResult ?? null
-      persistLocal()
-      refreshLocalLegalActions()
-    }
-
-    pendingOrderAfterBattle.value = null
-    markerActionSource.value = null
-    // Подтверждающий уже видел итог на экране выбора потерь — сразу закрываем модалку,
-    // чтобы показался баннер continue/retreat (он скрыт, пока модалка открыта).
-    if (combatPhase.value === 'awaiting-continue') {
-      closeBattleModal()
-      markerActionHint.value = 'Уничтожение применено — выберите: продолжить бой или отступить'
-    } else if (!hasActivePendingCombat.value) {
-      battleModalOpen.value = false
-      if (battleResolutionKey.value) {
-        dismissedCombatResultKey.value = battleResolutionKey.value
-      }
-      if (currentCombatRollsKey.value) {
-        dismissedCombatRollsKey.value = currentCombatRollsKey.value
-      }
-      markerActionHint.value = 'Уничтожение применено'
-    } else {
-      markerActionHint.value = 'Уничтожение применено'
-    }
-  } catch (e) {
-    markerActionHint.value = actionErrorMessage(e, 'Не удалось подтвердить уничтожение')
-  } finally {
-    battleResolving.value = false
-  }
-}
-
 async function continuePendingCombatAction() {
   const role = combatDecisionRole.value
   if (!pendingCombatState.value || !role) return
@@ -1875,7 +1777,7 @@ async function continuePendingCombatAction() {
     }
     markerActionHint.value = role === 'attacker'
       ? 'Вы продолжили бой — ждём решения защитника'
-      : (combatPhase.value === 'awaiting-continue' || combatPhase.value === 'awaiting-destruction'
+      : (combatPhase.value === 'awaiting-continue'
         ? 'Бой продолжен'
         : 'Бой завершён')
   } catch (e) {
@@ -2860,7 +2762,7 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
       <CombatPreviewPanel
         v-if="markerMapPickActive && markerMapPickHasPendingCombat && markerMapPickCombatPreview && snapshot"
         :preview="markerMapPickCombatPreview"
-        :round-one-odds="markerMapPickRoundOneOdds"
+        :battle-odds="markerMapPickBattleOdds"
         :player-names="playerNameById"
       />
     </section>
@@ -3050,15 +2952,12 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
       :self-ready="combatPrepSelfReady"
       :attacker-ready="combatPrepAttackerReady"
       :defender-ready="combatPrepDefenderReady"
-      :remote-attacker-skips="combatPrepAttackerSkips"
-      :remote-defender-skips="combatPrepDefenderSkips"
       :countdown-started-at="combatPrepState?.countdownStartedAt"
       :continue-decision-role="combatDecisionRole"
       :retreat-allowed="combatRetreatAllowed"
       :retreat-destinations="retreatDestinations"
       @close="closeBattleModal"
       @resolve="resolveBattleWithOptions"
-      @confirm-destruction="confirmBattleDestruction"
       @prep-ready="resolveBattleWithOptions"
       @prep-unready="submitCombatPrepUnready"
       @support-side="submitCombatSupportSide"

@@ -21,6 +21,18 @@ export interface TurnSample {
   byPlayer: Record<string, PlayerSample>
 }
 
+/** Один бой: кто начал, чем кончился, сколько стоили потери. */
+export interface BattleRecord {
+  trigger: 'movement' | 'stack' | 'bombardment'
+  /** attacker — защитники выбиты; defender — выбит атакующий; retreat — кто-то ушёл; none — без исхода. */
+  outcome: 'attacker' | 'defender' | 'retreat' | 'mutual' | 'none'
+  attackerLosses: number
+  defenderLosses: number
+  /** Цена потерь по стоимости постройки. */
+  attackerLossValue: number
+  defenderLossValue: number
+}
+
 export interface GameRecord {
   seed: number
   mapId: string
@@ -36,6 +48,7 @@ export interface GameRecord {
   shipCostPaid: number
   firstUnlockTurn: Record<string, number>
   eliminationTurns: { playerId: string; turn: number }[]
+  battles: BattleRecord[]
   /** Кому выдали стартовую фору, если замер идёт с форой. */
   handicappedPlayerId?: string
   error?: string
@@ -178,6 +191,14 @@ export interface Summary {
   claimUtilisationAt3Plus: number | null
   meanEliminationTurn: number | null
   victoryReasons: Record<string, number>
+  battles: {
+    perGame: number
+    bombardmentsPerGame: number
+    /** Исходы боёв перемещением: доли по видам исхода. */
+    outcomes: Record<string, number>
+    meanAttackerLossValue: number
+    meanDefenderLossValue: number
+  }
   /** Замеры с форой: null, если фора не выдавалась. */
   handicap: {
     winRate: number | null
@@ -185,7 +206,7 @@ export interface Summary {
   }
 }
 
-const TRACKED_SHIP_TYPES = ['destroyer', 'cruiser', 'shield', 'carrier', 'battleship', 'hyper']
+const TRACKED_SHIP_TYPES = ['destroyer', 'cruiser', 'carrier', 'battleship', 'hyper']
 
 export function summarize(records: readonly GameRecord[]): Summary {
   const ok = records.filter((record) => !record.error)
@@ -266,6 +287,12 @@ export function summarize(records: readonly GameRecord[]): Summary {
     .map((record) => advantageAmplification(record, 3, 10))
     .filter((value): value is number => value != null)
 
+  const allBattles = ok.flatMap((record) => record.battles ?? [])
+  const fights = allBattles.filter((battle) => battle.trigger !== 'bombardment')
+  const outcomes: Record<string, number> = {}
+  for (const battle of fights) outcomes[battle.outcome] = (outcomes[battle.outcome] ?? 0) + 1
+  for (const key of Object.keys(outcomes)) outcomes[key] = outcomes[key]! / (fights.length || 1)
+
   return {
     games: records.length,
     errors: records.length - ok.length,
@@ -289,6 +316,13 @@ export function summarize(records: readonly GameRecord[]): Summary {
     claimUtilisationAt3Plus: claimShares.length ? mean(claimShares) : null,
     meanEliminationTurn: eliminationTurns.length ? mean(eliminationTurns) : null,
     victoryReasons,
+    battles: {
+      perGame: ok.length ? fights.length / ok.length : 0,
+      bombardmentsPerGame: ok.length ? (allBattles.length - fights.length) / ok.length : 0,
+      outcomes,
+      meanAttackerLossValue: mean(fights.map((battle) => battle.attackerLossValue)),
+      meanDefenderLossValue: mean(fights.map((battle) => battle.defenderLossValue)),
+    },
     handicap: {
       winRate: handicapped.length ? handicapWins / handicapped.length : null,
       amplification: amplifications.length ? mean(amplifications) : null,

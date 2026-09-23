@@ -79,18 +79,17 @@ export interface PendingEvent {
   resolved?: boolean
 }
 
-import type { CombatOptions, CombatPrepState, PendingCombatRoundState } from './combat.js'
+import type { CombatOptions, CombatPrepState, CombatRoundResult } from './combat.js'
 import { migrateLegacyEventId, type EventCardId, type TurnEventState } from './events.js'
 import type { GameOverState } from './victory.js'
 
 export type { TurnEventState, GameOverState }
 
 /**
- * Фаза боя между запросами. `rolling` и `finished` не сохраняются: бросок кубов
- * происходит синхронно внутри одного вызова, а завершённый бой — это
- * `pendingCombat === undefined`.
+ * Фаза боя между запросами. Бросок кубов происходит синхронно внутри одного вызова,
+ * а завершённый бой — это `pendingCombat === undefined`.
  */
-export type PendingCombatPhase = 'prep' | 'awaiting-destruction' | 'awaiting-continue'
+export type PendingCombatPhase = 'prep' | 'awaiting-continue'
 
 interface PendingCombatBase {
   cellKey: string
@@ -104,6 +103,13 @@ interface PendingCombatBase {
    * Пока false — отступление запрещено, стороны обязаны продолжать.
    */
   shipsDestroyedInCombat?: boolean
+  /**
+   * Урон, полученный кораблями в этом бою. Живёт ровно столько, сколько бой: кончился бой —
+   * исчез pendingCombat, а с ним и урон. Межходовой убыли нет.
+   */
+  damageByShipId?: Record<string, number>
+  /** Последний сыгранный раунд — чтобы наблюдатели видели броски. */
+  lastRound?: CombatRoundResult
   /**
    * Контекст боя, начатого перемещением. Атакующие остаются на исходной клетке
    * до окончательного исхода боя, чтобы могли выбрать корректное отступление.
@@ -121,42 +127,45 @@ export interface PendingCombatPrep extends PendingCombatBase {
   prep: CombatPrepState
 }
 
-/** Победитель раунда выбирает корабли для уничтожения */
-export interface PendingCombatAwaitingDestruction extends PendingCombatBase {
-  phase: 'awaiting-destruction'
-  roundState: PendingCombatRoundState
-}
-
 /** Стороны решают, продолжать бой или отступать */
 export interface PendingCombatAwaitingContinue extends PendingCombatBase {
   phase: 'awaiting-continue'
   /** Решения продолжать бой; сначала атакующий, затем защитник. */
   continueDecisions: Partial<Record<'attacker' | 'defender', boolean>>
-  roundState?: PendingCombatRoundState
 }
 
 /**
  * Дискриминированное объединение: поля, осмысленные только в одной фазе,
- * существуют только в её варианте. Комбинации вроде «prep и roundState
- * одновременно» больше не представимы в типах.
+ * существуют только в её варианте.
  */
 export type PendingCombat =
   | PendingCombatPrep
-  | PendingCombatAwaitingDestruction
   | PendingCombatAwaitingContinue
+
+function cloneCombatOptions(options: CombatOptions): CombatOptions {
+  const side = (s: CombatOptions['attacker']) =>
+    s
+      ? {
+          ...s,
+          targetPriority: s.targetPriority ? [...s.targetPriority] : undefined,
+          diceTargets: s.diceTargets
+            ? Object.fromEntries(Object.entries(s.diceTargets).map(([k, v]) => [k, [...v]]))
+            : undefined,
+        }
+      : undefined
+  return {
+    ...options,
+    attacker: side(options.attacker),
+    defender: side(options.defender),
+    supportSides: options.supportSides ? { ...options.supportSides } : undefined,
+  }
+}
 
 function cloneCombatPrep(prep: CombatPrepState): CombatPrepState {
   return {
     ...prep,
     readyBy: { ...prep.readyBy },
-    combatOptions: {
-      ...prep.combatOptions,
-      attacker: prep.combatOptions.attacker ? { ...prep.combatOptions.attacker } : undefined,
-      defender: prep.combatOptions.defender ? { ...prep.combatOptions.defender } : undefined,
-      supportSides: prep.combatOptions.supportSides
-        ? { ...prep.combatOptions.supportSides }
-        : undefined,
-    },
+    combatOptions: cloneCombatOptions(prep.combatOptions),
     movementFrom: prep.movementFrom ? { ...prep.movementFrom } : undefined,
     movementPlans: prep.movementPlans?.map((m) => ({ ...m, to: { ...m.to } })),
     bombardmentFrom: prep.bombardmentFrom ? { ...prep.bombardmentFrom } : undefined,
@@ -171,22 +180,12 @@ function cloneCombatPrep(prep: CombatPrepState): CombatPrepState {
   }
 }
 
-function cloneRoundState(rs: PendingCombatRoundState): PendingCombatRoundState {
+function cloneCombatRound(round: CombatRoundResult): CombatRoundResult {
   return {
-    ...rs,
-    rounds: rs.rounds.map((r) => ({ ...r, shipRolls: r.shipRolls.map((sr) => ({ ...sr })) })),
-    combatOptions: { ...rs.combatOptions },
-    incomingAttackerShipIds: [...rs.incomingAttackerShipIds],
-    attackerSkipTypes: [...rs.attackerSkipTypes],
-    defenderSkipTypes: [...rs.defenderSkipTypes],
-    movementFrom: rs.movementFrom ? { ...rs.movementFrom } : undefined,
-    movementPlans: rs.movementPlans?.map((m) => ({ ...m, to: { ...m.to } })),
-    bombardmentFrom: rs.bombardmentFrom ? { ...rs.bombardmentFrom } : undefined,
-    bombardmentPlans: rs.bombardmentPlans?.map((p) => ({ ...p, target: { ...p.target } })),
-    queuedBombardmentPlans: rs.queuedBombardmentPlans?.map((p) => ({
-      ...p,
-      target: { ...p.target },
-    })),
+    ...round,
+    shipRolls: round.shipRolls.map((log) => ({ ...log, dice: log.dice.map((d) => ({ ...d })) })),
+    damageByShipId: { ...round.damageByShipId },
+    destroyedShipIds: [...round.destroyedShipIds],
   }
 }
 
@@ -198,8 +197,10 @@ export function clonePendingCombat(pending: PendingCombat | undefined): PendingC
     defenderIds: [...pending.defenderIds],
     roundNumber: pending.roundNumber,
     trigger: pending.trigger,
-    combatOptions: pending.combatOptions ? { ...pending.combatOptions } : undefined,
+    combatOptions: pending.combatOptions ? cloneCombatOptions(pending.combatOptions) : undefined,
     shipsDestroyedInCombat: pending.shipsDestroyedInCombat,
+    damageByShipId: pending.damageByShipId ? { ...pending.damageByShipId } : undefined,
+    lastRound: pending.lastRound ? cloneCombatRound(pending.lastRound) : undefined,
     continuation: pending.continuation
       ? {
           movementFrom: { ...pending.continuation.movementFrom },
@@ -212,63 +213,23 @@ export function clonePendingCombat(pending: PendingCombat | undefined): PendingC
   switch (pending.phase) {
     case 'prep':
       return { ...base, phase: 'prep', prep: cloneCombatPrep(pending.prep) }
-    case 'awaiting-destruction':
-      return {
-        ...base,
-        phase: 'awaiting-destruction',
-        roundState: cloneRoundState(pending.roundState),
-      }
     case 'awaiting-continue':
       return {
         ...base,
         phase: 'awaiting-continue',
         continueDecisions: { ...pending.continueDecisions },
-        roundState: pending.roundState ? cloneRoundState(pending.roundState) : undefined,
       }
   }
 }
 
 /**
- * Сохранения до введения `phase` кодировали фазу тремя независимыми флагами.
- * Выводим дискриминатор из них, чтобы старые файлы и комнаты открывались.
+ * Бой без распознаваемой фазы восстановить нельзя — безопаснее снять его, чем оставить игроков
+ * в заблокированном состоянии. Сюда же попадает снятая фаза выбора жертв победителем.
  */
 export function migrateLegacyPendingCombat(raw: unknown): PendingCombat | undefined {
   if (!raw || typeof raw !== 'object') return undefined
-  const legacy = raw as Record<string, unknown>
-  if (typeof legacy.phase === 'string') return raw as PendingCombat
-
-  const base = {
-    cellKey: String(legacy.cellKey ?? ''),
-    attackerId: String(legacy.attackerId ?? ''),
-    defenderIds: Array.isArray(legacy.defenderIds) ? (legacy.defenderIds as string[]) : [],
-    roundNumber: typeof legacy.roundNumber === 'number' ? legacy.roundNumber : 1,
-    trigger: legacy.trigger as PendingCombat['trigger'],
-    combatOptions: legacy.combatOptions as PendingCombat['combatOptions'],
-    shipsDestroyedInCombat: legacy.shipsDestroyedInCombat === true,
-    continuation: legacy.continuation as PendingCombat['continuation'],
-  }
-
-  if (legacy.prep) {
-    return { ...base, phase: 'prep', prep: legacy.prep as CombatPrepState }
-  }
-  if (legacy.awaitingDestruction && legacy.roundState) {
-    return {
-      ...base,
-      phase: 'awaiting-destruction',
-      roundState: legacy.roundState as PendingCombatRoundState,
-    }
-  }
-  if (legacy.awaitingContinue) {
-    return {
-      ...base,
-      phase: 'awaiting-continue',
-      continueDecisions:
-        (legacy.continueDecisions as PendingCombatAwaitingContinue['continueDecisions']) ?? {},
-      roundState: legacy.roundState as PendingCombatRoundState | undefined,
-    }
-  }
-  // Бой без распознаваемой фазы восстановить нельзя — безопаснее снять его,
-  // чем оставить игроков в заблокированном состоянии.
+  const phase = (raw as Record<string, unknown>).phase
+  if (phase === 'prep' || phase === 'awaiting-continue') return raw as PendingCombat
   return undefined
 }
 

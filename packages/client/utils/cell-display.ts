@@ -102,7 +102,6 @@ const SHIP_LABELS_PLURAL: Record<ShipType, string> = {
   destroyer: 'Эсминцы',
   cruiser: 'Крейсеры',
   battleship: 'Линкоры',
-  shield: 'Щитоносцы',
   carrier: 'Авианосцы',
   hyper: 'Гиперорудия',
 }

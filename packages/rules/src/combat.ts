@@ -1,298 +1,73 @@
 /**
-
- * Combat mechanics — sketch / MVP design.
-
- * See docs/combat-system-draft.md
-
+ * Бой на попаданиях (ADR 018).
  *
-
- * TODO: full multi-round resolution, bombardment, snapshot pendingCombats, ADR for types.
-
+ * Один маркер действия — один бой. Бой многораундовый: каждый раунд обе стороны бросают кубики,
+ * распределённые по вражеским кораблям, и попадания применяются одновременно. Урон копится
+ * внутри боя и сбрасывается, когда бой кончился. Продолжение и отступление — как прежде:
+ * пока в бою никто не уничтожен, раунды идут сами; после первого уничтожения стороны решают,
+ * продолжать ли, сначала атакующий, затем защитник.
+ *
+ * Математика одного выстрела — в `combat-hits.ts`.
  */
 
 import { SHIP_LABELS } from './constants.js'
 import { buildBombardmentPreview } from './bombardment.js'
+import {
+  allocateDice,
+  canShipFireFromDistance,
+  carrierBonusAtDistance,
+  hitProbability,
+  MAX_DIE_VALUE,
+  shipDice,
+  shipFireRange,
+  shipHitThreshold,
+  shipHullInBattle,
+  type CombatDieSlot,
+  type CombatTargetState,
+  type FireRange,
+} from './combat-hits.js'
 import { getTurnModifiers, canRetreatFromBattle } from './events.js'
 import { hexDistance } from './map.js'
 import { transferControlIfEnemyOwned } from './claim.js'
 import { removeStaleProductionMarkerAt } from './markers.js'
 import { canSupportCombatSide, isCombatPrepSideReady, isEliminatedPlayer } from './surrender.js'
 import type { GameSnapshot, RuntimeCellState } from './save-file.js'
-import type {
-  PendingCombat,
-  PendingCombatAwaitingContinue,
-  PendingCombatAwaitingDestruction,
-} from './save-file.js'
+import type { PendingCombat, PendingCombatAwaitingContinue } from './save-file.js'
 import type { HexCoord, ShipType, ShipUnit } from './types.js'
 import { hexKey } from './types.js'
 
-
-
-/** Поглощение урона щитоносцем — ships.yaml */
-
-export const SHIELD_ABSORB_SELF = 6
-
-export const SHIELD_ABSORB_NEIGHBOR = 3
-
-
-
-/** destroyCost по ships.yaml */
-
-export const SHIP_DESTROY_COST: Record<ShipType, number> = {
-
-  destroyer: 3,
-
-  cruiser: 6,
-
-  battleship: 9,
-
-  shield: 4,
-
-  carrier: 5,
-
-  hyper: 4,
-
-}
-
-
-
-/** combatDice по ships.yaml (отсутствует у shield/supply/hyper) */
-
-export const SHIP_COMBAT_DICE: Partial<Record<ShipType, number>> = {
-
-  destroyer: 1,
-
-  cruiser: 2,
-
-  battleship: 3,
-
-}
-
-
-
-/**
- * Число граней боевого кубика на гексе (ships.yaml → combatDieFaces).
- * По умолчанию d6; у крейсера — d4.
- */
-export const SHIP_COMBAT_DIE_FACES: Partial<Record<ShipType, number>> = {
-  destroyer: 4,
-  cruiser: 6,
-}
-
-/** supportDice по ships.yaml */
-
-export const SHIP_SUPPORT_DICE: Partial<Record<ShipType, number>> = {
-
-  cruiser: 1,
-
-  battleship: 2,
-
-  hyper: 3,
-
-}
-
-/** Число граней кубика supportDice по ships.yaml. */
-export const SHIP_SUPPORT_DIE_FACES: Partial<Record<ShipType, number>> = {
-
-  cruiser: 4,
-
-  battleship: 4,
-
-  hyper: 4,
-
-}
-
-
-
-/** fireRange max по ships.yaml — дальность поддержки / обстрела (совместимость) */
-
-export const SHIP_FIRE_RANGE: Partial<Record<ShipType, number>> = {
-
-  cruiser: 1,
-
-  battleship: 2,
-
-  hyper: 3,
-
-}
-
-/** min/max fireRange; гиперпространственное орудие [2,3] — не соседняя клетка */
-
-export interface FireRangeBounds {
-
-  min: number
-
-  max: number
-
-}
-
-export const SHIP_FIRE_RANGE_BOUNDS: Partial<Record<ShipType, FireRangeBounds>> = {
-
-  cruiser: { min: 1, max: 1 },
-
-  battleship: { min: 1, max: 2 },
-
-  hyper: { min: 2, max: 3 },
-
-}
-
-/** Надбавка к destroyCost за объявленный priority skip типа (PDF) */
-
-export const PRIORITY_SKIP_DESTROY_SURCHARGE = 1
-
-
-
-/** Порядок уничтожения — ships.yaml → destructionPriority */
-
-export const DESTRUCTION_PRIORITY: ShipType[] = [
-
-  'destroyer',
-
-  'hyper',
-
-  'shield',
-
-  'carrier',
-
-  'cruiser',
-
-  'battleship',
-
-]
-
-/** Типы противника в бою, упорядоченные по destructionPriority. */
-export function presentDestructionPriorityChain(
-  presentTypes: Iterable<ShipType>,
-): ShipType[] {
-  const set = new Set(presentTypes)
-  return DESTRUCTION_PRIORITY.filter((t) => set.has(t))
-}
-
-/** Skip-типы, отсортированные по цепочке приоритета среди присутствующих. */
-export function normalizePrioritySkipTypes(
-  skippedTypes: Iterable<ShipType>,
-  presentTypes: Iterable<ShipType>,
-): ShipType[] {
-  const skipped = new Set(skippedTypes)
-  return presentDestructionPriorityChain(presentTypes).filter((t) => skipped.has(t))
-}
-
-/**
- * Допустимый набор priority skip: префикс цепочки присутствующих типов,
- * без последнего типа (его skip бессмысленен — после пропуска предыдущих
- * уже можно атаковать любой оставшийся корабль).
- */
-export function isValidPrioritySkipSet(
-  skippedTypes: Iterable<ShipType>,
-  presentTypes: Iterable<ShipType>,
-): boolean {
-  const chain = presentDestructionPriorityChain(presentTypes)
-  const maxUseful = Math.max(0, chain.length - 1)
-  const skippedSet = new Set(skippedTypes)
-  for (const t of skippedSet) {
-    if (!chain.includes(t)) return false
-  }
-  const normalized = normalizePrioritySkipTypes(skippedTypes, presentTypes)
-  if (normalized.length !== skippedSet.size) return false
-  if (normalized.length > maxUseful) return false
-  for (let i = 0; i < normalized.length; i++) {
-    if (normalized[i] !== chain[i]) return false
-  }
-  return true
-}
-
-/** Можно ли кликнуть skip/unskip по типу (с учётом порядка). */
-export function canTogglePrioritySkipType(
-  type: ShipType,
-  currentlySkipped: readonly ShipType[],
-  presentTypes: Iterable<ShipType>,
-): boolean {
-  const chain = presentDestructionPriorityChain(presentTypes)
-  if (!chain.includes(type)) return false
-  const normalized = normalizePrioritySkipTypes(currentlySkipped, presentTypes)
-  if (normalized.includes(type)) return true
-  const maxUseful = Math.max(0, chain.length - 1)
-  if (normalized.length >= maxUseful) return false
-  return chain[normalized.length] === type
-}
-
-/** Переключить skip: снятие каскадно убирает все следующие в цепочке. */
-export function applyPrioritySkipToggle(
-  type: ShipType,
-  currentlySkipped: readonly ShipType[],
-  presentTypes: Iterable<ShipType>,
-): ShipType[] {
-  const chain = presentDestructionPriorityChain(presentTypes)
-  const normalized = normalizePrioritySkipTypes(currentlySkipped, presentTypes)
-  const idx = chain.indexOf(type)
-  if (idx < 0) return normalized
-  if (normalized.includes(type)) {
-    return normalized.filter((t) => chain.indexOf(t) < idx)
-  }
-  if (!canTogglePrioritySkipType(type, currentlySkipped, presentTypes)) return normalized
-  return [...normalized, type]
-}
-
-/** Первый непроспущенный тип в цепочке — основная цель уничтожения при победе. */
-export function primaryDestructionType(
-  presentTypes: Iterable<ShipType>,
-  prioritySkipTypes: Iterable<ShipType>,
-): ShipType | null {
-  const skips = new Set(prioritySkipTypes)
-  return presentDestructionPriorityChain(presentTypes).find((t) => !skips.has(t)) ?? null
-}
-
-/**
- * Типы, которые победитель может выбрать к уничтожению при данных skip
- * (бюджет урона не учитывается): открытый tier + ранее пропущенные.
- */
-export function selectableDestructionTypes(
-  presentTypes: Iterable<ShipType>,
-  prioritySkipTypes: Iterable<ShipType>,
-): ShipType[] {
-  const chain = presentDestructionPriorityChain(presentTypes)
-  const skips = new Set(prioritySkipTypes)
-  const primary = chain.find((t) => !skips.has(t))
-  if (!primary) return [...chain]
-  return chain.filter(
-    (t) => t === primary || (skips.has(t) && compareDestructionPriority(t, primary) < 0),
-  )
-}
-
 export type CombatTriggerKind = 'movement' | 'stack' | 'bombardment'
 
+export type CombatRole = 'attacker' | 'defender'
 
-
+/** Корабль на клетке боя: стреляет (если может) и служит целью. */
 export interface CombatParticipant {
-
   shipId: string
-
   type: ShipType
-
   ownerId: string
-
-  side: 'attacker' | 'defender'
-
+  side: CombatRole
+  /** Сколько попаданий нужно, чтобы его уничтожить, — с учётом клетки боя. */
+  hull: number
+  /** Попадания, уже полученные в этом бою. */
+  damage: number
+  /** Кубиков в раунде, с бонусом авианосца. 0 — не стреляет. */
+  dice: number
+  /** Из них от авианосца. */
+  bonusDice: number
+  /** Нужное на кубике значение; `null` — стрелять не может. */
+  threshold: number | null
 }
 
-
-
-/** Корабль, дающий supportDice с соседней/дальней клетки (не на гексе боя) */
-
+/** Корабль, стреляющий с чужой клетки: поддержка или обстрел. Целью не служит. */
 export interface CombatSupportShip {
-
   shipId: string
-
   type: ShipType
-
   ownerId: string
-
   fromCoord: HexCoord
-
-  supportDice: number
-
   distance: number
-
+  dice: number
+  bonusDice: number
+  threshold: number
 }
 
 /** Игрок вне основных сторон, способный направить корабли поддержки. */
@@ -301,192 +76,93 @@ export interface CombatSupportCandidate {
   ships: CombatSupportShip[]
 }
 
-
-
 export interface CombatSidePreview {
-
   playerId: string
-
-  role: 'attacker' | 'defender'
-
+  role: CombatRole
   ships: CombatParticipant[]
-
-  /** Корабли на гексе боя — только combatDice */
-
-  combatDiceTotal: number
-
-  /** Кубики поддержки с клеток в пределах fireRange */
-
-  supportDiceTotal: number
-
   supportingShips: CombatSupportShip[]
-
-  /** Аура авианосца своей стороны (не стакается). */
-  carrierAura?: CarrierAuraBonus | null
-
+  /** Все кубики стороны за раунд: с клетки боя и с поддержки. */
+  diceTotal: number
+  /** Ожидаемые попадания за раунд. */
+  expectedHits: number
 }
-
-/** Аура авианосца: +1 куб каждому не-авианосцу стороны в бою. */
-export interface CarrierAuraBonus {
-  carrierShipId: string
-  faces: 4 | 6
-  scope: 'self' | 'neighbor'
-}
-
-/** Грани ауры: на клетке боя d6, с соседней d4. */
-export const CARRIER_AURA_SELF_FACES = 6
-export const CARRIER_AURA_NEIGHBOR_FACES = 4
-
-
-
-export interface ShieldContribution {
-
-  shipId: string
-
-  ownerId: string
-
-  absorbCapacity: number
-
-  scope: 'self' | 'neighbor'
-
-  fromCoord: HexCoord
-
-}
-
-
 
 export interface CombatPreview {
-
   coord: HexCoord
-
   coordKey: string
-
   trigger: CombatTriggerKind
-
   attackerId: string
-
   defenderId: string
-
   attacker: CombatSidePreview
-
   defender: CombatSidePreview
-
-  shieldContributions: ShieldContribution[]
-
-  shieldAbsorbTotal: number
-
-  destructionOrder: ShipType[]
-
   supportCandidates?: CombatSupportCandidate[]
-
   notes: string[]
-
 }
-
-
 
 export interface DetectedCombat {
-
   id: string
-
   coord: HexCoord
-
   trigger: CombatTriggerKind
-
   attackerId: string
-
   defenderId: string
-
   attackerShipIds: string[]
-
 }
 
-
-
-export interface ShipSupportRoll {
-
-  fromShipId: string
-
-  rolls: number[]
-
+/** Один брошенный кубик. */
+export interface CombatDieRoll {
+  value: number
+  threshold: number
+  /** По кому стреляли; `null` — целей не осталось. */
+  targetShipId: string | null
+  hit: boolean
 }
 
-
-
-/** Журнал бросков одного корабля в раунде */
-
+/** Журнал бросков одного корабля в раунде. */
 export interface ShipCombatRollLog {
-
   shipId: string
-
   shipType: ShipType
-
   ownerId: string
-
-  side: 'attacker' | 'defender'
-
-  /** Боевые кубики (корабль на гексе боя) */
-
-  combatRolls: number[]
-
-  /** Кубики поддержки (корабль вне гекса боя) */
-
-  supportRolls?: ShipSupportRoll[]
-
-  total: number
-
+  side: CombatRole
+  /** 0 — стреляет с клетки боя, больше — с поддержки или обстрела. */
+  distance: number
+  dice: CombatDieRoll[]
+  hits: number
 }
-
-
 
 export interface CombatRoundResult {
-
-  attackerTotal: number
-
-  defenderTotal: number
-
-  winner: 'attacker' | 'defender' | 'draw'
-
+  attackerHits: number
+  defenderHits: number
   shipRolls: ShipCombatRollLog[]
-
+  /** Урон после раунда, накопленный с начала боя. */
+  damageByShipId: Record<string, number>
+  /** Уничтожены в этом раунде — с обеих сторон. */
+  destroyedShipIds: string[]
 }
-
-
 
 export interface BattleLogEntry {
-
-  step: 'priority-skip' | 'dice-roll' | 'round-winner' | 'shield-absorb' | 'destruction'
-
+  step: 'dice-roll' | 'destruction' | 'no-fire'
   message: string
-
   data?: Record<string, unknown>
-
-}
-
-
-
-export interface CombatPrioritySkipPlan {
-  /** Тип корабля — skip действует на все экземпляры этого типа на гексе боя */
-  shipType: ShipType
 }
 
 export interface CombatSideOptions {
-  /** Priority skip по типам кораблей этой стороны (один skip на тип, без оплаты) */
-  prioritySkips?: CombatPrioritySkipPlan[]
-  /** При равном tier — порядок уничтожения (shipId) */
-  destructionTieBreak?: string[]
+  /**
+   * Порядок целей: id вражеских кораблей. Кубики идут на первую цель, пока ожидаемых
+   * попаданий не хватит на её добивание, затем на следующую. Остальные цели — по умолчанию.
+   */
+  targetPriority?: string[]
+  /** Явное распределение: id стреляющего → id цели для каждого его кубика по порядку. */
+  diceTargets?: Record<string, string[]>
 }
 
 export interface CombatOptions {
   attacker?: CombatSideOptions
   defender?: CombatSideOptions
-  /** Ручной выбор кораблей для уничтожения (победитель раунда) */
-  destructionSelection?: string[]
   /** Неучастник выбирает сторону, которой помогают все его доступные корабли. */
-  supportSides?: Record<string, 'attacker' | 'defender'>
+  supportSides?: Record<string, CombatRole>
 }
 
-/** Мультиплеерная подготовка к бою: priority skip + mutual ready + countdown */
+/** Мультиплеерная подготовка к бою: порядок целей + взаимная готовность + отсчёт */
 export interface CombatPrepState {
   phase: 'prep' | 'countdown'
   defenderId: string
@@ -504,48 +180,59 @@ export interface CombatPrepState {
 
 export const COMBAT_PREP_COUNTDOWN_MS = 3000
 
+export interface CombatResolutionResult {
+  coord: HexCoord
+  /** Победитель боя, если он уже определился; `null` — бой идёт или стороны уничтожили друг друга. */
+  winnerId: string | null
+  /** На клетке боя не осталось защитников, а у атакующего есть корабли — он входит. */
+  attackerWon: boolean
+  log: BattleLogEntry[]
+  /** Уничтожены в этом раунде — с обеих сторон. */
+  destroyedShipIds: string[]
+  roundOne?: CombatRoundResult
+  rounds?: CombatRoundResult[]
+  /** Урон выживших после раунда — переходит в следующий раунд того же боя. */
+  damageByShipId?: Record<string, number>
+  /** Ни одна сторона не может стрелять: бой невозможен, атакующий не входит. */
+  stalemate?: boolean
+  /** @deprecated всегда false */
+  stub: boolean
+}
+
+export interface ShipMoveCombatInput {
+  shipId: string
+  to: HexCoord
+}
+
+export const ONE_BATTLE_PER_MARKER_MSG =
+  'В одном приказе маркера можно атаковать только одну клетку боя'
+
 /**
- * Узкие аксессоры к фазам боя. Читать `pending.prep` напрямую нельзя —
+ * Узкий аксессор к фазе подготовки. Читать `pending.prep` напрямую нельзя —
  * поле существует только в варианте `phase: 'prep'`.
  */
 export function combatPrepOf(pending: PendingCombat | undefined): CombatPrepState | undefined {
   return pending?.phase === 'prep' ? pending.prep : undefined
 }
 
-export function combatRoundStateOf(
-  pending: PendingCombat | undefined,
-): PendingCombatRoundState | undefined {
-  if (!pending) return undefined
-  return pending.phase === 'awaiting-destruction' || pending.phase === 'awaiting-continue'
-    ? pending.roundState
-    : undefined
-}
-
 /**
- * Восстанавливает итог раунда из pendingCombat — чтобы наблюдатели видели броски
+ * Итог последнего раунда из pendingCombat — чтобы наблюдатели видели броски,
  * даже если lastCombatResult ещё не пришёл или уже очищен.
  */
 export function combatResolutionFromPending(
   pending: PendingCombat | null | undefined,
 ): CombatResolutionResult | null {
-  if (!pending) return null
-  if (pending.phase !== 'awaiting-destruction' && pending.phase !== 'awaiting-continue') {
-    return null
-  }
-  const rs = combatRoundStateOf(pending)
-  if (!rs?.rounds?.length) return null
+  if (!pending || pending.phase !== 'awaiting-continue' || !pending.lastRound) return null
   const [q, r] = pending.cellKey.split(',').map(Number)
   return {
     coord: { q, r },
-    winnerId: rs.winnerId,
-    attackerWon: rs.attackerWon,
+    winnerId: null,
+    attackerWon: false,
     log: [],
-    destroyedShipIds: [],
-    roundOne: rs.rounds[0],
-    rounds: rs.rounds,
-    shieldAbsorbed: rs.shieldAbsorbed,
-    rawDamage: rs.rawDamage,
-    needsDestructionSelection: pending.phase === 'awaiting-destruction',
+    destroyedShipIds: [...pending.lastRound.destroyedShipIds],
+    roundOne: pending.lastRound,
+    rounds: [pending.lastRound],
+    damageByShipId: { ...(pending.damageByShipId ?? {}) },
     stub: false,
   }
 }
@@ -554,12 +241,6 @@ export function isAwaitingContinue(
   pending: PendingCombat | undefined,
 ): pending is PendingCombatAwaitingContinue {
   return pending?.phase === 'awaiting-continue'
-}
-
-export function isAwaitingDestruction(
-  pending: PendingCombat | undefined,
-): pending is PendingCombatAwaitingDestruction {
-  return pending?.phase === 'awaiting-destruction'
 }
 
 /**
@@ -588,14 +269,6 @@ export function pendingCombatInvariantViolations(game: GameSnapshot): string[] {
       if (!pending.prep) violations.push('Фаза prep без данных подготовки')
       else if (!pending.prep.defenderId) violations.push('Подготовка без defenderId')
       break
-    case 'awaiting-destruction':
-      if (!pending.roundState) violations.push('Фаза awaiting-destruction без roundState')
-      else if (!pending.roundState.winnerId) {
-        violations.push('roundState без победителя раунда')
-      } else if (!game.players.some((p) => p.id === pending.roundState.winnerId)) {
-        violations.push(`Победитель ${pending.roundState.winnerId} отсутствует среди игроков`)
-      }
-      break
     case 'awaiting-continue':
       if (!pending.continueDecisions) violations.push('Фаза awaiting-continue без continueDecisions')
       if (!pending.defenderIds.length) violations.push('Решение о продолжении без защитников')
@@ -615,6 +288,17 @@ export function assertPendingCombatInvariant(game: GameSnapshot): void {
   }
 }
 
+function pushCombatEvent(game: GameSnapshot, message: string): void {
+  game.eventLog.push({
+    id: `evt-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    turn: game.turnNumber,
+    phase: game.phase,
+    type: 'combat',
+    message,
+    timestamp: Date.now(),
+  })
+}
+
 /**
  * Снимает бой, который больше не проходит инвариант. Возвращает список нарушений,
  * чтобы вызывающий мог их залогировать. Без этого невалидный бой блокирует партию.
@@ -623,14 +307,7 @@ export function releaseInvalidPendingCombat(game: GameSnapshot): string[] {
   const violations = pendingCombatInvariantViolations(game)
   if (!violations.length) return []
   game.pendingCombat = undefined
-  game.eventLog.push({
-    id: `evt-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-    turn: game.turnNumber,
-    phase: game.phase,
-    type: 'combat',
-    message: `Бой снят автоматически: ${violations.join('; ')}`,
-    timestamp: Date.now(),
-  })
+  pushCombatEvent(game, `Бой снят автоматически: ${violations.join('; ')}`)
   return violations
 }
 
@@ -653,213 +330,75 @@ export function abortPendingCombat(game: GameSnapshot, playerId: string): { erro
   }
 
   game.pendingCombat = undefined
-  game.eventLog.push({
-    id: `evt-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-    turn: game.turnNumber,
-    phase: game.phase,
-    type: 'combat',
-    message: `Бой прерван участником ${playerId}`,
-    timestamp: Date.now(),
-  })
+  pushCombatEvent(game, `Бой прерван участником ${playerId}`)
   return { errors: [] }
 }
 
-export interface DestructionSelectionState {
-  remainingDamage: number
-  loserShipIds: string[]
-  /** Фактическая цена каждого корабля с учётом событий и priority skip. */
-  destroyCostByShipId: Record<string, number>
-  /** Корабли первого доступного tier — уничтожаются первыми при авто-режиме */
-  immediatelyDestroyableIds: string[]
-  /**
-   * Корабли, которые можно выбрать при пустом выборе (бюджет + приоритет).
-   * После выбора эсминцев UI должен пересчитать доступность через validateDestructionSelection.
-   */
-  selectableIds: string[]
-  /** Priority skip победителя — эти типы проигравшего можно обойти */
-  prioritySkipTypes: ShipType[]
-  ignoreDestructionPriority: boolean
-  /** Урон покрывает все корабли проигравшего — обязательное полное уничтожение */
-  forceFullWipe: boolean
-}
-
-export interface CombatResolutionResult {
-  coord: HexCoord
-  winnerId: string | null
-  /** Атакующий выиграл раунд (может войти на клетку) */
-  attackerWon: boolean
-  log: BattleLogEntry[]
-  destroyedShipIds: string[]
-  roundOne?: CombatRoundResult
-  rounds?: CombatRoundResult[]
-  shieldAbsorbed?: number
-  rawDamage?: number
-  /** Победитель должен выбрать корабли для уничтожения */
-  needsDestructionSelection?: boolean
-  destructionState?: DestructionSelectionState
-  /** @deprecated always false after full combat implementation */
-  stub: boolean
-}
-
-
-
-export interface ShipMoveCombatInput {
-
-  shipId: string
-
-  to: HexCoord
-
-}
-
-
-
-export const ONE_BATTLE_PER_MARKER_MSG =
-  'В одном приказе маркера можно атаковать только одну клетку боя'
-
-
-
 /** Уникальные ключи оспариваемых клеток среди планируемых ходов */
-
 export function getCombatDestinationKeysFromMoves(
-
   game: GameSnapshot,
-
   moves: readonly ShipMoveCombatInput[],
-
   attackerId: string,
-
 ): string[] {
-
   const keys = new Set<string>()
-
   for (const move of moves) {
-
     if (isCombatDestination(game, attackerId, move.to)) {
-
       keys.add(hexKey(move.to.q, move.to.r))
-
     }
-
   }
-
   return [...keys]
-
 }
-
-
 
 export function validateSingleCombatDestination(
-
   game: GameSnapshot,
-
   moves: readonly ShipMoveCombatInput[],
-
   attackerId: string,
-
 ): string[] {
-
   if (getCombatDestinationKeysFromMoves(game, moves, attackerId).length > 1) {
-
     return [ONE_BATTLE_PER_MARKER_MSG]
-
   }
-
   return []
-
 }
-
-
 
 function cellAt(game: GameSnapshot, coord: HexCoord) {
-
   const key = hexKey(coord.q, coord.r)
-
   return game.cells.find((c) => hexKey(c.coord.q, c.coord.r) === key)
-
 }
-
-
 
 function distinctOwners(ships: ShipUnit[]): string[] {
-
   return [...new Set(ships.map((s) => s.ownerId))]
-
 }
 
-
-
-export function getDestroyCost(type: ShipType): number {
-
-  return SHIP_DESTROY_COST[type]
-
+/**
+ * Поправка к нужному значению на кубике для выстрелов игрока `shooterId` по кораблям игрока
+ * `targetOwnerId`. Точка подключения доктрин «Атака» и «Оборона» (фаза 6); сейчас ноль.
+ */
+export function combatShotModifier(
+  _game: GameSnapshot,
+  _shooterId: string,
+  _targetOwnerId: string | null,
+): number {
+  return 0
 }
 
+/** Дальность стрельбы класса: от минимальной до той, где ещё хватает шестёрки. */
+export function getFireRangeBounds(type: ShipType, modifier = 0): FireRange {
+  return shipFireRange(type, modifier) ?? { min: 0, max: 0 }
+}
 
+/** Дальность стрельбы конкретного игрока — с учётом его поправок к броску. */
+export function getEffectiveFireRangeBounds(
+  game: GameSnapshot,
+  type: ShipType,
+  shooterId?: string,
+  targetOwnerId: string | null = null,
+): FireRange {
+  const modifier = shooterId ? combatShotModifier(game, shooterId, targetOwnerId) : 0
+  return getFireRangeBounds(type, modifier)
+}
 
 export function getSupportRange(type: ShipType): number {
-
-  return getFireRangeBounds(type).max
-
-}
-
-export function getFireRangeBounds(type: ShipType): FireRangeBounds {
-  const bounds = SHIP_FIRE_RANGE_BOUNDS[type]
-  if (bounds) return bounds
-  const max = SHIP_FIRE_RANGE[type] ?? 0
-  return { min: max > 0 ? 1 : 0, max }
-}
-
-export function getEffectiveFireRangeBounds(game: GameSnapshot, type: ShipType): FireRangeBounds {
-  const base = getFireRangeBounds(type)
-  const mods = getTurnModifiers(game)
-  if (type === 'hyper' && mods.hyperFireRange != null) {
-    return { min: base.min, max: mods.hyperFireRange }
-  }
-  return base
-}
-
-export function getEffectiveSupportRange(game: GameSnapshot, type: ShipType): number {
-  return getEffectiveFireRangeBounds(game, type).max
-}
-
-
-
-export function getEffectiveDestroyCost(game: GameSnapshot, type: ShipType): number {
-  return SHIP_DESTROY_COST[type] + getTurnModifiers(game).destroyCostBonus
-}
-
-/** destroyCost с надбавкой priority skip (+1 за пропущенный тип) */
-export function getDestroyCostWithPrioritySkip(
-  type: ShipType,
-  prioritySkipTypes: ReadonlySet<ShipType>,
-  baseCost?: number,
-): number {
-  const base = baseCost ?? getDestroyCost(type)
-  return base + (prioritySkipTypes.has(type) ? PRIORITY_SKIP_DESTROY_SURCHARGE : 0)
-}
-
-/** Rulebook example: shield absorbs 4 on cell + 2 from neighbor */
-
-export function getShieldAbsorbCapacity(scope: 'self' | 'neighbor'): number {
-
-  return scope === 'self' ? SHIELD_ABSORB_SELF : SHIELD_ABSORB_NEIGHBOR
-
-}
-
-
-
-/** Total absorb for one shield ship in given scope */
-
-export function shieldAbsorbForShip(scope: 'self' | 'neighbor'): number {
-
-  return getShieldAbsorbCapacity(scope)
-
-}
-
-/** Подпись щита для UI (на клетке — до 6, с соседа — до 3). */
-export function formatShieldContributionLabel(contribution: ShieldContribution): string {
-  const scopeHint = contribution.scope === 'self' ? 'на клетке' : 'с соседа'
-  return `щит · до ${contribution.absorbCapacity} ${scopeHint}`
+  return canShipFireFromDistance(type) ? getFireRangeBounds(type).max : 0
 }
 
 /**
@@ -869,53 +408,18 @@ export function formatShieldContributionLabel(contribution: ShieldContribution):
 export function combatResolutionFingerprint(res: CombatResolutionResult | null | undefined): string | null {
   if (!res) return null
   const rollsKey =
-    res.roundOne?.shipRolls
-      .map((s) => `${s.shipId}:${s.total}:${s.combatRolls.join('.')}:${s.supportRolls?.map((x) => x.rolls.join('.')).join(',') ?? ''}`)
+    res.rounds?.at(-1)?.shipRolls
+      .map((s) => `${s.shipId}:${s.dice.map((d) => `${d.value}>${d.targetShipId ?? '-'}`).join('.')}`)
       .join('|') ?? ''
   return [
     res.coord.q,
     res.coord.r,
     res.attackerWon,
-    res.needsDestructionSelection ?? false,
     res.destroyedShipIds.join(','),
-    res.shieldAbsorbed ?? '',
+    res.rounds?.length ?? 0,
     rollsKey,
   ].join(':')
 }
-
-/**
-
- * Rulebook 6+3 example: one self-shield + one neighbor-shield contributions.
-
- * @returns sum of absorb capacities
-
- */
-
-export function totalShieldAbsorbExample(): number {
-
-  return shieldAbsorbForShip('self') + shieldAbsorbForShip('neighbor')
-
-}
-
-
-
-export function destructionTierIndex(type: ShipType): number {
-
-  const idx = DESTRUCTION_PRIORITY.indexOf(type)
-
-  return idx >= 0 ? idx : DESTRUCTION_PRIORITY.length
-
-}
-
-
-
-export function compareDestructionPriority(a: ShipType, b: ShipType): number {
-
-  return destructionTierIndex(a) - destructionTierIndex(b)
-
-}
-
-
 
 /** Клетка оспариваемая для **движения**: есть любой вражеский корабль. */
 export function isCombatDestination(
@@ -943,101 +447,17 @@ export function isBombardmentDestination(
   return enemyShips || enemyControl
 }
 
-
-
 /** Гексы в радиусе хода, куда ведёт бой (вражеские), но не проходят обычную валидацию движения */
-
 export function getCombatDestinationKeys(
-
   game: GameSnapshot,
-
   attackerId: string,
-
   candidateKeys: string[],
-
 ): string[] {
-
   return candidateKeys.filter((key) => {
-
     const [q, r] = key.split(',').map(Number)
-
     return isCombatDestination(game, attackerId, { q, r })
-
   })
-
 }
-
-
-
-function sumCombatDiceForShips(ships: ShipUnit[]): number {
-
-  return ships.reduce((sum, s) => sum + (SHIP_COMBAT_DICE[s.type] ?? 0), 0)
-
-}
-
-
-
-function collectShieldContributions(
-
-  game: GameSnapshot,
-
-  battleCoord: HexCoord,
-
-  defenderId: string,
-
-): ShieldContribution[] {
-
-  const out: ShieldContribution[] = []
-
-  const battleKey = hexKey(battleCoord.q, battleCoord.r)
-
-
-
-  for (const cell of game.cells) {
-
-    const key = hexKey(cell.coord.q, cell.coord.r)
-
-    const dist = hexDistance(battleCoord, cell.coord)
-
-    if (dist > 1) continue
-
-
-
-    for (const ship of cell.ships) {
-
-      if (ship.type !== 'shield') continue
-
-      if (ship.ownerId !== defenderId) continue
-
-
-
-      const scope: 'self' | 'neighbor' = key === battleKey ? 'self' : 'neighbor'
-
-      out.push({
-
-        shipId: ship.id,
-
-        ownerId: ship.ownerId,
-
-        absorbCapacity: shieldAbsorbForShip(scope),
-
-        scope,
-
-        fromCoord: { ...cell.coord },
-
-      })
-
-    }
-
-  }
-
-
-
-  return out
-
-}
-
-
 
 /**
  * Мирные ходы того же маркера (не в клетку боя) — для поддержки считаем корабль
@@ -1058,8 +478,47 @@ export function supportPositionOverridesForMovement(
 }
 
 /**
- * Корабли игрока вне гекса боя, дающие supportDice в пределах fireRange.
- * combatDice на гексе боя; supportDice — только с дистанции (ships.yaml / rulebook).
+ * Где стоят авианосцы игрока для расчёта бонуса: участники боя — на клетке боя (даже если
+ * физически ещё на исходной), остальные — на своих клетках с учётом мирных ходов маркера.
+ */
+function carrierPositions(
+  game: GameSnapshot,
+  ownerId: string,
+  battleCoord: HexCoord,
+  battleHexShipIds: ReadonlySet<string>,
+  positionOverrides?: ReadonlyMap<string, HexCoord>,
+): { shipId: string; coord: HexCoord }[] {
+  const out: { shipId: string; coord: HexCoord }[] = []
+  for (const cell of game.cells) {
+    for (const ship of cell.ships) {
+      if (ship.ownerId !== ownerId || ship.type !== 'carrier') continue
+      const coord = battleHexShipIds.has(ship.id)
+        ? battleCoord
+        : positionOverrides?.get(ship.id) ?? cell.coord
+      out.push({ shipId: ship.id, coord })
+    }
+  }
+  return out
+}
+
+/** Бонус авианосцев стреляющему: лучший из доступных, не складывается, авианосцам не даётся. */
+function carrierBonusFor(
+  shooter: { id: string; type: ShipType },
+  position: HexCoord,
+  carriers: readonly { shipId: string; coord: HexCoord }[],
+): number {
+  if (shooter.type === 'carrier') return 0
+  let best = 0
+  for (const carrier of carriers) {
+    if (carrier.shipId === shooter.id) continue
+    best = Math.max(best, carrierBonusAtDistance(hexDistance(carrier.coord, position)))
+  }
+  return best
+}
+
+/**
+ * Корабли игрока вне клетки боя, способные стрелять по ней: с каждой клеткой расстояния нужно
+ * на 1 больше, выстрел, которому нужно больше шести, невозможен.
  * @param positionOverrides — плановые координаты (мирные ходы маркера до разрешения боя)
  */
 export function collectSupportShips(
@@ -1068,177 +527,134 @@ export function collectSupportShips(
   playerId: string,
   battleHexShipIds: ReadonlySet<string> = new Set(),
   positionOverrides?: ReadonlyMap<string, HexCoord>,
+  targetOwnerId: string | null = null,
 ): CombatSupportShip[] {
   const out: CombatSupportShip[] = []
   const battleKey = hexKey(battleCoord.q, battleCoord.r)
+  const modifier = combatShotModifier(game, playerId, targetOwnerId)
+  const carriers = carrierPositions(game, playerId, battleCoord, battleHexShipIds, positionOverrides)
 
   for (const cell of game.cells) {
     for (const ship of cell.ships) {
       if (ship.ownerId !== playerId) continue
       if (battleHexShipIds.has(ship.id)) continue
-
       const fromCoord = positionOverrides?.get(ship.id) ?? cell.coord
       if (hexKey(fromCoord.q, fromCoord.r) === battleKey) continue
-
-      const dist = hexDistance(battleCoord, fromCoord)
-      const supportDice = SHIP_SUPPORT_DICE[ship.type] ?? 0
-      const bounds = getEffectiveFireRangeBounds(game, ship.type)
-      if (supportDice <= 0 || bounds.max <= 0) continue
-      if (dist < bounds.min || dist > bounds.max) continue
-
+      const distance = hexDistance(battleCoord, fromCoord)
+      const threshold = shipHitThreshold(ship.type, distance, modifier)
+      if (threshold == null) continue
+      const bonusDice = carrierBonusFor(ship, fromCoord, carriers)
       out.push({
         shipId: ship.id,
         type: ship.type,
         ownerId: ship.ownerId,
         fromCoord: { ...fromCoord },
-        supportDice,
-        distance: dist,
+        distance,
+        dice: shipDice(ship.type) + bonusDice,
+        bonusDice,
+        threshold,
       })
     }
   }
-
   return out.sort((a, b) => a.distance - b.distance || a.shipId.localeCompare(b.shipId))
 }
 
-
 function inferDefenderId(
-
   cell: NonNullable<ReturnType<typeof cellAt>>,
-
   attackerId: string,
-
 ): string | null {
-
   const owners = distinctOwners(cell.ships.filter((s) => s.ownerId !== attackerId))
-
   if (owners.length === 1) return owners[0]
-
   if (cell.controlOwnerId && cell.controlOwnerId !== attackerId) {
-
     return cell.controlOwnerId
-
   }
-
   if (owners.length > 0) return owners[0]
-
   return null
-
 }
 
-
-
-function toParticipants(
-
-  ships: ShipUnit[],
-
-  side: 'attacker' | 'defender',
-
-): CombatParticipant[] {
-
-  return ships.map((s) => ({
-
-    shipId: s.id,
-
-    type: s.type,
-
-    ownerId: s.ownerId,
-
-    side,
-
-  }))
-
+function sideExpectedHits(
+  ships: readonly { dice: number; threshold: number | null }[],
+): number {
+  return ships.reduce((sum, s) => sum + s.dice * hitProbability(s.threshold), 0)
 }
-
-
 
 function buildSidePreview(
   game: GameSnapshot,
   battleCoord: HexCoord,
   playerId: string,
-  role: 'attacker' | 'defender',
+  role: CombatRole,
   battleHexShips: ShipUnit[],
+  enemyOwnerId: string,
+  damageByShipId: Readonly<Record<string, number>>,
   assignedSupport: CombatSupportShip[] = [],
   supportPositionOverrides?: ReadonlyMap<string, HexCoord>,
+  options: { canFireFromBattleHex?: boolean; collectSupport?: boolean } = {},
 ): CombatSidePreview {
+  const battleCell = cellAt(game, battleCoord)
   const battleHexShipIds = new Set(battleHexShips.map((s) => s.id))
+  const modifier = combatShotModifier(game, playerId, enemyOwnerId)
+  const carriers = carrierPositions(
+    game,
+    playerId,
+    battleCoord,
+    battleHexShipIds,
+    supportPositionOverrides,
+  )
+
+  const ships: CombatParticipant[] = battleHexShips.map((ship) => {
+    const threshold =
+      options.canFireFromBattleHex === false ? null : shipHitThreshold(ship.type, 0, modifier)
+    const bonusDice = threshold == null ? 0 : carrierBonusFor(ship, battleCoord, carriers)
+    return {
+      shipId: ship.id,
+      type: ship.type,
+      ownerId: ship.ownerId,
+      side: role,
+      hull: shipHullInBattle(ship.type, ship.ownerId, battleCell?.controlOwnerId),
+      damage: damageByShipId[ship.id] ?? 0,
+      dice: threshold == null ? 0 : shipDice(ship.type) + bonusDice,
+      bonusDice,
+      threshold,
+    }
+  })
+
   const supportingShips = [
-    ...collectSupportShips(
-      game,
-      battleCoord,
-      playerId,
-      battleHexShipIds,
-      supportPositionOverrides,
-    ),
+    ...(options.collectSupport === false
+      ? []
+      : collectSupportShips(
+          game,
+          battleCoord,
+          playerId,
+          battleHexShipIds,
+          supportPositionOverrides,
+          enemyOwnerId,
+        )),
     ...assignedSupport,
   ]
-  const carrierAura = resolveCarrierAura(game, battleCoord, playerId)
 
   return {
     playerId,
     role,
-    ships: toParticipants(battleHexShips, role),
-    combatDiceTotal: sumCombatDiceForShips(battleHexShips),
-    supportDiceTotal: supportingShips.reduce((sum, s) => sum + s.supportDice, 0),
+    ships,
     supportingShips,
-    carrierAura,
+    diceTotal:
+      ships.reduce((sum, s) => sum + s.dice, 0)
+      + supportingShips.reduce((sum, s) => sum + s.dice, 0),
+    expectedHits: sideExpectedHits(ships) + sideExpectedHits(supportingShips),
   }
 }
 
 /**
- * Лучшая аура авианосца владельца для боя на battleCoord.
- * self (d6) важнее neighbor (d4); несколько авианосцев не складываются.
- */
-export function resolveCarrierAura(
-  game: GameSnapshot,
-  battleCoord: HexCoord,
-  ownerId: string,
-): CarrierAuraBonus | null {
-  const battleKey = hexKey(battleCoord.q, battleCoord.r)
-  let best: CarrierAuraBonus | null = null
-
-  for (const cell of game.cells) {
-    for (const ship of cell.ships) {
-      if (ship.ownerId !== ownerId || ship.type !== 'carrier') continue
-      const key = hexKey(cell.coord.q, cell.coord.r)
-      if (key === battleKey) {
-        return {
-          carrierShipId: ship.id,
-          faces: CARRIER_AURA_SELF_FACES,
-          scope: 'self',
-        }
-      }
-      if (hexDistance(battleCoord, cell.coord) === 1) {
-        if (!best || best.faces < CARRIER_AURA_NEIGHBOR_FACES) {
-          best = {
-            carrierShipId: ship.id,
-            faces: CARRIER_AURA_NEIGHBOR_FACES,
-            scope: 'neighbor',
-          }
-        }
-      }
-    }
-  }
-  return best
-}
-
-/**
  * Строит превью боя для UI до применения хода.
-
-
-
-/**
-
- * Строит превью боя для UI до применения хода.
-
  * @param incomingAttackerShips — корабли, которые планируется переместить на клетку
-
  */
-
 export interface BuildCombatPreviewOptions extends Pick<CombatOptions, 'supportSides'> {
-  /** Планы движения атакующего: мирные назначения учитываются для supportDice */
+  /** Планы движения атакующего: мирные назначения учитываются для поддержки */
   attackerMovementPlans?: ReadonlyArray<{ shipId: string; to: HexCoord }>
   /** Обстрел: оспариваемость по isBombardmentDestination */
   forBombardment?: boolean
+  /** Урон, накопленный в текущем бою. */
+  damageByShipId?: Readonly<Record<string, number>>
 }
 
 export function buildCombatPreview(
@@ -1250,6 +666,7 @@ export function buildCombatPreview(
 ): CombatPreview | null {
   const cell = cellAt(game, coord)
   if (!cell) return null
+
   const contested = options.forBombardment
     ? isBombardmentDestination(game, attackerId, coord)
     : isCombatDestination(game, attackerId, coord)
@@ -1258,37 +675,14 @@ export function buildCombatPreview(
   const defenderId = inferDefenderId(cell, attackerId)
   if (!defenderId) return null
 
-
-
+  const damage = options.damageByShipId ?? {}
   const defenderShips = cell.ships.filter((s) => s.ownerId === defenderId)
-
   const attackerShips = incomingAttackerShips.filter((s) => s.ownerId === attackerId)
-
-  const shieldContributions = [
-    ...collectShieldContributions(game, coord, attackerId),
-    ...collectShieldContributions(game, coord, defenderId),
-  ]
-
-
-
-  const supportNotes: string[] = []
   const attackerSupportOverrides = supportPositionOverridesForMovement(
     options.attackerMovementPlans,
     coord,
   )
-  const attSupport = collectSupportShips(
-    game,
-    coord,
-    attackerId,
-    new Set(attackerShips.map((s) => s.id)),
-    attackerSupportOverrides,
-  )
-  const defSupport = collectSupportShips(
-    game,
-    coord,
-    defenderId,
-    new Set(defenderShips.map((s) => s.id)),
-  )
+
   const supportCandidates = new Map<string, CombatSupportShip[]>()
   for (const player of game.players) {
     if (player.eliminated) continue
@@ -1296,6 +690,7 @@ export function buildCombatPreview(
     const ships = collectSupportShips(game, coord, player.id)
     if (ships.length) supportCandidates.set(player.id, ships)
   }
+
   const assignedAttackerSupport: CombatSupportShip[] = []
   const assignedDefenderSupport: CombatSupportShip[] = []
   for (const [playerId, ships] of supportCandidates) {
@@ -1309,181 +704,90 @@ export function buildCombatPreview(
     }
   }
 
-  if (attSupport.length || defSupport.length) {
-
-    supportNotes.push(
-
-      `Поддержка: атакующий +${attSupport.reduce((s, x) => s + x.supportDice, 0)}, защитник +${defSupport.reduce((s, x) => s + x.supportDice, 0)} (fireRange).`,
-
-    )
-
-  }
-
-
-
   return {
-
     coord,
-
     coordKey: hexKey(coord.q, coord.r),
-
     trigger: 'movement',
-
     attackerId,
-
     defenderId,
-
     attacker: buildSidePreview(
       game,
       coord,
       attackerId,
       'attacker',
       attackerShips,
+      defenderId,
+      damage,
       assignedAttackerSupport,
       attackerSupportOverrides,
     ),
-    defender: buildSidePreview(game, coord, defenderId, 'defender', defenderShips, assignedDefenderSupport),
-    shieldContributions,
-    shieldAbsorbTotal: shieldContributions.reduce((s, c) => s + c.absorbCapacity, 0),
-
-    destructionOrder: [...DESTRUCTION_PRIORITY],
-
+    defender: buildSidePreview(
+      game,
+      coord,
+      defenderId,
+      'defender',
+      defenderShips,
+      attackerId,
+      damage,
+      assignedDefenderSupport,
+    ),
     supportCandidates: [...supportCandidates.entries()].map(([playerId, ships]) => ({ playerId, ships })),
-
     notes: [
-
-      'Раунд: priority skip → кубики → победитель → уничтожение по приоритету.',
-
-      `Щит проигравшей стороны: до ${SHIELD_ABSORB_SELF} на клетке, до ${SHIELD_ABSORB_NEIGHBOR} с соседа (пример 6+3).`,
-
-      'Priority skip — бесплатное объявление по типу корабля (один skip на тип).',
-
-      'combatDice — на гексе боя; supportDice — с клеток в пределах fireRange.',
-
-      ...supportNotes,
-
+      'Каждый корабль бросает свои кубики и попадает по порогу своего класса.',
+      'Кубики стреляющий распределяет по вражеским кораблям; попадания обеих сторон применяются одновременно.',
+      'Поддержка с чужой клетки: +1 к нужному значению за каждую клетку расстояния.',
+      'Урон копится до конца боя, после боя выжившие снова целы.',
     ],
-
   }
-
 }
-
-
 
 /** Сканирует поле: клетки с кораблями 2+ игроков */
-
 export function detectCombats(game: GameSnapshot): DetectedCombat[] {
-
   const pending: DetectedCombat[] = []
-
-
-
   for (const cell of game.cells) {
-
     const owners = distinctOwners(cell.ships)
-
     if (owners.length < 2) continue
-
-
-
     const [first, second] = owners
-
     pending.push({
-
       id: `combat-${hexKey(cell.coord.q, cell.coord.r)}`,
-
       coord: { ...cell.coord },
-
       trigger: 'stack',
-
       attackerId: first,
-
       defenderId: second,
-
       attackerShipIds: cell.ships.filter((s) => s.ownerId === first).map((s) => s.id),
-
     })
-
   }
-
-
-
   return pending
-
 }
-
-
 
 /** Бои, которые возникнут после применения планируемых ходов */
-
 export function detectCombatsFromMoves(
-
   game: GameSnapshot,
-
   moves: ShipMoveCombatInput[],
-
   attackerId: string,
-
 ): DetectedCombat[] {
-
   const pending: DetectedCombat[] = []
-
   const seen = new Set<string>()
-
-
-
   for (const move of moves) {
-
     const key = hexKey(move.to.q, move.to.r)
-
     if (seen.has(key)) continue
-
     if (!isCombatDestination(game, attackerId, move.to)) continue
-
-
-
     const cell = cellAt(game, move.to)!
-
     const defenderId = inferDefenderId(cell, attackerId)
-
     if (!defenderId) continue
-
-
-
     seen.add(key)
-
     pending.push({
-
       id: `combat-move-${key}`,
-
       coord: { ...move.to },
-
       trigger: 'movement',
-
       attackerId,
-
       defenderId,
-
       attackerShipIds: moves
-
         .filter((m) => hexKey(m.to.q, m.to.r) === key)
-
         .map((m) => m.shipId),
-
     })
-
   }
-
-
-
   return pending
-
-}
-
-
-
-export function rollD6(count = 1, rng: () => number = Math.random, fixedValue?: number): number[] {
-  return rollDice(count, 6, rng, fixedValue)
 }
 
 /** Бросает count кубиков с указанным числом граней. */
@@ -1499,127 +803,158 @@ export function rollDice(
   return Array.from({ length: count }, () => Math.floor(rng() * faces) + 1)
 }
 
-
-
-/** Сумма выпавших кубиков одной стороны по журналу бросков раунда */
-
-export function sumCombatSideDiceTotal(
-
-  shipRolls: readonly ShipCombatRollLog[],
-
-  side: 'attacker' | 'defender',
-
-): number {
-
-  return shipRolls
-
-    .filter((r) => r.side === side)
-
-    .reduce((sum, r) => sum + r.total, 0)
-
+interface SideShooter {
+  shipId: string
+  type: ShipType
+  ownerId: string
+  distance: number
+  dice: number
+  threshold: number
 }
 
-
-
-/**
- * Очки уничтожения раунда: |сумма атакующего − сумма защитника| (PDF / rulebook).
- * При ничьей — 0.
- */
-export function computeRoundDamage(
-  round: Pick<CombatRoundResult, 'attackerTotal' | 'defenderTotal' | 'winner'>,
-): number {
-  if (round.winner === 'draw') return 0
-  return Math.abs(round.attackerTotal - round.defenderTotal)
-}
-
-/** Человекочитаемая строка итога раунда — суммы d6 и очки уничтожения */
-export function formatCombatRoundDiceTotals(
-  round: Pick<CombatRoundResult, 'attackerTotal' | 'defenderTotal' | 'winner'>,
-  roundNumber = 1,
-  options?: { bombardment?: boolean },
-): string {
-  if (options?.bombardment) {
-    return `Обстрел — сумма кубиков атакующего ${round.attackerTotal}; очки уничтожения ${round.attackerTotal}`
+function shootersOf(side: CombatSidePreview): SideShooter[] {
+  const out: SideShooter[] = []
+  for (const ship of side.ships) {
+    if (ship.dice <= 0 || ship.threshold == null) continue
+    out.push({
+      shipId: ship.shipId,
+      type: ship.type,
+      ownerId: ship.ownerId,
+      distance: 0,
+      dice: ship.dice,
+      threshold: ship.threshold,
+    })
   }
-  const margin = computeRoundDamage(round)
-  const base = `Раунд ${roundNumber} — сумма кубиков: атакующий ${round.attackerTotal}, защитник ${round.defenderTotal}`
-  if (round.winner === 'draw') return `${base}; ничья — очки уничтожения 0`
-  return `${base}; очки уничтожения ${margin}`
+  for (const ship of side.supportingShips) {
+    if (ship.dice <= 0) continue
+    out.push({
+      shipId: ship.shipId,
+      type: ship.type,
+      ownerId: ship.ownerId,
+      distance: ship.distance,
+      dice: ship.dice,
+      threshold: ship.threshold,
+    })
+  }
+  return out
+}
+
+function targetsOf(
+  side: CombatSidePreview,
+  damageByShipId: Readonly<Record<string, number>>,
+): CombatTargetState[] {
+  return side.ships
+    .map((ship) => ({
+      shipId: ship.shipId,
+      type: ship.type,
+      hull: ship.hull,
+      damage: damageByShipId[ship.shipId] ?? ship.damage,
+      threat: ship.dice * hitProbability(ship.threshold),
+    }))
+    .filter((t) => t.damage < t.hull)
+}
+
+/** Сколько кубиков сторона может бросить по живым целям противника. */
+export function combatSideFirepower(preview: CombatPreview, role: CombatRole): number {
+  const side = role === 'attacker' ? preview.attacker : preview.defender
+  if (preview.trigger === 'bombardment' && role === 'defender') return 0
+  return shootersOf(side).reduce((sum, s) => sum + s.dice, 0)
 }
 
 /**
- * Бросок 1-го раунда: каждый корабль кидает свои кубики отдельно.
- * combatDice — участники на гексе; supportDice — соседи в fireRange.
- * Авианосец: аура своему флоту в бою (+1d6 на клетке боя / +1d4 с соседа; не стакается; не на авианосцы).
- * Обстрел (PDF): бросает только атакующий; защитник пассивен; winner всегда attacker.
+ * Один раунд: обе стороны распределяют кубики по целям, бросают, попадания применяются
+ * одновременно. При обстреле стреляет только атакующий.
  */
 export function rollCombatRound(
   preview: CombatPreview,
+  damageByShipId: Readonly<Record<string, number>> = {},
+  options: CombatOptions = {},
   rng: () => number = Math.random,
   fixedDiceValue?: number,
 ): CombatRoundResult {
   const shipRolls: ShipCombatRollLog[] = []
   const isBombardment = preview.trigger === 'bombardment'
-  const sides = isBombardment ? [preview.attacker] : [preview.attacker, preview.defender]
+  const sides: CombatSidePreview[] = isBombardment
+    ? [preview.attacker]
+    : [preview.attacker, preview.defender]
+  const hitsOn = new Map<string, number>()
+  const hitsBySide: Record<CombatRole, number> = { attacker: 0, defender: 0 }
 
   for (const side of sides) {
-    const aura = side.carrierAura ?? null
-    for (const participant of side.ships) {
-      const diceCount = SHIP_COMBAT_DICE[participant.type] ?? 0
-      if (diceCount <= 0) continue
-
-      const faces = SHIP_COMBAT_DIE_FACES[participant.type] ?? 6
-      const combatRolls = rollDice(diceCount, faces, rng, fixedDiceValue)
-      let total = combatRolls.reduce((a, b) => a + b, 0)
-      const supportRolls: { fromShipId: string; rolls: number[] }[] = []
-      if (aura && participant.type !== 'carrier') {
-        const auraRolls = rollDice(1, aura.faces, rng, fixedDiceValue)
-        total += auraRolls.reduce((a, b) => a + b, 0)
-        supportRolls.push({ fromShipId: aura.carrierShipId, rolls: auraRolls })
+    const enemy = side.role === 'attacker' ? preview.defender : preview.attacker
+    const targets = targetsOf(enemy, damageByShipId)
+    const shooters = shootersOf(side)
+    const slots: CombatDieSlot[] = []
+    const owners: SideShooter[] = []
+    for (const shooter of shooters) {
+      for (let i = 0; i < shooter.dice; i++) {
+        slots.push({ shooterShipId: shooter.shipId, threshold: shooter.threshold })
+        owners.push(shooter)
       }
-      shipRolls.push({
-        shipId: participant.shipId,
-        shipType: participant.type,
-        ownerId: participant.ownerId,
-        side: side.role,
-        combatRolls,
-        ...(supportRolls.length ? { supportRolls } : {}),
-        total,
-      })
     }
+    const sideOptions = side.role === 'attacker' ? options.attacker : options.defender
+    const allocation = allocateDice(slots, targets, {
+      targetPriority: sideOptions?.targetPriority,
+      explicit: sideOptions?.diceTargets,
+    })
 
-    for (const support of side.supportingShips) {
-      const rolls = rollDice(
-        support.supportDice,
-        SHIP_SUPPORT_DIE_FACES[support.type] ?? 6,
-        rng,
-        fixedDiceValue,
-      )
-      const total = rolls.reduce((a, b) => a + b, 0)
-      shipRolls.push({
-        shipId: support.shipId,
-        shipType: support.type,
-        ownerId: support.ownerId,
-        side: side.role,
-        combatRolls: [],
-        supportRolls: [{ fromShipId: support.shipId, rolls }],
-        total,
-      })
-    }
+    const logs = new Map<string, ShipCombatRollLog>()
+    slots.forEach((slot, index) => {
+      const shooter = owners[index]!
+      const [value] = rollDice(1, MAX_DIE_VALUE, rng, fixedDiceValue)
+      const targetShipId = allocation[index] ?? null
+      const hit = targetShipId != null && value! >= slot.threshold
+      let log = logs.get(shooter.shipId)
+      if (!log) {
+        log = {
+          shipId: shooter.shipId,
+          shipType: shooter.type,
+          ownerId: shooter.ownerId,
+          side: side.role,
+          distance: shooter.distance,
+          dice: [],
+          hits: 0,
+        }
+        logs.set(shooter.shipId, log)
+        shipRolls.push(log)
+      }
+      log.dice.push({ value: value!, threshold: slot.threshold, targetShipId, hit })
+      if (hit) {
+        log.hits += 1
+        hitsBySide[side.role] += 1
+        hitsOn.set(targetShipId!, (hitsOn.get(targetShipId!) ?? 0) + 1)
+      }
+    })
   }
 
-  const attackerTotal = sumCombatSideDiceTotal(shipRolls, 'attacker')
-  const defenderTotal = isBombardment ? 0 : sumCombatSideDiceTotal(shipRolls, 'defender')
+  const nextDamage: Record<string, number> = { ...damageByShipId }
+  const destroyedShipIds: string[] = []
+  for (const participant of [...preview.attacker.ships, ...preview.defender.ships]) {
+    const hits = hitsOn.get(participant.shipId) ?? 0
+    const before = damageByShipId[participant.shipId] ?? participant.damage
+    if (before >= participant.hull) continue
+    const after = before + hits
+    nextDamage[participant.shipId] = after
+    if (after >= participant.hull) destroyedShipIds.push(participant.shipId)
+  }
 
-    let winner: CombatRoundResult['winner']
-  if (isBombardment) {
-    // PDF: сумма обстрела = очки уничтожения; ничьей нет (иначе бесконечный re-roll при 0).
-    winner = 'attacker'
-  } else if (attackerTotal > defenderTotal) winner = 'attacker'
-  else if (attackerTotal < defenderTotal) winner = 'defender'
-  else winner = 'draw'
+  return {
+    attackerHits: hitsBySide.attacker,
+    defenderHits: hitsBySide.defender,
+    shipRolls,
+    damageByShipId: nextDamage,
+    destroyedShipIds,
+  }
+}
 
-  return { attackerTotal, defenderTotal, winner, shipRolls }
+/** Человекочитаемая строка итога раунда. */
+export function formatCombatRoundSummary(
+  round: Pick<CombatRoundResult, 'attackerHits' | 'defenderHits'>,
+  roundNumber = 1,
+  options?: { bombardment?: boolean },
+): string {
+  if (options?.bombardment) return `Обстрел — попаданий ${round.attackerHits}`
+  return `Раунд ${roundNumber} — попаданий: атакующий ${round.attackerHits}, защитник ${round.defenderHits}`
 }
 
 /** Удаляет корабли по id со всех клеток snapshot */
@@ -1663,301 +998,6 @@ function findShipUnit(game: GameSnapshot, shipId: string): (ShipUnit & { cell: R
   return null
 }
 
-function validatePrioritySkipPlans(
-  plans: CombatPrioritySkipPlan[] | undefined,
-  allowedShipTypes: Set<ShipType>,
-): string[] {
-  if (!plans?.length) return []
-  const errors: string[] = []
-  const seen = new Set<ShipType>()
-
-  for (const plan of plans) {
-    if (seen.has(plan.shipType)) {
-      errors.push(`Priority skip для ${SHIP_LABELS[plan.shipType]} указан дважды`)
-      continue
-    }
-    seen.add(plan.shipType)
-
-    if (!allowedShipTypes.has(plan.shipType)) {
-      errors.push(`Тип ${SHIP_LABELS[plan.shipType]} нет у противника в этом бою`)
-    }
-  }
-
-  if (errors.length) return errors
-
-  if (!isValidPrioritySkipSet(seen, allowedShipTypes)) {
-    errors.push(
-      'Priority skip только строго по порядку приоритета уничтожения '
-        + '(нельзя пропускать тип раньше предыдущего; последний тип в бою пропускать бессмысленно)',
-    )
-  }
-
-  return errors
-}
-
-function applyPrioritySkips(
-  plans: CombatPrioritySkipPlan[] | undefined,
-  skipTypes: Set<ShipType>,
-): BattleLogEntry[] {
-  const log: BattleLogEntry[] = []
-  if (!plans?.length) return log
-
-  for (const plan of plans) {
-    skipTypes.add(plan.shipType)
-    log.push({
-      step: 'priority-skip',
-      message: `${SHIP_LABELS[plan.shipType]} (противник): priority skip`,
-      data: { shipType: plan.shipType },
-    })
-  }
-
-  return log
-}
-
-/** Поглощение урона щитами: сначала self (6), затем neighbor (3) */
-export function applyShieldAbsorption(
-  damage: number,
-  contributions: readonly ShieldContribution[],
-): { remainingDamage: number; absorbed: number } {
-  let remaining = Math.max(0, damage)
-  let absorbed = 0
-
-  const ordered = [...contributions].sort((a, b) => {
-    if (a.scope === b.scope) return a.shipId.localeCompare(b.shipId)
-    return a.scope === 'self' ? -1 : 1
-  })
-
-  for (const sh of ordered) {
-    if (remaining <= 0) break
-    const take = Math.min(remaining, sh.absorbCapacity)
-    remaining -= take
-    absorbed += take
-  }
-
-  return { remainingDamage: remaining, absorbed }
-}
-
-export function sortShipsForDestruction(
-  ships: readonly ShipUnit[],
-  prioritySkipTypes: ReadonlySet<ShipType>,
-  tieBreak?: readonly string[],
-  ignoreDestructionPriority = false,
-): ShipUnit[] {
-  const tieIndex = (id: string) => {
-    if (!tieBreak?.length) return 999
-    const idx = tieBreak.indexOf(id)
-    return idx >= 0 ? idx : 999
-  }
-
-  return [...ships].sort((a, b) => {
-    if (!ignoreDestructionPriority) {
-      const tierDiff = compareDestructionPriority(a.type, b.type)
-      if (tierDiff !== 0) return tierDiff
-    }
-
-    const skipA = prioritySkipTypes.has(a.type) ? 1 : 0
-    const skipB = prioritySkipTypes.has(b.type) ? 1 : 0
-    if (skipA !== skipB) return skipA - skipB
-
-    const tieDiff = tieIndex(a.id) - tieIndex(b.id)
-    if (tieDiff !== 0) return tieDiff
-
-    return a.id.localeCompare(b.id)
-  })
-}
-
-export function getImmediatelyDestroyableShipIds(
-  orderedShips: readonly ShipUnit[],
-  damage: number,
-  prioritySkipTypes: ReadonlySet<ShipType>,
-  destroyCostForType: (type: ShipType) => number,
-  ignoreDestructionPriority = false,
-): string[] {
-  if (orderedShips.length === 0 || damage <= 0) return []
-
-  const first = orderedShips[0]!
-  const frontTier = ignoreDestructionPriority ? null : destructionTierIndex(first.type)
-  const frontSkipped = prioritySkipTypes.has(first.type)
-
-  const immediate: string[] = []
-  for (const ship of orderedShips) {
-    const sameFront =
-      ignoreDestructionPriority ||
-      (destructionTierIndex(ship.type) === frontTier &&
-        prioritySkipTypes.has(ship.type) === frontSkipped)
-    if (!sameFront) break
-    if (destroyCostForType(ship.type) <= damage) {
-      immediate.push(ship.id)
-    }
-  }
-  return immediate
-}
-
-export function buildDestructionSelectionState(
-  game: GameSnapshot,
-  loserShips: readonly ShipUnit[],
-  damage: number,
-  prioritySkipTypes: ReadonlySet<ShipType>,
-  tieBreak?: readonly string[],
-): DestructionSelectionState {
-  const turnMods = getTurnModifiers(game)
-  const destroyCostForType = (type: ShipType) =>
-    getDestroyCostWithPrioritySkip(type, prioritySkipTypes, getEffectiveDestroyCost(game, type))
-  const ignorePriority = turnMods.ignoreDestructionPriority
-
-  const ordered = sortShipsForDestruction(
-    loserShips,
-    prioritySkipTypes,
-    tieBreak,
-    ignorePriority,
-  )
-  const totalCost = ordered.reduce((sum, s) => sum + destroyCostForType(s.type), 0)
-  const forceFullWipe = damage >= totalCost && ordered.length > 0
-
-  const immediatelyDestroyableIds = getImmediatelyDestroyableShipIds(
-    ordered,
-    damage,
-    prioritySkipTypes,
-    destroyCostForType,
-    ignorePriority,
-  )
-
-  const destroyOpts = {
-    ignoreDestructionPriority: ignorePriority,
-    destroyCostForType,
-  }
-
-  // Только корабли, валидные как одиночный выбор — нельзя сразу ткнуть крейсер
-  // при живых эсминцах без priority skip.
-  const selectableIds = ordered
-    .filter((s) => {
-      if (destroyCostForType(s.type) > damage) return false
-      return validateDestructionSelection(ordered, [s.id], damage, prioritySkipTypes, destroyOpts)
-        .length === 0
-    })
-    .map((s) => s.id)
-
-  return {
-    remainingDamage: damage,
-    loserShipIds: ordered.map((s) => s.id),
-    destroyCostByShipId: Object.fromEntries(
-      ordered.map((s) => [s.id, destroyCostForType(s.type)]),
-    ),
-    immediatelyDestroyableIds,
-    selectableIds,
-    prioritySkipTypes: [...prioritySkipTypes],
-    ignoreDestructionPriority: ignorePriority,
-    forceFullWipe,
-  }
-}
-
-export function validateDestructionSelection(
-  loserShips: readonly ShipUnit[],
-  selectedIds: readonly string[],
-  damage: number,
-  prioritySkipTypes: ReadonlySet<ShipType>,
-  options?: {
-    ignoreDestructionPriority?: boolean
-    destroyCostForType?: (type: ShipType) => number
-  },
-): string[] {
-  const errors: string[] = []
-  if (selectedIds.length === 0) return errors
-
-  const destroyCostForType =
-    options?.destroyCostForType
-    ?? ((type: ShipType) => getDestroyCostWithPrioritySkip(type, prioritySkipTypes))
-  const ignorePriority = options?.ignoreDestructionPriority ?? false
-  const selected = new Set(selectedIds)
-
-  let totalCost = 0
-  for (const id of selectedIds) {
-    const ship = loserShips.find((s) => s.id === id)
-    if (!ship) {
-      errors.push(`Корабль ${id} не участвует в бою`)
-      continue
-    }
-    totalCost += destroyCostForType(ship.type)
-  }
-  if (totalCost > damage) {
-    errors.push(`Сумма destroyCost (${totalCost}) превышает бюджет урона (${damage})`)
-  }
-
-  // Приоритет уничтожения — по типу корабля, не по отдельным экземплярам.
-  // Среди эсминцев можно выбрать любой; нельзя взять крейсер, пока остаётся
-  // невыбранный (и не пропущенный priority skip) эсминец.
-  if (!ignorePriority) {
-    const seen = new Set<string>()
-    for (const selectedId of selectedIds) {
-      const chosen = loserShips.find((s) => s.id === selectedId)
-      if (!chosen) continue
-      for (const other of loserShips) {
-        if (selected.has(other.id)) continue
-        // Пропущенный тип можно обойти — это смысл priority skip.
-        if (prioritySkipTypes.has(other.type)) continue
-        if (compareDestructionPriority(other.type, chosen.type) >= 0) continue
-        const message =
-          `Нельзя уничтожить ${SHIP_LABELS[chosen.type]} раньше ${SHIP_LABELS[other.type]}`
-        if (!seen.has(message)) {
-          seen.add(message)
-          errors.push(message)
-        }
-      }
-    }
-  }
-
-  return errors
-}
-
-export function selectShipsToDestroy(
-  loserShips: readonly ShipUnit[],
-  damage: number,
-  prioritySkipTypes: ReadonlySet<ShipType>,
-  tieBreak?: readonly string[],
-  options?: {
-    ignoreDestructionPriority?: boolean
-    destroyCostForType?: (type: ShipType) => number
-  },
-): string[] {
-  if (damage <= 0 || loserShips.length === 0) return []
-
-  const destroyCostForType =
-    options?.destroyCostForType
-    ?? ((type: ShipType) => getDestroyCostWithPrioritySkip(type, prioritySkipTypes))
-  const ordered = sortShipsForDestruction(
-    loserShips,
-    prioritySkipTypes,
-    tieBreak,
-    options?.ignoreDestructionPriority,
-  )
-  const destroyed: string[] = []
-  let remaining = damage
-
-  for (const ship of ordered) {
-    const cost = destroyCostForType(ship.type)
-    if (cost > remaining) break
-    destroyed.push(ship.id)
-    remaining -= cost
-  }
-
-  return destroyed
-}
-
-function loserShipsForSide(
-  preview: CombatPreview,
-  loserRole: 'attacker' | 'defender',
-  incomingAttackerShips: readonly ShipUnit[],
-  game: GameSnapshot,
-  coord: HexCoord,
-): ShipUnit[] {
-  if (loserRole === 'defender') {
-    const cell = cellAt(game, coord)
-    return cell?.ships.filter((s) => s.ownerId === preview.defenderId) ?? []
-  }
-
-  return incomingAttackerShips.filter((s) => s.ownerId === preview.attackerId)
-}
-
 function maybeTransferControl(
   game: GameSnapshot,
   coord: HexCoord,
@@ -1978,14 +1018,24 @@ function maybeTransferControl(
   removeStaleProductionMarkerAt(game, coord)
 }
 
+function shipLabels(ids: readonly string[], preview: CombatPreview): string {
+  const byId = new Map(
+    [...preview.attacker.ships, ...preview.defender.ships].map((s) => [s.shipId, s.type]),
+  )
+  return ids
+    .map((id) => {
+      const type = byId.get(id)
+      return type ? SHIP_LABELS[type] : id
+    })
+    .join(', ')
+}
+
 /**
-
- * Полное разрешение боя на клетке: priority skip → кубики (повтор при ничьей) → щиты → уничтожение.
-
- * Не перемещает корабли — только возвращает destroyedShipIds и attackerWon.
-
+ * Один раунд боя на клетке. Не перемещает корабли — возвращает уничтоженные с обеих сторон,
+ * накопленный урон выживших и исход, если бой им решился.
+ *
+ * @param damageByShipId — урон, накопленный в предыдущих раундах этого же боя
  */
-
 export function resolveCombatAtCell(
   game: GameSnapshot,
   coord: HexCoord,
@@ -1994,218 +1044,76 @@ export function resolveCombatAtCell(
   options: CombatOptions = {},
   rng: () => number = Math.random,
   previewOverride?: CombatPreview,
+  damageByShipId: Readonly<Record<string, number>> = {},
+  roundNumber = 1,
 ): CombatResolutionResult {
   const preview =
-    previewOverride ?? buildCombatPreview(game, coord, attackerId, incomingAttackerShips)
-  const log: BattleLogEntry[] = []
-  const turnMods = getTurnModifiers(game)
-  const fixedDice = turnMods.fixedDiceValue
+    previewOverride
+    ?? buildCombatPreview(game, coord, attackerId, incomingAttackerShips, {
+      supportSides: options.supportSides,
+      damageByShipId,
+    })
 
   if (!preview) {
     return {
       coord,
       winnerId: null,
       attackerWon: false,
-      log: [{ step: 'round-winner', message: 'Нет боя на этой клетке' }],
+      log: [{ step: 'no-fire', message: 'Нет боя на этой клетке' }],
       destroyedShipIds: [],
       stub: false,
     }
   }
 
-  const attackerSkipTypes = new Set<ShipType>()
-  const defenderSkipTypes = new Set<ShipType>()
-
-  log.push(...applyPrioritySkips(options.attacker?.prioritySkips, attackerSkipTypes))
-  log.push(...applyPrioritySkips(options.defender?.prioritySkips, defenderSkipTypes))
-
-  const rounds: CombatRoundResult[] = []
-  let round = rollCombatRound(preview, rng, fixedDice)
-  rounds.push(round)
-  let roundNumber = 1
-  const MAX_DRAW_REROLLS = 64
-
-  while (round.winner === 'draw' && roundNumber < MAX_DRAW_REROLLS) {
-    roundNumber += 1
-    round = rollCombatRound(preview, rng, fixedDice)
-    rounds.push(round)
-  }
-
-  if (round.winner === 'draw') {
-    log.push({
-      step: 'dice-roll',
-      message: formatCombatRoundDiceTotals(round, roundNumber, {
-        bombardment: preview.trigger === 'bombardment',
-      }),
-      data: { round, roundNumber, rounds },
-    })
-    log.push({
-      step: 'destruction',
-      message: 'Ничья раунда без уничтожения (лимит перебросов).',
-    })
+  const isBombardment = preview.trigger === 'bombardment'
+  const attackerFire = combatSideFirepower(preview, 'attacker')
+  const defenderFire = combatSideFirepower(preview, 'defender')
+  if (attackerFire === 0 && defenderFire === 0) {
     return {
       coord,
       winnerId: null,
       attackerWon: false,
-      log,
+      log: [{ step: 'no-fire', message: 'Ни одна сторона не может стрелять — бой не состоялся' }],
       destroyedShipIds: [],
+      damageByShipId: { ...damageByShipId },
+      stalemate: true,
       stub: false,
-      roundOne: rounds[0],
-      rawDamage: 0,
-      needsDestructionSelection: false,
     }
   }
 
-  log.push({
-    step: 'dice-roll',
-    message: formatCombatRoundDiceTotals(round, roundNumber, {
-      bombardment: preview.trigger === 'bombardment',
-    }),
-    data: { round, roundNumber, rounds },
-  })
-
-  const attackerWon = round.winner === 'attacker'
-  const winnerId = attackerWon ? preview.attackerId : preview.defenderId
-  const loserRole = attackerWon ? 'defender' : 'attacker'
-  // Skip объявляют по типам врага; на флот проигравшего действуют skip победителя.
-  const loserSkipTypes = attackerWon ? attackerSkipTypes : defenderSkipTypes
-  const loserOptions = attackerWon ? options.defender : options.attacker
-
-  log.push({
-    step: 'round-winner',
-    message: `Победитель раунда: ${winnerId}`,
-    data: {
-      winner: round.winner,
-      attackerTotal: round.attackerTotal,
-      defenderTotal: round.defenderTotal,
-    },
-  })
-
-  const rawDamage = computeRoundDamage(round)
-  const loserId = attackerWon ? preview.defenderId : preview.attackerId
-  const loserShields = preview.shieldContributions.filter((c) => c.ownerId === loserId)
-  const shieldResult = applyShieldAbsorption(
-    rawDamage,
-    loserShields,
-  )
-
-  log.push({
-    step: 'shield-absorb',
-    message:
-      shieldResult.absorbed > 0
-        ? `Очки уничтожения ${rawDamage}: щиты поглотили ${shieldResult.absorbed} (осталось ${shieldResult.remainingDamage})`
-        : `Очки уничтожения ${rawDamage}: щиты не поглотили урон`,
-    data: {
-      rawDamage,
-      absorbed: shieldResult.absorbed,
-      remainingDamage: shieldResult.remainingDamage,
-      contributions: loserShields,
-      loserId,
-    },
-  })
-
-  const loserShips = loserShipsForSide(
+  const round = rollCombatRound(
     preview,
-    loserRole,
-    incomingAttackerShips,
-    game,
-    coord,
+    damageByShipId,
+    options,
+    rng,
+    getTurnModifiers(game).fixedDiceValue,
   )
+  const log: BattleLogEntry[] = [
+    {
+      step: 'dice-roll',
+      message: formatCombatRoundSummary(round, roundNumber, { bombardment: isBombardment }),
+      data: { round, roundNumber },
+    },
+  ]
 
-  const destroyOpts = {
-    ignoreDestructionPriority: turnMods.ignoreDestructionPriority,
-    destroyCostForType: (type: ShipType) =>
-      getDestroyCostWithPrioritySkip(type, loserSkipTypes, getEffectiveDestroyCost(game, type)),
-  }
+  const destroyed = new Set(round.destroyedShipIds)
+  log.push({
+    step: 'destruction',
+    message: destroyed.size
+      ? `Уничтожены: ${shipLabels(round.destroyedShipIds, preview)}`
+      : 'Уничтожений нет',
+    data: { destroyedShipIds: round.destroyedShipIds },
+  })
 
-  const destructionState = buildDestructionSelectionState(
-    game,
-    loserShips,
-    shieldResult.remainingDamage,
-    loserSkipTypes,
-    loserOptions?.destructionTieBreak,
-  )
+  const defendersLeft = preview.defender.ships.filter((s) => !destroyed.has(s.shipId)).length
+  const attackersLeft = preview.attacker.ships.filter((s) => !destroyed.has(s.shipId)).length
+  const attackerWon = defendersLeft === 0 && (isBombardment || attackersLeft > 0)
+  const defenderWon = !isBombardment && attackersLeft === 0 && defendersLeft > 0
+  const winnerId = attackerWon ? preview.attackerId : defenderWon ? preview.defenderId : null
 
-  let destroyedShipIds: string[] = []
-  let needsDestructionSelection = false
-
-  if (shieldResult.remainingDamage <= 0 || loserShips.length === 0) {
-    log.push({
-      step: 'destruction',
-      message: 'Уничтожений нет',
-    })
-  } else if (destructionState.selectableIds.length === 0) {
-    log.push({
-      step: 'destruction',
-      message: `Ничья раунда без уничтожения: бюджет ${shieldResult.remainingDamage} меньше destroyCost всех доступных кораблей`,
-      data: { destructionState },
-    })
-  } else if (destructionState.forceFullWipe) {
-    destroyedShipIds = loserShips.map((s) => s.id)
-    const labels = destroyedShipIds
-      .map((id) => {
-        const ship = loserShips.find((s) => s.id === id)
-        return ship ? SHIP_LABELS[ship.type] : id
-      })
-      .join(', ')
-    log.push({
-      step: 'destruction',
-      message: `Полное уничтожение (урон покрывает флот): ${labels}`,
-      data: { destroyedShipIds, forceFullWipe: true },
-    })
-  } else if (options.destructionSelection) {
-    const selectionErrors = validateDestructionSelection(
-      loserShips,
-      options.destructionSelection,
-      shieldResult.remainingDamage,
-      loserSkipTypes,
-      destroyOpts,
-    )
-    if (selectionErrors.length) {
-      log.push({
-        step: 'destruction',
-        message: selectionErrors[0]!,
-      })
-      return {
-        coord,
-        winnerId,
-        attackerWon,
-        log,
-        destroyedShipIds: [],
-        roundOne: rounds[0],
-        rounds,
-        shieldAbsorbed: shieldResult.absorbed,
-        rawDamage,
-        needsDestructionSelection: true,
-        destructionState,
-        stub: false,
-      }
-    }
-    destroyedShipIds = [...options.destructionSelection]
-    if (destroyedShipIds.length > 0) {
-      const labels = destroyedShipIds
-        .map((id) => {
-          const ship = loserShips.find((s) => s.id === id)
-          return ship ? SHIP_LABELS[ship.type] : id
-        })
-        .join(', ')
-      log.push({
-        step: 'destruction',
-        message: `Уничтожены (выбор победителя): ${labels}`,
-        data: { destroyedShipIds, order: preview.destructionOrder },
-      })
-    } else {
-      log.push({
-        step: 'destruction',
-        message: 'Победитель не уничтожил кораблей',
-      })
-    }
-  } else {
-    needsDestructionSelection = true
-    log.push({
-      step: 'destruction',
-      message: `Ожидается выбор уничтожения (бюджет ${shieldResult.remainingDamage})`,
-      data: { destructionState },
-    })
+  const survivingDamage: Record<string, number> = {}
+  for (const [shipId, damage] of Object.entries(round.damageByShipId)) {
+    if (!destroyed.has(shipId) && damage > 0) survivingDamage[shipId] = damage
   }
 
   return {
@@ -2213,13 +1121,10 @@ export function resolveCombatAtCell(
     winnerId,
     attackerWon,
     log,
-    destroyedShipIds,
-    roundOne: rounds[0],
-    rounds,
-    shieldAbsorbed: shieldResult.absorbed,
-    rawDamage,
-    needsDestructionSelection,
-    destructionState: needsDestructionSelection ? destructionState : undefined,
+    destroyedShipIds: [...round.destroyedShipIds],
+    roundOne: round,
+    rounds: [round],
+    damageByShipId: survivingDamage,
     stub: false,
   }
 }
@@ -2259,31 +1164,35 @@ export function validatePendingCombatPrepOptions(game: GameSnapshot): string[] {
   return ['Некорректное состояние подготовки боя']
 }
 
+function validateTargetPriority(
+  priority: readonly string[] | undefined,
+  enemyShipIds: ReadonlySet<string>,
+): string[] {
+  if (!priority?.length) return []
+  const seen = new Set<string>()
+  for (const id of priority) {
+    if (seen.has(id)) return ['Одна и та же цель указана дважды']
+    seen.add(id)
+    if (!enemyShipIds.has(id)) return ['В порядке целей указан корабль, который не участвует в бою']
+  }
+  return []
+}
+
+/**
+ * Проверка порядка целей. Явное распределение кубиков не проверяется: цели в нём устаревают
+ * от раунда к раунду, поэтому несуществующие назначения просто пропускаются.
+ */
 export function validateCombatOptions(
-  game: GameSnapshot,
+  _game: GameSnapshot,
   preview: CombatPreview,
-  incomingAttackerShipIds: readonly string[],
+  _incomingAttackerShipIds: readonly string[],
   options: CombatOptions = {},
 ): string[] {
-  const attackerTypes = new Set<ShipType>([
-    ...preview.attacker.ships.map((s) => s.type),
-    ...preview.attacker.supportingShips.map((s) => s.type),
-    ...incomingAttackerShipIds
-      .map((id) => preview.attacker.ships.find((s) => s.shipId === id)?.type)
-      .filter((t): t is ShipType => !!t),
-  ])
-  for (const id of incomingAttackerShipIds) {
-    const ship = findShipUnit(game, id)
-    if (ship) attackerTypes.add(ship.type)
-  }
-  const defenderTypes = new Set([
-    ...preview.defender.ships.map((s) => s.type),
-    ...preview.defender.supportingShips.map((s) => s.type),
-  ])
-
+  const defenderShipIds = new Set(preview.defender.ships.map((s) => s.shipId))
+  const attackerShipIds = new Set(preview.attacker.ships.map((s) => s.shipId))
   return [
-    ...validatePrioritySkipPlans(options.attacker?.prioritySkips, defenderTypes),
-    ...validatePrioritySkipPlans(options.defender?.prioritySkips, attackerTypes),
+    ...validateTargetPriority(options.attacker?.targetPriority, defenderShipIds),
+    ...validateTargetPriority(options.defender?.targetPriority, attackerShipIds),
   ]
 }
 
@@ -2316,97 +1225,69 @@ export function applyCombatResultToSnapshot(
   removeOrphanedActionMarkersAt(game, result.coord)
 }
 
-
-
-/** Вероятности исхода первого раунда (перспектива атакующего) */
-
-export interface RoundOneOutcomeOdds {
-
+/** Вероятности исхода боя целиком (перспектива атакующего) */
+export interface BattleOutcomeOdds {
+  /** Атакующий уничтожил защитников и выжил. */
   win: number
-
+  /** Взаимное уничтожение или бой, который никто не может выиграть. */
   draw: number
-
+  /** Атакующий уничтожен. */
   defeat: number
-
 }
-
-
 
 /**
-
- * Monte-Carlo оценка исхода первого раунда через rollCombatRound.
-
- * Щиты и уничтожение не моделируются — только победитель раунда по кубикам.
-
+ * Monte-Carlo оценка исхода боя «до конца», без отступлений: раунды идут, пока одна из
+ * сторон не лишится кораблей на клетке. Поддержка и бонусы берутся из превью как есть.
  */
-
-export function estimateRoundOneOutcome(
-
+export function estimateBattleOutcome(
   preview: CombatPreview,
-
-  options?: { samples?: number; rng?: () => number },
-
-): RoundOneOutcomeOdds {
-
-  const samples = options?.samples ?? 800
-
+  options?: { samples?: number; rng?: () => number; maxRounds?: number },
+): BattleOutcomeOdds {
+  const samples = options?.samples ?? 400
   const rng = options?.rng ?? Math.random
+  const maxRounds = options?.maxRounds ?? 30
 
-
-
-  const attackerDice =
-
-    preview.attacker.combatDiceTotal + preview.attacker.supportDiceTotal
-
-  const defenderDice =
-
-    preview.defender.combatDiceTotal + preview.defender.supportDiceTotal
-
-
-
-  if (attackerDice === 0 && defenderDice === 0) {
-
-    return { win: 1 / 3, draw: 1 / 3, defeat: 1 / 3 }
-
+  if (
+    combatSideFirepower(preview, 'attacker') === 0
+    && combatSideFirepower(preview, 'defender') === 0
+  ) {
+    return { win: 0, draw: 1, defeat: 0 }
   }
-
-
 
   let wins = 0
-
   let draws = 0
-
   let defeats = 0
 
-
-
   for (let i = 0; i < samples; i++) {
-
-    const round = rollCombatRound(preview, rng)
-
-    if (round.winner === 'attacker') wins++
-
-    else if (round.winner === 'draw') draws++
-
-    else defeats++
-
+    let damage: Record<string, number> = {}
+    for (const ship of [...preview.attacker.ships, ...preview.defender.ships]) {
+      if (ship.damage > 0) damage[ship.shipId] = ship.damage
+    }
+    let outcome: 'win' | 'draw' | 'defeat' = 'draw'
+    for (let round = 0; round < maxRounds; round++) {
+      const result = rollCombatRound(preview, damage, {}, rng)
+      damage = result.damageByShipId
+      const alive = (side: CombatSidePreview) =>
+        side.ships.some((s) => (damage[s.shipId] ?? 0) < s.hull)
+      const attackersAlive = preview.trigger === 'bombardment' || alive(preview.attacker)
+      const defendersAlive = alive(preview.defender)
+      if (!defendersAlive && attackersAlive) outcome = 'win'
+      else if (!attackersAlive && defendersAlive) outcome = 'defeat'
+      else if (!attackersAlive && !defendersAlive) outcome = 'draw'
+      else if (preview.trigger !== 'bombardment') continue
+      break
+    }
+    if (outcome === 'win') wins++
+    else if (outcome === 'defeat') defeats++
+    else draws++
   }
-
-
 
   return {
-
     win: wins / samples,
-
     draw: draws / samples,
-
     defeat: defeats / samples,
-
   }
-
 }
-
-
 
 /** Полная боевая система активна (не stub) */
 export const COMBAT_STUB = false
@@ -2483,329 +1364,6 @@ export function getCombatRetreatDestinations(
     .map((cell) => ({ ...cell.coord }))
 }
 
-/** Состояние раунда, ожидающего ручного выбора уничтожения */
-export interface PendingCombatRoundState {
-  rounds: CombatRoundResult[]
-  shieldAbsorbed: number
-  rawDamage: number
-  remainingDamage: number
-  winnerId: string
-  attackerWon: boolean
-  defenderId: string
-  combatOptions: CombatOptions
-  incomingAttackerShipIds: string[]
-  attackerSkipTypes: ShipType[]
-  defenderSkipTypes: ShipType[]
-  trigger: 'movement' | 'stack' | 'bombardment'
-  movementFrom?: HexCoord
-  movementPlans?: Array<{ shipId: string; to: HexCoord; declareControl?: boolean }>
-  bombardmentFrom?: HexCoord
-  bombardmentPlans?: Array<{ shipId: string; target: HexCoord }>
-  /** Оставшиеся цели обстрела после текущей клетки */
-  queuedBombardmentPlans?: Array<{ shipId: string; target: HexCoord }>
-}
-
-export function applyCombatDestructionSelection(
-  game: GameSnapshot,
-  coord: HexCoord,
-  incomingAttackerShips: readonly ShipUnit[],
-  preview: CombatPreview,
-  roundState: PendingCombatRoundState,
-  destructionSelection: string[],
-): CombatResolutionResult {
-  const log: BattleLogEntry[] = []
-  const turnMods = getTurnModifiers(game)
-  const round = roundState.rounds[roundState.rounds.length - 1]!
-  const attackerWon = roundState.attackerWon
-  const winnerId = roundState.winnerId
-  const loserRole = attackerWon ? 'defender' : 'attacker'
-  const loserSkipTypes = new Set<ShipType>(
-    attackerWon ? roundState.attackerSkipTypes : roundState.defenderSkipTypes,
-  )
-  const loserOptions = attackerWon ? roundState.combatOptions.defender : roundState.combatOptions.attacker
-
-  log.push({
-    step: 'round-winner',
-    message: `Победитель раунда: ${winnerId}`,
-    data: { winner: round.winner, attackerTotal: round.attackerTotal, defenderTotal: round.defenderTotal },
-  })
-  log.push({
-    step: 'shield-absorb',
-    message:
-      roundState.shieldAbsorbed > 0
-        ? `Очки уничтожения ${roundState.rawDamage}: щиты поглотили ${roundState.shieldAbsorbed} (осталось ${roundState.remainingDamage})`
-        : `Очки уничтожения ${roundState.rawDamage}: щиты не поглотили урон`,
-  })
-
-  const loserShips = loserShipsForSide(preview, loserRole, incomingAttackerShips, game, coord)
-  const destroyOpts = {
-    ignoreDestructionPriority: turnMods.ignoreDestructionPriority,
-    destroyCostForType: (type: ShipType) =>
-      getDestroyCostWithPrioritySkip(type, loserSkipTypes, getEffectiveDestroyCost(game, type)),
-  }
-
-  const selectionErrors = validateDestructionSelection(
-    loserShips,
-    destructionSelection,
-    roundState.remainingDamage,
-    loserSkipTypes,
-    destroyOpts,
-  )
-  if (selectionErrors.length) {
-    return {
-      coord,
-      winnerId,
-      attackerWon,
-      log: [...log, { step: 'destruction', message: selectionErrors[0]! }],
-      destroyedShipIds: [],
-      roundOne: roundState.rounds[0],
-      rounds: roundState.rounds,
-      shieldAbsorbed: roundState.shieldAbsorbed,
-      rawDamage: roundState.rawDamage,
-      needsDestructionSelection: true,
-      destructionState: buildDestructionSelectionState(
-        game,
-        loserShips,
-        roundState.remainingDamage,
-        loserSkipTypes,
-        loserOptions?.destructionTieBreak,
-      ),
-      stub: false,
-    }
-  }
-
-  const destroyedShipIds = [...destructionSelection]
-  if (destroyedShipIds.length > 0) {
-    const labels = destroyedShipIds
-      .map((id) => {
-        const ship = loserShips.find((s) => s.id === id)
-        return ship ? SHIP_LABELS[ship.type] : id
-      })
-      .join(', ')
-    log.push({
-      step: 'destruction',
-      message: `Уничтожены (выбор победителя): ${labels}`,
-      data: { destroyedShipIds },
-    })
-  } else {
-    log.push({ step: 'destruction', message: 'Победитель не уничтожил кораблей' })
-  }
-
-  return {
-    coord,
-    winnerId,
-    attackerWon,
-    log,
-    destroyedShipIds,
-    roundOne: roundState.rounds[0],
-    rounds: roundState.rounds,
-    shieldAbsorbed: roundState.shieldAbsorbed,
-    rawDamage: roundState.rawDamage,
-    stub: false,
-  }
-}
-
-export function setupPendingCombatDestruction(
-  game: GameSnapshot,
-  coord: HexCoord,
-  attackerId: string,
-  defenderId: string,
-  result: CombatResolutionResult,
-  combatOptions: CombatOptions,
-  skipTypes: { attacker: ShipType[]; defender: ShipType[] },
-  trigger: NonNullable<PendingCombat['trigger']> = 'movement',
-  extra?: Pick<
-    PendingCombatRoundState,
-    | 'movementFrom'
-    | 'movementPlans'
-    | 'bombardmentFrom'
-    | 'bombardmentPlans'
-    | 'incomingAttackerShipIds'
-    | 'queuedBombardmentPlans'
-  > & { shipsDestroyedInCombat?: boolean },
-): void {
-  const remainingDamage = result.destructionState?.remainingDamage ?? 0
-  game.pendingCombat = {
-    cellKey: hexKey(coord.q, coord.r),
-    attackerId,
-    defenderIds: defenderIdsOnCell(game, coord, attackerId),
-    roundNumber: 1,
-    phase: 'awaiting-destruction',
-    trigger,
-    combatOptions,
-    shipsDestroyedInCombat: extra?.shipsDestroyedInCombat ?? false,
-    roundState: {
-      rounds: result.rounds ?? (result.roundOne ? [result.roundOne] : []),
-      shieldAbsorbed: result.shieldAbsorbed ?? 0,
-      rawDamage: result.rawDamage ?? 0,
-      remainingDamage,
-      winnerId: result.winnerId!,
-      attackerWon: result.attackerWon,
-      defenderId,
-      combatOptions,
-      incomingAttackerShipIds: extra?.incomingAttackerShipIds ?? [],
-      attackerSkipTypes: skipTypes.attacker,
-      defenderSkipTypes: skipTypes.defender,
-      trigger,
-      movementFrom: extra?.movementFrom,
-      movementPlans: extra?.movementPlans,
-      bombardmentFrom: extra?.bombardmentFrom,
-      bombardmentPlans: extra?.bombardmentPlans,
-      queuedBombardmentPlans: extra?.queuedBombardmentPlans,
-    },
-  }
-  tryAutoResolveEliminatedDestruction(game)
-}
-
-/** Выбывший победитель не выбирает потери — уничтожение по приоритету автоматически. */
-function tryAutoResolveEliminatedDestruction(game: GameSnapshot): void {
-  const pending = game.pendingCombat
-  if (!isAwaitingDestruction(pending) || !pending.roundState) return
-  const winnerId = pending.roundState.winnerId
-  if (!isEliminatedPlayer(game, winnerId)) return
-
-  const rs = pending.roundState
-  const [q, r] = pending.cellKey.split(',').map(Number)
-  const coord = { q, r }
-  const incomingShips: ShipUnit[] = rs.incomingAttackerShipIds
-    .map((id) => findShipUnit(game, id))
-    .filter((s): s is ShipUnit & { cell: RuntimeCellState } => !!s)
-    .map(({ id, type, ownerId }) => ({ id, type, ownerId }))
-
-  const isBombardment = (rs.trigger ?? pending.trigger) === 'bombardment'
-  const preview =
-    isBombardment && rs.bombardmentFrom && rs.bombardmentPlans?.length
-      ? (() => {
-          const fromCell = cellAt(game, rs.bombardmentFrom!)
-          const bombardingShips = rs.bombardmentPlans!
-            .map((p) => fromCell?.ships.find((s) => s.id === p.shipId))
-            .filter((s): s is ShipUnit => !!s)
-          return buildBombardmentPreview(
-            game,
-            coord,
-            pending.attackerId,
-            bombardingShips,
-            rs.bombardmentFrom!,
-          )
-        })()
-      : buildCombatPreview(game, coord, pending.attackerId, incomingShips, {
-          attackerMovementPlans: rs.movementPlans,
-        })
-  if (!preview) {
-    game.pendingCombat = undefined
-    return
-  }
-
-  const loserRole = rs.attackerWon ? 'defender' : 'attacker'
-  const loserSkipTypes = new Set<ShipType>(
-    rs.attackerWon ? rs.attackerSkipTypes : rs.defenderSkipTypes,
-  )
-  const loserShips = loserShipsForSide(preview, loserRole, incomingShips, game, coord)
-  const selection = selectShipsToDestroy(loserShips, rs.remainingDamage, loserSkipTypes, undefined, {
-    ignoreDestructionPriority: getTurnModifiers(game).ignoreDestructionPriority,
-    destroyCostForType: (type) =>
-      getDestroyCostWithPrioritySkip(type, loserSkipTypes, getEffectiveDestroyCost(game, type)),
-  })
-  confirmCombatDestruction(game, winnerId, selection)
-}
-
-export function confirmCombatDestruction(
-  game: GameSnapshot,
-  playerId: string,
-  destructionSelection: string[],
-): { errors: string[]; combatResult?: CombatResolutionResult; combatVanished?: boolean } {
-  const pending = game.pendingCombat
-  if (!isAwaitingDestruction(pending) || !pending.roundState) {
-    return { errors: ['Нет боя, ожидающего выбора уничтожения'] }
-  }
-  if (pending.roundState.winnerId !== playerId) {
-    return { errors: ['Выбор уничтожения может сделать только победитель раунда'] }
-  }
-
-  const [q, r] = pending.cellKey.split(',').map(Number)
-  const coord = { q, r }
-  const rs = pending.roundState
-
-  const incomingShips: ShipUnit[] = rs.incomingAttackerShipIds
-    .map((id) => findShipUnit(game, id))
-    .filter((s): s is ShipUnit & { cell: RuntimeCellState } => !!s)
-    .map(({ id, type, ownerId }) => ({ id, type, ownerId }))
-
-  const isBombardment = (rs.trigger ?? pending.trigger) === 'bombardment'
-  const preview =
-    isBombardment && rs.bombardmentFrom && rs.bombardmentPlans?.length
-      ? (() => {
-          const fromCell = cellAt(game, rs.bombardmentFrom!)
-          const bombardingShips = rs.bombardmentPlans!
-            .map((p) => fromCell?.ships.find((s) => s.id === p.shipId))
-            .filter((s): s is ShipUnit => !!s)
-          return buildBombardmentPreview(
-            game,
-            coord,
-            pending.attackerId,
-            bombardingShips,
-            rs.bombardmentFrom!,
-          )
-        })()
-      : buildCombatPreview(game, coord, pending.attackerId, incomingShips, {
-          attackerMovementPlans: rs.movementPlans,
-        })
-  if (!preview) {
-    // Бой испарился (защитники исчезли между запросами). Это не ошибка игрока:
-    // сообщаем вызывающему, чтобы он дожал движение и снял маркер.
-    game.pendingCombat = undefined
-    return { errors: [], combatVanished: true }
-  }
-
-  const result = applyCombatDestructionSelection(
-    game,
-    coord,
-    incomingShips,
-    preview,
-    rs,
-    destructionSelection,
-  )
-
-  if (result.needsDestructionSelection) {
-    return {
-      errors: [result.log.find((e) => e.step === 'destruction')?.message ?? 'Некорректный выбор уничтожения'],
-    }
-  }
-
-  applyCombatResultToSnapshot(game, result, pending.attackerId, rs.defenderId, {
-    transferControl: !isBombardment,
-  })
-  const shipsDestroyedInCombat =
-    (pending.shipsDestroyedInCombat ?? false) || result.destroyedShipIds.length > 0
-  if (
-    !isBombardment
-    && rs.movementFrom
-    && rs.movementPlans?.length
-  ) {
-    const followUp = beginOrAwaitCombatContinuation(game, {
-      coord,
-      attackerId: pending.attackerId,
-      completedRoundNumber: pending.roundNumber,
-      trigger: 'movement',
-      continuation: {
-        movementFrom: { ...rs.movementFrom },
-        movementPlans: rs.movementPlans.map((move) => ({ ...move, to: { ...move.to } })),
-        incomingAttackerShipIds: [...rs.incomingAttackerShipIds],
-      },
-      combatOptions: rs.combatOptions,
-      shipsDestroyedInCombat,
-    })
-    return {
-      errors: followUp.errors,
-      combatResult: followUp.combatResult ?? result,
-      combatVanished: followUp.combatVanished,
-    }
-  }
-  game.pendingCombat = undefined
-
-  return { errors: [], combatResult: result }
-}
-
 export function setupPendingCombat(
   game: GameSnapshot,
   coord: HexCoord,
@@ -2813,7 +1371,11 @@ export function setupPendingCombat(
   roundNumber: number,
   trigger: PendingCombat['trigger'] = 'movement',
   continuation?: PendingCombat['continuation'],
-  options?: { shipsDestroyedInCombat?: boolean },
+  options?: {
+    shipsDestroyedInCombat?: boolean
+    damageByShipId?: Record<string, number>
+    lastRound?: CombatRoundResult
+  },
 ): void {
   game.pendingCombat = {
     cellKey: hexKey(coord.q, coord.r),
@@ -2825,27 +1387,28 @@ export function setupPendingCombat(
     trigger,
     continuation,
     shipsDestroyedInCombat: options?.shipsDestroyedInCombat ?? false,
+    damageByShipId: { ...(options?.damageByShipId ?? {}) },
+    ...(options?.lastRound ? { lastRound: options.lastRound } : {}),
   }
 }
 
-/** Защита от зацикливания при детерминированном RNG в тестах; в игре ничья рано или поздно рвётся. */
+/** Защитный потолок автоматических раундов подряд. */
 const MAX_AUTO_COMBAT_ROUNDS = 64
 
 type ContinuedRoundStep = {
   errors: string[]
   combatResult?: CombatResolutionResult
   combatVanished?: boolean
-  /** Раунд полностью обработан и ждёт выбора уничтожения */
-  awaitingDestruction?: boolean
   shipsDestroyedInCombat: boolean
   completedRoundNumber: number
   shouldContinue: boolean
   combatOptions?: CombatOptions
+  damageByShipId: Record<string, number>
 }
 
 /**
  * После раунда: если уничтожений ещё не было — автоматически бросаем следующие раунды
- * (без UI «продолжить/отступить»), пока рандом не даст уничтожение или конец боя.
+ * (без UI «продолжить/отступить»), пока не случится уничтожение или конец боя.
  * Если уничтожения уже были — обычный awaiting-continue с выбором отступления.
  */
 export function beginOrAwaitCombatContinuation(
@@ -2859,6 +1422,8 @@ export function beginOrAwaitCombatContinuation(
     continuation?: PendingCombat['continuation']
     combatOptions?: CombatOptions
     shipsDestroyedInCombat: boolean
+    /** Урон, накопленный к концу завершённого раунда */
+    damageByShipId?: Record<string, number>
     /** Результат только что сыгранного раунда (чтобы не потерять его при конце боя) */
     seedCombatResult?: CombatResolutionResult
   },
@@ -2867,7 +1432,13 @@ export function beginOrAwaitCombatContinuation(
   let shipsDestroyedInCombat = args.shipsDestroyedInCombat
   let completedRoundNumber = args.completedRoundNumber
   let combatOptions = args.combatOptions
+  let damageByShipId = { ...(args.damageByShipId ?? args.seedCombatResult?.damageByShipId ?? {}) }
   let lastResult: CombatResolutionResult | undefined = args.seedCombatResult
+
+  if (lastResult?.stalemate) {
+    game.pendingCombat = undefined
+    return { errors: [], combatResult: lastResult }
+  }
 
   for (let autoRound = 0; autoRound < MAX_AUTO_COMBAT_ROUNDS; autoRound++) {
     const shouldContinue = args.continuation
@@ -2884,6 +1455,12 @@ export function beginOrAwaitCombatContinuation(
       return { errors: [], combatResult: lastResult }
     }
 
+    const pendingOptions = {
+      shipsDestroyedInCombat,
+      damageByShipId,
+      lastRound: lastResult?.rounds?.at(-1),
+    }
+
     if (shipsDestroyedInCombat) {
       setupPendingCombat(
         game,
@@ -2892,7 +1469,7 @@ export function beginOrAwaitCombatContinuation(
         completedRoundNumber + 1,
         args.trigger,
         args.continuation,
-        { shipsDestroyedInCombat: true },
+        pendingOptions,
       )
       if (combatOptions) game.pendingCombat!.combatOptions = combatOptions
       // Пустые решения — стороны явно выбирают continue/retreat (не автозаполнять).
@@ -2909,9 +1486,6 @@ export function beginOrAwaitCombatContinuation(
           if (auto.combatVanished) {
             return { errors: [], combatResult: lastResult, combatVanished: true }
           }
-          if (isAwaitingDestruction(game.pendingCombat) || !isAwaitingContinue(game.pendingCombat)) {
-            return { errors: [], combatResult: lastResult }
-          }
         }
       }
       return { errors: [], combatResult: lastResult }
@@ -2925,7 +1499,7 @@ export function beginOrAwaitCombatContinuation(
       completedRoundNumber + 1,
       args.trigger,
       args.continuation,
-      { shipsDestroyedInCombat: false },
+      pendingOptions,
     )
     if (combatOptions) game.pendingCombat!.combatOptions = combatOptions
     if (isAwaitingContinue(game.pendingCombat)) {
@@ -2941,13 +1515,10 @@ export function beginOrAwaitCombatContinuation(
     }
     if (step.combatResult) lastResult = step.combatResult
 
-    if (step.awaitingDestruction) {
-      return { errors: [], combatResult: lastResult }
-    }
-
     shipsDestroyedInCombat = step.shipsDestroyedInCombat
     completedRoundNumber = step.completedRoundNumber
     combatOptions = step.combatOptions ?? combatOptions
+    damageByShipId = step.damageByShipId
 
     if (!step.shouldContinue) {
       game.pendingCombat = undefined
@@ -2965,7 +1536,7 @@ export function beginOrAwaitCombatContinuation(
     completedRoundNumber + 1,
     args.trigger,
     args.continuation,
-    { shipsDestroyedInCombat: false },
+    { shipsDestroyedInCombat: false, damageByShipId, lastRound: lastResult?.rounds?.at(-1) },
   )
   if (combatOptions) game.pendingCombat!.combatOptions = combatOptions
   return { errors: [], combatResult: lastResult }
@@ -2984,15 +1555,19 @@ function executeContinuedCombatRound(
       shipsDestroyedInCombat: false,
       completedRoundNumber: 0,
       shouldContinue: false,
+      damageByShipId: {},
     }
   }
 
   const [q, r] = pending.cellKey.split(',').map(Number)
   const coord = { q, r }
+  const damageBefore = { ...(pending.damageByShipId ?? {}) }
   const incomingShips = incomingShipsForPendingContinuation(game, pending)
+  const opts = combatOptions ?? pending.combatOptions
   const preview = buildCombatPreview(game, coord, pending.attackerId, incomingShips, {
     attackerMovementPlans: pending.continuation?.movementPlans,
-    supportSides: (combatOptions ?? pending.combatOptions)?.supportSides,
+    supportSides: opts?.supportSides,
+    damageByShipId: damageBefore,
   })
   if (!preview) {
     if (!defenderIdsOnCell(game, coord, pending.attackerId).length) {
@@ -3003,6 +1578,7 @@ function executeContinuedCombatRound(
         shipsDestroyedInCombat: pending.shipsDestroyedInCombat === true,
         completedRoundNumber: pending.roundNumber,
         shouldContinue: false,
+        damageByShipId: damageBefore,
       }
     }
     return {
@@ -3010,10 +1586,10 @@ function executeContinuedCombatRound(
       shipsDestroyedInCombat: pending.shipsDestroyedInCombat === true,
       completedRoundNumber: pending.roundNumber,
       shouldContinue: false,
+      damageByShipId: damageBefore,
     }
   }
 
-  const opts = combatOptions ?? pending.combatOptions
   const result = resolveCombatAtCell(
     game,
     coord,
@@ -3022,58 +1598,28 @@ function executeContinuedCombatRound(
     opts,
     rng,
     preview,
+    damageBefore,
+    pending.roundNumber,
   )
 
   const shipsDestroyedInCombat =
     (pending.shipsDestroyedInCombat ?? false) || result.destroyedShipIds.length > 0
   const completedRoundNumber = pending.roundNumber
   const continuation = pending.continuation
-  const trigger = pending.trigger
   const attackerId = pending.attackerId
-
-  if (result.needsDestructionSelection) {
-    const skipTypes = {
-      attacker: (opts?.attacker?.prioritySkips ?? []).map((p) => p.shipType),
-      defender: (opts?.defender?.prioritySkips ?? []).map((p) => p.shipType),
-    }
-    setupPendingCombatDestruction(
-      game,
-      coord,
-      attackerId,
-      preview.defenderId,
-      result,
-      opts ?? {},
-      skipTypes,
-      trigger ?? 'movement',
-      {
-        incomingAttackerShipIds: continuation?.incomingAttackerShipIds ?? [],
-        movementFrom: continuation?.movementFrom,
-        movementPlans: continuation?.movementPlans,
-        shipsDestroyedInCombat,
-      },
-    )
-    game.pendingCombat!.roundNumber = completedRoundNumber
-    return {
-      errors: [],
-      combatResult: result,
-      awaitingDestruction: true,
-      shipsDestroyedInCombat,
-      completedRoundNumber,
-      shouldContinue: true,
-      combatOptions: opts,
-    }
-  }
 
   applyCombatResultToSnapshot(game, result, attackerId, preview.defenderId)
 
-  const shouldContinue = continuation
-    ? combatShouldContinueWithIncomingShips(
-        game,
-        coord,
-        attackerId,
-        continuation.incomingAttackerShipIds,
-      )
-    : combatShouldContinueAfterRound(game, coord, attackerId)
+  const shouldContinue = !result.stalemate && (
+    continuation
+      ? combatShouldContinueWithIncomingShips(
+          game,
+          coord,
+          attackerId,
+          continuation.incomingAttackerShipIds,
+        )
+      : combatShouldContinueAfterRound(game, coord, attackerId)
+  )
 
   // Не ставим следующий pending здесь — этим управляет цикл beginOrAwait / caller.
   game.pendingCombat = undefined
@@ -3085,15 +1631,15 @@ function executeContinuedCombatRound(
     completedRoundNumber,
     shouldContinue,
     combatOptions: opts,
+    damageByShipId: result.damageByShipId ?? damageBefore,
   }
 }
 
-/** После выбытия: дожать бой без действий выбывшего (уничтожение / continue). */
+/** После выбытия: дожать бой без действий выбывшего. */
 export function syncEliminatedCombatAutomation(
   game: GameSnapshot,
   rng: () => number = Math.random,
 ): void {
-  tryAutoResolveEliminatedDestruction(game)
   const pending = game.pendingCombat
   if (!isAwaitingContinue(pending)) return
   applyEliminatedContinueDefaults(game)
@@ -3121,7 +1667,7 @@ export function continuePendingCombat(
     return { errors: ['Выбывший игрок не решает продолжение боя'] }
   }
 
-  // Пока уничтожений не было — отступления нет; крутим раунды, пока рандом не даст исход.
+  // Пока уничтожений не было — отступления нет; крутим раунды, пока не определится исход.
   if (!isCombatRetreatAllowed(pending)) {
     const [q, r] = pending.cellKey.split(',').map(Number)
     return beginOrAwaitCombatContinuation(
@@ -3134,6 +1680,7 @@ export function continuePendingCombat(
         continuation: pending.continuation,
         combatOptions: combatOptions ?? pending.combatOptions,
         shipsDestroyedInCombat: false,
+        damageByShipId: pending.damageByShipId,
       },
       rng,
     )
@@ -3197,10 +1744,6 @@ function finishContinueAfterBothSidesReady(
   if (step.combatVanished) {
     return { errors: [], combatResult: step.combatResult, combatVanished: true }
   }
-  if (step.awaitingDestruction) {
-    tryAutoResolveEliminatedDestruction(game)
-    return { errors: [], combatResult: step.combatResult }
-  }
 
   const followUp = beginOrAwaitCombatContinuation(
     game,
@@ -3212,6 +1755,7 @@ function finishContinueAfterBothSidesReady(
       continuation,
       combatOptions: combatOptions ?? step.combatOptions,
       shipsDestroyedInCombat: step.shipsDestroyedInCombat,
+      damageByShipId: step.damageByShipId,
       seedCombatResult: step.combatResult,
     },
     rng,
@@ -3269,115 +1813,51 @@ export function stopPendingCombat(
   // Отступление / уход флота: маркер владельца без кораблей на клетке боя снимается.
   removeOrphanedActionMarkersAt(game, { q, r })
   game.pendingCombat = undefined
-  game.eventLog.push({
-    id: `evt-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-    turn: game.turnNumber,
-    phase: game.phase,
-    type: 'combat',
-    message: `${isAttacker ? 'Атакующий' : 'Защитник'} отступил в (${retreatTo.q},${retreatTo.r})`,
-    timestamp: Date.now(),
-  })
-  return []
-}
-
-function pendingCellAt(game: GameSnapshot, coord: HexCoord): RuntimeCellState | undefined {
-  return cellAt(game, coord)
-}
-
-function buildCombatPreviewFromPendingPlans(
-  game: GameSnapshot,
-  pending: NonNullable<GameSnapshot['pendingCombat']>,
-  coord: HexCoord,
-  plans: {
-    trigger?: PendingCombat['trigger']
-    movementFrom?: HexCoord
-    movementPlans?: Array<{ shipId: string; to: HexCoord }>
-    incomingAttackerShipIds?: string[]
-    bombardmentFrom?: HexCoord
-    bombardmentPlans?: { shipId: string; target: HexCoord }[]
-  },
-): CombatPreview | null {
-  if (plans.trigger === 'bombardment' && plans.bombardmentFrom && plans.bombardmentPlans?.length) {
-    const fromCell = pendingCellAt(game, plans.bombardmentFrom)
-    if (!fromCell) return null
-    const bombardingShips = plans.bombardmentPlans
-      .map((p) => fromCell.ships.find((s) => s.id === p.shipId))
-      .filter((s): s is ShipUnit => !!s)
-    return buildBombardmentPreview(
-      game,
-      coord,
-      pending.attackerId,
-      bombardingShips,
-      plans.bombardmentFrom,
-    )
-  }
-
-  const fromCell = plans.movementFrom ? pendingCellAt(game, plans.movementFrom) : undefined
-  const incomingShips = (plans.incomingAttackerShipIds ?? [])
-    .map((id) => fromCell?.ships.find((s) => s.id === id))
-    .filter((s): s is ShipUnit => !!s)
-  const prepOptions = combatPrepOf(pending)?.combatOptions
-  const movementPlans =
-    plans.movementPlans
-    ?? combatPrepOf(pending)?.movementPlans
-    ?? combatRoundStateOf(pending)?.movementPlans
-
-  return buildCombatPreview(
+  pushCombatEvent(
     game,
-    coord,
-    pending.attackerId,
-    incomingShips,
-    {
-      ...prepOptions,
-      attackerMovementPlans: movementPlans,
-    },
+    `${isAttacker ? 'Атакующий' : 'Защитник'} отступил в (${retreatTo.q},${retreatTo.r})`,
   )
+  return []
 }
 
 /** Превью боя из pendingCombat — по текущей фазе */
 export function buildCombatPreviewFromPending(game: GameSnapshot): CombatPreview | null {
   const pending = game.pendingCombat
   if (!pending) return null
-
   const [q, r] = pending.cellKey.split(',').map(Number)
   const coord = { q, r }
 
   if (pending.phase === 'prep') {
-    return buildCombatPreviewFromPendingPlans(game, pending, coord, {
-      trigger: pending.trigger,
-      movementFrom: pending.prep.movementFrom,
-      movementPlans: pending.prep.movementPlans,
-      incomingAttackerShipIds: pending.prep.incomingAttackerShipIds,
-      bombardmentFrom: pending.prep.bombardmentFrom,
-      bombardmentPlans: pending.prep.bombardmentPlans,
+    const prep = pending.prep
+    if (pending.trigger === 'bombardment' && prep.bombardmentFrom && prep.bombardmentPlans?.length) {
+      const fromCell = cellAt(game, prep.bombardmentFrom)
+      if (!fromCell) return null
+      const bombardingShips = prep.bombardmentPlans
+        .map((p) => fromCell.ships.find((s) => s.id === p.shipId))
+        .filter((s): s is ShipUnit => !!s)
+      return buildBombardmentPreview(game, coord, pending.attackerId, bombardingShips, prep.bombardmentFrom)
+    }
+    const fromCell = prep.movementFrom ? cellAt(game, prep.movementFrom) : undefined
+    const incomingShips = (prep.incomingAttackerShipIds ?? [])
+      .map((id) => fromCell?.ships.find((s) => s.id === id))
+      .filter((s): s is ShipUnit => !!s)
+    return buildCombatPreview(game, coord, pending.attackerId, incomingShips, {
+      ...prep.combatOptions,
+      attackerMovementPlans: prep.movementPlans,
     })
   }
 
-  const rs = combatRoundStateOf(pending)
-  if (rs) {
-    return buildCombatPreviewFromPendingPlans(game, pending, coord, {
-      trigger: rs.trigger ?? pending.trigger,
-      movementFrom: rs.movementFrom,
-      movementPlans: rs.movementPlans,
-      incomingAttackerShipIds: rs.incomingAttackerShipIds,
-      bombardmentFrom: rs.bombardmentFrom,
-      bombardmentPlans: rs.bombardmentPlans,
-    })
-  }
-
-  if (pending.phase === 'awaiting-continue') {
-    return buildCombatPreview(
-      game,
-      coord,
-      pending.attackerId,
-      incomingShipsForPendingContinuation(game, pending),
-      {
-        attackerMovementPlans: pending.continuation?.movementPlans,
-      },
-    )
-  }
-
-  return null
+  return buildCombatPreview(
+    game,
+    coord,
+    pending.attackerId,
+    incomingShipsForPendingContinuation(game, pending),
+    {
+      attackerMovementPlans: pending.continuation?.movementPlans,
+      supportSides: pending.combatOptions?.supportSides,
+      damageByShipId: pending.damageByShipId,
+    },
+  )
 }
 
 export function setupCombatPrepForMovement(
@@ -3388,7 +1868,7 @@ export function setupCombatPrepForMovement(
   combatCoord: HexCoord,
   incomingShipIds: string[],
 ): string[] {
-  const fromCell = pendingCellAt(game, from)
+  const fromCell = cellAt(game, from)
   const incomingShips = incomingShipIds
     .map((id) => fromCell?.ships.find((s) => s.id === id))
     .filter((s): s is ShipUnit => !!s)
@@ -3415,15 +1895,7 @@ export function setupCombatPrepForMovement(
       incomingAttackerShipIds: [...incomingShipIds],
     },
   }
-
-  game.eventLog.push({
-    id: `evt-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-    turn: game.turnNumber,
-    phase: game.phase,
-    type: 'combat',
-    message: `Подготовка к бою на (${combatCoord.q},${combatCoord.r})`,
-    timestamp: Date.now(),
-  })
+  pushCombatEvent(game, `Подготовка к бою на (${combatCoord.q},${combatCoord.r})`)
   return []
 }
 
@@ -3435,7 +1907,7 @@ export function setupCombatPrepForBombardment(
   target: HexCoord,
   queuedBombardmentPlans: import('./bombardment.js').BombardmentPlan[] = [],
 ): string[] {
-  const fromCell = pendingCellAt(game, from)
+  const fromCell = cellAt(game, from)
   const bombardingShips = plans
     .map((p) => fromCell?.ships.find((s) => s.id === p.shipId))
     .filter((s): s is ShipUnit => !!s)
@@ -3464,27 +1936,19 @@ export function setupCombatPrepForBombardment(
       incomingAttackerShipIds: [],
     },
   }
-
-  game.eventLog.push({
-    id: `evt-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-    turn: game.turnNumber,
-    phase: game.phase,
-    type: 'combat',
-    message: `Подготовка к обстрелу на (${target.q},${target.r})`,
-    timestamp: Date.now(),
-  })
+  pushCombatEvent(game, `Подготовка к обстрелу на (${target.q},${target.r})`)
   return []
 }
 
-function mergeSideSkips(
-  side: 'attacker' | 'defender',
+function mergeSideTargetPriority(
+  side: CombatRole,
   combatOptions: CombatOptions,
-  prioritySkips?: CombatPrioritySkipPlan[],
+  targetPriority?: string[],
 ): void {
-  if (!prioritySkips?.length) return
+  if (!targetPriority) return
   combatOptions[side] = {
     ...combatOptions[side],
-    prioritySkips: prioritySkips.map((p) => ({ shipType: p.shipType })),
+    targetPriority: [...targetPriority],
   }
 }
 
@@ -3492,8 +1956,8 @@ export function updateCombatPrep(
   game: GameSnapshot,
   playerId: string,
   ready: boolean,
-  prioritySkips?: CombatPrioritySkipPlan[],
-  supportSide?: 'attacker' | 'defender' | null,
+  targetPriority?: string[],
+  supportSide?: CombatRole | null,
 ): { errors: string[] } {
   const pending = game.pendingCombat
   const prep = combatPrepOf(pending)
@@ -3509,9 +1973,11 @@ export function updateCombatPrep(
   if (!isAttacker && !isDefender && !supportCandidate) {
     return { errors: ['Вы не можете поддержать этот бой'] }
   }
+
   if ((isAttacker || isDefender) && isEliminatedPlayer(game, playerId)) {
     return { errors: ['Выбывший игрок не участвует в подготовке к бою'] }
   }
+
   if (!isAttacker && !isDefender) {
     if (isEliminatedPlayer(game, playerId)) {
       return { errors: ['Выбывший игрок не может поддерживать'] }
@@ -3536,7 +2002,6 @@ export function updateCombatPrep(
         }
       }
     }
-
     if (!ready && prep.phase === 'countdown') {
       prep.phase = 'prep'
       prep.countdownStartedAt = undefined
@@ -3546,10 +2011,8 @@ export function updateCombatPrep(
     if (prep.phase === 'countdown') {
       return { errors: ['Обратный отсчёт уже идёт — отмените готовность, чтобы изменить поддержку'] }
     }
-
     prep.readyBy[playerId] = ready
     if (!ready) delete prep.readyBy[playerId]
-
     const attackerReady = isCombatPrepSideReady(game, pending.attackerId, prep.readyBy)
     const defenderReady = isCombatPrepSideReady(game, prep.defenderId, prep.readyBy)
     const supportReady = (preview?.supportCandidates ?? []).every((candidate) =>
@@ -3564,26 +2027,28 @@ export function updateCombatPrep(
     }
     return { errors: [] }
   }
+
   if (isBombardment && isDefender) {
     return { errors: ['Защитник не участвует в подготовке обстрела — ожидайте решения атакующего'] }
   }
 
-  const prevSideOptions = isAttacker
-    ? prep.combatOptions.attacker
-    : prep.combatOptions.defender
-
-  if (isAttacker) {
-    mergeSideSkips('attacker', prep.combatOptions, prioritySkips)
-  } else if (!isBombardment) {
-    mergeSideSkips('defender', prep.combatOptions, prioritySkips)
+  const side: CombatRole = isAttacker ? 'attacker' : 'defender'
+  const prevSideOptions = prep.combatOptions[side]
+  const restore = () => {
+    prep.combatOptions[side] = prevSideOptions
   }
 
-  if (prioritySkips?.length) {
-    const skipErrors = validatePendingCombatPrepOptions(game)
-    if (skipErrors.length) {
-      if (isAttacker) prep.combatOptions.attacker = prevSideOptions
-      else prep.combatOptions.defender = prevSideOptions
-      return { errors: skipErrors }
+  if (prep.phase === 'countdown' && ready && targetPriority) {
+    return { errors: ['Обратный отсчёт уже идёт — отмените готовность, чтобы изменить порядок целей'] }
+  }
+
+  mergeSideTargetPriority(side, prep.combatOptions, targetPriority)
+
+  if (targetPriority) {
+    const priorityErrors = validatePendingCombatPrepOptions(game)
+    if (priorityErrors.length) {
+      restore()
+      return { errors: priorityErrors }
     }
   }
 
@@ -3593,28 +2058,19 @@ export function updateCombatPrep(
     prep.readyBy = { [playerId]: false }
     return { errors: [] }
   }
-
   if (prep.phase === 'countdown') {
-    if (prioritySkips?.length) {
-      if (isAttacker) prep.combatOptions.attacker = prevSideOptions
-      else prep.combatOptions.defender = prevSideOptions
-    }
-    return { errors: ['Обратный отсчёт уже идёт — отмените готовность, чтобы изменить skip'] }
+    return { errors: [] }
   }
 
   if (ready) {
     const readyErrors = validatePendingCombatPrepOptions(game)
     if (readyErrors.length) {
-      if (prioritySkips?.length) {
-        if (isAttacker) prep.combatOptions.attacker = prevSideOptions
-        else prep.combatOptions.defender = prevSideOptions
-      }
+      restore()
       return { errors: readyErrors }
     }
   }
 
   prep.readyBy[playerId] = ready
-
   const attackerReady = isCombatPrepSideReady(game, pending.attackerId, prep.readyBy)
   const defenderReady = isCombatPrepSideReady(game, prep.defenderId, prep.readyBy)
   const supportReady = (preview?.supportCandidates ?? []).every((candidate) =>
@@ -3623,7 +2079,6 @@ export function updateCombatPrep(
   const prepComplete = isBombardment
     ? attackerReady
     : attackerReady && defenderReady && supportReady
-
   if (prepComplete) {
     const countdownErrors = validatePendingCombatPrepOptions(game)
     if (countdownErrors.length) {
@@ -3635,7 +2090,6 @@ export function updateCombatPrep(
   } else if (!ready) {
     delete prep.readyBy[playerId]
   }
-
   return { errors: [] }
 }
 
@@ -3644,14 +2098,7 @@ export function cancelCombatPrep(game: GameSnapshot, playerId: string): { errors
   if (pending?.phase !== 'prep') return { errors: ['Нет подготовки к бою'] }
   if (pending.attackerId !== playerId) return { errors: ['Отменить подготовку может только атакующий'] }
   game.pendingCombat = undefined
-  game.eventLog.push({
-    id: `evt-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-    turn: game.turnNumber,
-    phase: game.phase,
-    type: 'combat',
-    message: 'Подготовка к бою отменена атакующим',
-    timestamp: Date.now(),
-  })
+  pushCombatEvent(game, 'Подготовка к бою отменена атакующим')
   return { errors: [] }
 }
 

@@ -30,7 +30,6 @@ import {
   type TokenSpendRef,
 } from './production.js'
 import {
-  continueBombardmentQueueOrFinalize,
   executeMarkerBombardment,
   type BombardmentPlan,
 } from './bombardment.js'
@@ -41,15 +40,12 @@ import {
   buildCombatPreview,
   buildCombatPreviewFromPending,
   combatPrepOf,
-  combatRoundStateOf,
-  confirmCombatDestruction,
   continuePendingCombat,
   getCombatDestinationKeys,
   getCombatDestinationKeysFromMoves,
   isCombatDestination,
   resolveCombatAtCell,
   removeOrphanedActionMarkersAt,
-  setupPendingCombatDestruction,
   setupCombatPrepForMovement,
   stopPendingCombat,
   syncEliminatedCombatAutomation,
@@ -477,37 +473,6 @@ function finishPendingMovementPlans(
   return summaries
 }
 
-export function completePendingCombatMovement(
-  game: GameSnapshot,
-  mapId: string,
-): string[] {
-  const pending = combatRoundStateOf(game.pendingCombat)
-  if (!pending?.movementFrom || !pending.movementPlans?.length) return []
-
-  const combatKey = game.pendingCombat!.cellKey
-  const summaries = finishPendingMovementPlans(
-    game,
-    game.pendingCombat!.attackerId,
-    pending.movementFrom,
-    pending.movementPlans,
-    null,
-    combatKey,
-  )
-
-  const combatNote = pending.attackerWon ? 'атакующий победил' : 'защитник победил'
-  game.eventLog.push({
-    id: `evt-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-    turn: game.turnNumber,
-    phase: game.phase,
-    type: 'movement',
-    message: `Движение с (${pending.movementFrom.q},${pending.movementFrom.r}): ${summaries.join('; ') || '—'}; бой: ${combatNote}`,
-    timestamp: Date.now(),
-  })
-  trimGameEventLog(game)
-  applyVictoryAndDefeatChecks(game, mapId)
-  return summaries
-}
-
 export function executeMarkerMovement(
   game: GameSnapshot,
   map: MapDefinition,
@@ -569,30 +534,6 @@ export function executeMarkerMovement(
         preview,
       )
 
-      if (combatResult.needsDestructionSelection) {
-        const skipTypes = {
-          attacker: (combatOptions?.attacker?.prioritySkips ?? []).map((p) => p.shipType),
-          defender: (combatOptions?.defender?.prioritySkips ?? []).map((p) => p.shipType),
-        }
-        setupPendingCombatDestruction(
-          game,
-          combatCoord,
-          playerId,
-          preview.defenderId,
-          combatResult,
-          combatOptions ?? {},
-          skipTypes,
-          'movement',
-          {
-            incomingAttackerShipIds: incomingShips.map((s) => s.id),
-            movementFrom: from,
-            movementPlans: moves,
-            shipsDestroyedInCombat: false,
-          },
-        )
-        return { errors: [], combatResult }
-      }
-
       applyCombatResultToSnapshot(
         game,
         combatResult,
@@ -613,11 +554,13 @@ export function executeMarkerMovement(
         },
         combatOptions,
         shipsDestroyedInCombat: combatResult.destroyedShipIds.length > 0,
+        damageByShipId: combatResult.damageByShipId,
+        seedCombatResult: combatResult,
       })
       if (followUp.errors.length) {
         return { errors: followUp.errors, combatResult: combatResult ?? undefined }
       }
-      // Бой ещё идёт (prep/destruction/continue) — движение откладываем.
+      // Бой ещё идёт — движение откладываем.
       if (game.pendingCombat) {
         return {
           errors: [],
@@ -841,17 +784,6 @@ function appendCombatParticipantActions(
     return
   }
 
-  if (pending.phase === 'awaiting-destruction') {
-    if (pending.roundState.winnerId === playerId) {
-      pushUnique({
-        id: 'confirm-combat-destruction',
-        type: 'combat',
-        description: 'Подтвердить уничтожение',
-      })
-    }
-    return
-  }
-
   if (pending.phase === 'awaiting-continue') {
     const isAttacker = pending.attackerId === playerId
     const isDefender = pending.defenderIds.includes(playerId)
@@ -893,7 +825,6 @@ export function applyGameActionOnSnapshot(
   const isCombatDecisionAction =
     actionId === 'continue-combat'
     || actionId === 'stop-combat'
-    || actionId === 'confirm-combat-destruction'
     || actionId === 'abort-combat'
   if (!isPrepAction && !isCombatDecisionAction && game.activePlayerId !== playerId) {
     return { errors: ['Сейчас ход другого игрока'] }
@@ -906,82 +837,6 @@ export function applyGameActionOnSnapshot(
   ) {
     return { errors: ['Сначала завершите или продолжите текущий бой'] }
   }
-  if (
-    game.pendingCombat?.phase === 'awaiting-destruction'
-    && actionId !== 'confirm-combat-destruction'
-    && actionId !== 'abort-combat'
-  ) {
-    return { errors: ['Сначала подтвердите выбор уничтожения в бою'] }
-  }
-
-  if (actionId === 'confirm-combat-destruction') {
-    const destructionSelection = params?.destructionSelection as string[] | undefined
-    if (!Array.isArray(destructionSelection)) {
-      return { errors: ['Некорректные параметры выбора уничтожения'] }
-    }
-    const priorRoundState = combatRoundStateOf(game.pendingCombat)
-    const movementFrom = priorRoundState?.movementFrom
-    const movementPlans = priorRoundState?.movementPlans
-    const bombardmentFrom = priorRoundState?.bombardmentFrom
-    const bombardmentPlans = priorRoundState?.bombardmentPlans
-    const queuedBombardmentPlans = priorRoundState?.queuedBombardmentPlans
-    const combatTrigger = priorRoundState?.trigger ?? game.pendingCombat?.trigger
-    const combatKey = game.pendingCombat?.cellKey
-    const attackerId = game.pendingCombat?.attackerId
-
-    const result = confirmCombatDestruction(game, playerId, destructionSelection)
-    if (result.errors.length) return result
-
-    // Если бой испарился, результата нет, но отложенное движение всё равно нужно
-    // дожать — иначе корабли залипают на исходной клетке вместе с маркером.
-    const combatSettled = !!result.combatResult || !!result.combatVanished
-
-    if (
-      !game.pendingCombat
-      && movementFrom
-      && movementPlans?.length
-      && attackerId
-      && combatSettled
-    ) {
-      finishPendingMovementPlans(
-        game,
-        attackerId,
-        movementFrom,
-        movementPlans,
-        result.combatResult ?? null,
-        combatKey,
-      )
-      game.eventLog.push({
-        id: `evt-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-        turn: game.turnNumber,
-        phase: game.phase,
-        type: 'movement',
-        message: `Движение с (${movementFrom.q},${movementFrom.r}) после боя`,
-        timestamp: Date.now(),
-      })
-      trimGameEventLog(game)
-    } else if (
-      combatTrigger === 'bombardment'
-      && bombardmentFrom
-      && bombardmentPlans?.length
-      && attackerId
-      && combatSettled
-    ) {
-      const queueResult = continueBombardmentQueueOrFinalize(
-        game,
-        attackerId,
-        bombardmentFrom,
-        bombardmentPlans,
-        queuedBombardmentPlans,
-        result.combatResult,
-      )
-      if (queueResult.errors.length) return { errors: queueResult.errors, combatResult: result.combatResult }
-    }
-
-    applyVictoryAndDefeatChecks(game, map.id)
-    return result
-  }
-
   if (actionId === 'continue-combat') {
     const pending = game.pendingCombat
     const continuation = pending?.continuation
@@ -1055,7 +910,11 @@ export function applyGameActionOnSnapshot(
 
   if (actionId === 'update-combat-prep') {
     const ready = params?.ready
-    const prioritySkips = params?.prioritySkips as import('./combat.js').CombatPrioritySkipPlan[] | undefined
+    const rawPriority = params?.targetPriority
+    if (rawPriority != null && (!Array.isArray(rawPriority) || rawPriority.some((id) => typeof id !== 'string'))) {
+      return { errors: ['Некорректный порядок целей'] }
+    }
+    const targetPriority = rawPriority as string[] | undefined
     const supportSide = params?.supportSide as 'attacker' | 'defender' | null | undefined
     if (typeof ready !== 'boolean') {
       return { errors: ['Некорректные параметры подготовки к бою'] }
@@ -1063,7 +922,7 @@ export function applyGameActionOnSnapshot(
     if (supportSide != null && supportSide !== 'attacker' && supportSide !== 'defender') {
       return { errors: ['Некорректная сторона поддержки'] }
     }
-    return updateCombatPrep(game, playerId, ready, prioritySkips, supportSide)
+    return updateCombatPrep(game, playerId, ready, targetPriority, supportSide)
   }
 
   if (actionId === 'cancel-combat-prep') {

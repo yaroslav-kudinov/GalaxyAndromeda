@@ -51,7 +51,6 @@ export type ShipType =
   | 'destroyer'
   | 'cruiser'
   | 'battleship'
-  | 'shield'
   | 'carrier'
   | 'hyper'
 

@@ -328,9 +328,12 @@ export async function updateCombatPrepAction(
   roomId: string,
   playerId: string,
   ready: boolean,
-  prioritySkips?: { shipType: import('@galaxy/rules').ShipType }[],
+  targetPriority?: string[],
 ): Promise<GameObservation> {
-  return submitGameAction(roomId, playerId, 'update-combat-prep', { ready, prioritySkips })
+  return submitGameAction(roomId, playerId, 'update-combat-prep', {
+    ready,
+    ...(targetPriority ? { targetPriority } : {}),
+  })
 }
 
 export interface BugReportSubmitResult {

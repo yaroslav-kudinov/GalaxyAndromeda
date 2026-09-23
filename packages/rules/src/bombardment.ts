@@ -1,18 +1,16 @@
 import {
   applyCombatResultToSnapshot,
   buildCombatPreview,
+  collectSupportShips,
   getEffectiveFireRangeBounds,
-  getEffectiveSupportRange,
-  getSupportRange,
   isBombardmentDestination,
   resolveCombatAtCell,
-  setupPendingCombatDestruction,
   setupCombatPrepForBombardment,
-  SHIP_SUPPORT_DICE,
   validateCombatOptions,
   type CombatOptions,
   type CombatPreview,
 } from './combat.js'
+import { canShipFireFromDistance, hitProbability } from './combat-hits.js'
 import { hexDistance } from './map.js'
 import {
   canExecuteActionMarkerThisTurn,
@@ -43,8 +41,9 @@ export interface BombardableShipOption {
   disabledReason?: string
 }
 
+/** Обстреливать может тот, кто достаёт дальше своей клетки: эсминцу нужна шестёрка уже в упор. */
 export function canShipBombard(type: ShipType): boolean {
-  return (SHIP_SUPPORT_DICE[type] ?? 0) > 0 && getSupportRange(type) > 0
+  return canShipFireFromDistance(type)
 }
 
 function cellAt(game: GameSnapshot, coord: HexCoord): RuntimeCellState | undefined {
@@ -71,13 +70,13 @@ export function getBombardmentTargetKeys(
   from: HexCoord,
   shipType: ShipType,
 ): string[] {
-  const bounds = getEffectiveFireRangeBounds(game, shipType)
+  const bounds = getEffectiveFireRangeBounds(game, shipType, playerId)
   if (bounds.max <= 0 || !canShipBombard(shipType)) return []
-
+  const min = Math.max(1, bounds.min)
   const keys: string[] = []
   for (const cell of game.cells) {
     const dist = hexDistance(from, cell.coord)
-    if (dist < bounds.min || dist > bounds.max) continue
+    if (dist < min || dist > bounds.max) continue
     if (!isBombardmentDestination(game, playerId, cell.coord)) continue
     keys.push(hexKey(cell.coord.q, cell.coord.r))
   }
@@ -104,7 +103,7 @@ export function getBombardableShipsAtMarker(
   return fromCell.ships
     .filter((s) => s.ownerId === playerId)
     .map((ship) => {
-      const fireRange = getEffectiveSupportRange(game, ship.type)
+      const fireRange = getEffectiveFireRangeBounds(game, ship.type, playerId).max
       const targetKeys = canShipBombard(ship.type)
         ? getBombardmentTargetKeys(game, playerId, from, ship.type)
         : []
@@ -140,8 +139,8 @@ export function validateBombardmentTarget(
   if (!dest) errors.push(`Клетка ${toKey} вне карты`)
 
   const dist = hexDistance(from, target)
-  const bounds = getEffectiveFireRangeBounds(game, ship.type)
-  if (dist < bounds.min) {
+  const bounds = getEffectiveFireRangeBounds(game, ship.type, playerId)
+  if (dist < Math.max(1, bounds.min)) {
     errors.push(
       bounds.min > 1
         ? `${SHIP_LABELS[ship.type]} не может обстреливать на расстоянии ${dist} (минимум ${bounds.min})`
@@ -231,8 +230,8 @@ export function groupBombardmentPlansByTarget(
 }
 
 /**
- * Превью обстрела (PDF): атакующий бросает только кубики поддержки/обстрела с дистанции;
- * защитник не бросает — сумма атакующего сразу становится очками уничтожения; щиты поглощают.
+ * Превью обстрела: корабли не входят в клетку и стреляют с расстояния — каждая клетка
+ * прибавляет 1 к нужному значению. Защитник не отвечает. Бой из одного залпа.
  */
 export function buildBombardmentPreview(
   game: GameSnapshot,
@@ -244,19 +243,22 @@ export function buildBombardmentPreview(
   const base = buildCombatPreview(game, target, attackerId, [], { forBombardment: true })
   if (!base) return null
 
-  const supportingShips = bombardingShips
-    .filter((s) => s.ownerId === attackerId && canShipBombard(s.type))
-    .map((s) => ({
-      shipId: s.id,
-      type: s.type,
-      ownerId: s.ownerId,
-      fromCoord: { ...fromCoord },
-      supportDice: SHIP_SUPPORT_DICE[s.type] ?? 0,
-      distance: hexDistance(fromCoord, target),
-    }))
-    .filter((s) => s.supportDice > 0)
-
-  const supportDiceTotal = supportingShips.reduce((sum, s) => sum + s.supportDice, 0)
+  const selected = new Set(
+    bombardingShips.filter((s) => s.ownerId === attackerId && canShipBombard(s.type)).map((s) => s.id),
+  )
+  const supportingShips = collectSupportShips(
+    game,
+    target,
+    attackerId,
+    new Set(),
+    undefined,
+    base.defenderId,
+  ).filter((s) => selected.has(s.shipId))
+  const diceTotal = supportingShips.reduce((sum, s) => sum + s.dice, 0)
+  const expectedHits = supportingShips.reduce(
+    (sum, s) => sum + s.dice * hitProbability(s.threshold),
+    0,
+  )
 
   return {
     ...base,
@@ -264,25 +266,24 @@ export function buildBombardmentPreview(
     attacker: {
       ...base.attacker,
       ships: [],
-      combatDiceTotal: 0,
-      supportDiceTotal,
       supportingShips,
+      diceTotal,
+      expectedHits,
     },
     defender: {
       ...base.defender,
-      combatDiceTotal: 0,
-      supportDiceTotal: 0,
       supportingShips: [],
+      diceTotal: 0,
+      expectedHits: 0,
     },
     notes: [
-      'Обстрел: корабли не входят в клетку; бросают только кубики обстрела (supportDice).',
-      'Защитник не бросает кубики — пассивен; очки уничтожения = сумма броска обстрела.',
-      'Щиты защитника поглощают очки уничтожения до выбора целей (6 на клетке / 3 с соседа).',
-      `Кубики обстрела: +${supportDiceTotal} с (${fromCoord.q}, ${fromCoord.r}).`,
+      'Обстрел: корабли не входят в клетку и стреляют с расстояния.',
+      'Каждая клетка расстояния прибавляет 1 к нужному на кубике значению.',
+      'Защитник не отвечает; один залп.',
+      `Кубиков обстрела: ${diceTotal} с (${fromCoord.q}, ${fromCoord.r}).`,
     ],
   }
 }
-
 
 export function finalizeMarkerBombardment(
   game: GameSnapshot,
@@ -397,34 +398,6 @@ export function executeMarkerBombardment(
       Math.random,
       preview,
     )
-
-    if (combatResult.needsDestructionSelection) {
-      const skipTypes = {
-        attacker: (combatOptions?.attacker?.prioritySkips ?? []).map((p) => p.shipType),
-        defender: (combatOptions?.defender?.prioritySkips ?? []).map((p) => p.shipType),
-      }
-      setupPendingCombatDestruction(
-        game,
-        target,
-        playerId,
-        preview.defenderId,
-        combatResult,
-        combatOptions ?? {},
-        skipTypes,
-        'bombardment',
-        {
-          incomingAttackerShipIds: [],
-          bombardmentFrom: from,
-          bombardmentPlans: currentPlans.map((p) => ({ shipId: p.shipId, target: p.target })),
-          queuedBombardmentPlans: queued.map((p) => ({
-            shipId: p.shipId,
-            target: { ...p.target },
-          })),
-          shipsDestroyedInCombat: false,
-        },
-      )
-      return { errors: [], combatResult: combatResult ?? undefined }
-    }
 
     applyCombatResultToSnapshot(game, combatResult, playerId, preview.defenderId, {
       transferControl: false,

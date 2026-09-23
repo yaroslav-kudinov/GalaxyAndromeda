@@ -4,13 +4,11 @@
  */
 export type CombatUiExpectation =
   | 'prep'
-  | 'destruction'
   | 'continue-decision'
   | null
 
 export type CombatUiPresentation =
   | 'prep-modal'
-  | 'destruction-modal'
   | 'continue-banner'
   | 'continue-modal'
   | 'results-modal'
@@ -24,8 +22,6 @@ export function combatUiMatchesExpectation(
   switch (expectation) {
     case 'prep':
       return presentation === 'prep-modal'
-    case 'destruction':
-      return presentation === 'destruction-modal'
     case 'continue-decision':
       return presentation === 'continue-banner' || presentation === 'continue-modal'
     default:
@@ -37,8 +33,6 @@ export function combatUiMismatchMessage(expectation: CombatUiExpectation): strin
   switch (expectation) {
     case 'prep':
       return 'Сервер ждёт подготовку к бою, но окно подготовки не показано.'
-    case 'destruction':
-      return 'Сервер ждёт выбор уничтожаемых кораблей, но интерфейс выбора не показан.'
     case 'continue-decision':
       return 'Сервер ждёт решение «продолжить бой или отступить», но соответствующий интерфейс не показан.'
     default:

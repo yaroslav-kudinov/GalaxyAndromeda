@@ -144,6 +144,23 @@ function report(mapId: string, summary: Summary, records: readonly GameRecord[])
     .map(([id, v]) => `${id} ${percent(v)}`).join(', ') || '—'))
   lines.push('Винрейт по позиции в очереди: ' + (Object.entries(summary.winRateByOrderPosition)
     .map(([pos, v]) => `#${Number(pos) + 1} ${percent(v)}`).join(', ') || '—'))
+  const battleOutcomeLabels: Record<string, string> = {
+    attacker: 'атакующий',
+    defender: 'защитник',
+    retreat: 'отступление',
+    mutual: 'взаимно',
+    none: 'без исхода',
+  }
+  lines.push(
+    `Боёв за партию: ${num(summary.battles.perGame)}, обстрелов: ${num(summary.battles.bombardmentsPerGame)}; `
+      + 'исходы: ' + (Object.entries(summary.battles.outcomes)
+        .map(([key, share]) => `${battleOutcomeLabels[key] ?? key} ${percent(share)}`)
+        .join(', ') || '—'),
+  )
+  lines.push(
+    `Потери за бой по цене: атакующий ${num(summary.battles.meanAttackerLossValue)}, `
+      + `защитник ${num(summary.battles.meanDefenderLossValue)}`,
+  )
   lines.push('Исходы: ' + (Object.entries(summary.victoryReasons)
     .map(([reason, n]) => `${reason} ${n}`).join(', ') || '—'))
 

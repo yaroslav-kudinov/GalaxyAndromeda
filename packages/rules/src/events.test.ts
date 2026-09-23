@@ -17,14 +17,11 @@ import {
 } from './events.js'
 import {
   rollCombatRound,
-  selectShipsToDestroy,
-  getEffectiveDestroyCost,
   buildCombatPreview,
   getEffectiveFireRangeBounds,
 } from './combat.js'
 import { gameSnapshotFromMap, type GameSnapshot } from './save-file.js'
 import { createEmptyMap } from './map.js'
-import type { ShipUnit } from './types.js'
 import { hexKey } from './types.js'
 
 function gameWithEvent(eventId: EventCardId, resolved = true): GameSnapshot {
@@ -140,11 +137,10 @@ describe('events', () => {
     expect(getEffectiveMoveRange(game, 'battleship')).toBe(1)
   })
 
-  it('hyper gap: +1 move and hyper fireRange becomes 2–4', () => {
+  it('hyper gap: +1 move; дальность гиперорудия выводится из точности и не меняется', () => {
     const game = gameWithEvent('hyper-gap')
     expect(getEffectiveMoveRange(game, 'destroyer')).toBe(4)
-    expect(getTurnModifiers(game).hyperFireRange).toBe(4)
-    expect(getEffectiveFireRangeBounds(game, 'hyper')).toEqual({ min: 2, max: 4 })
+    expect(getEffectiveFireRangeBounds(game, 'hyper')).toEqual({ min: 2, max: 3 })
   })
 
   it('rollCombatRound can fix all d6 via override', () => {
@@ -158,11 +154,10 @@ describe('events', () => {
       { id: 'a1', type: 'destroyer', ownerId: 'player-1' },
     ])
     expect(preview).not.toBeNull()
-    const round = rollCombatRound(preview!, () => 0.99, 3)
+    const round = rollCombatRound(preview!, {}, {}, () => 0.99, 3)
+    expect(round.shipRolls.length).toBeGreaterThan(0)
     for (const roll of round.shipRolls) {
-      if (roll.combatRolls.length) {
-        expect(roll.combatRolls.every((v) => v === 3)).toBe(true)
-      }
+      expect(roll.dice.every((d) => d.value === 3)).toBe(true)
     }
   })
 
@@ -186,28 +181,11 @@ describe('events', () => {
     expect(isMovementIntoCellBlocked(game, dest, '1,0', hexKey(0, 0))).toBe(true)
   })
 
-  it('combat chaos: destruction order ignores priority tiers', () => {
-    const ships: ShipUnit[] = [
-      { id: 'bb', type: 'battleship', ownerId: 'p1' },
-      { id: 'dd', type: 'destroyer', ownerId: 'p1' },
-    ]
-    const destroyed = selectShipsToDestroy(ships, 20, new Set(), ['bb', 'dd'], {
-      ignoreDestructionPriority: true,
-      destroyCostForType: (t) => (t === 'battleship' ? 9 : 3),
-    })
-    expect(destroyed[0]).toBe('bb')
-  })
-
-  it('hold formation: destroyCost +2', () => {
-    const game = gameWithEvent('hold-formation')
-    expect(getEffectiveDestroyCost(game, 'destroyer')).toBe(5)
-  })
-
   it('ammo detonation blocks combat ships only', () => {
     const game = gameWithEvent('ammo-detonation')
     const blocked = getTurnModifiers(game).cannotBuildShipTypes
     expect(blocked).toContain('destroyer')
-    expect(blocked).not.toContain('shield')
+    expect(blocked).not.toContain('carrier')
   })
 
   it('smoke: each event id produces modifiers or is no-op', () => {

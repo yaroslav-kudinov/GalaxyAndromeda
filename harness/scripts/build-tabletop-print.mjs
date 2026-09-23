@@ -38,21 +38,32 @@ const {
   EVENT_DECK_SIZE,
   PLAYER_COLORS,
   PLAYER_LABELS,
-  SHIP_LABELS,
-  SHIP_TYPES,
-  MAX_FLEET_SIZE_PER_PLAYER,
-  SHIP_MOVE_RANGE,
-  SHIP_PRODUCTION_COST,
-  SHIP_PRODUCTION_REGION_MIN,
-  SHIP_DESTROY_COST,
-  SHIP_COMBAT_DICE,
-  SHIP_SUPPORT_DICE,
-  SHIP_SUPPORT_DIE_FACES,
-  SHIP_FIRE_RANGE_BOUNDS,
-  DESTRUCTION_PRIORITY,
-  SHIELD_ABSORB_SELF,
-  SHIELD_ABSORB_NEIGHBOR,
 } = rules
+
+/**
+ * Печатный вариант заморожен (пересборка ядра, ADR 015–018): цифровая версия ушла вперёд —
+ * бой на попаданиях, без щитоносца. Здесь снимок данных кораблей настольного билда, чтобы
+ * печать воспроизводилась как была, а не собиралась из несовместимых правил.
+ */
+const FROZEN_SHIP_TYPES = ['destroyer', 'cruiser', 'battleship', 'shield', 'carrier', 'hyper']
+const SHIP_TYPES = FROZEN_SHIP_TYPES
+const SHIP_LABELS = { ...rules.SHIP_LABELS, shield: 'Щитоносец' }
+const MAX_FLEET_SIZE_PER_PLAYER = { ...rules.MAX_FLEET_SIZE_PER_PLAYER, shield: 4 }
+const SHIP_MOVE_RANGE = { ...rules.SHIP_MOVE_RANGE, shield: 2 }
+const SHIP_PRODUCTION_COST = { ...rules.SHIP_PRODUCTION_COST, shield: { credits: 3, production: 4 } }
+const SHIP_PRODUCTION_REGION_MIN = { ...rules.SHIP_PRODUCTION_REGION_MIN, shield: 12 }
+const SHIP_DESTROY_COST = { destroyer: 3, cruiser: 6, battleship: 9, shield: 4, carrier: 5, hyper: 4 }
+const SHIP_COMBAT_DICE = { destroyer: 1, cruiser: 2, battleship: 3 }
+const SHIP_SUPPORT_DICE = { cruiser: 1, battleship: 2, hyper: 3 }
+const SHIP_SUPPORT_DIE_FACES = { cruiser: 4, battleship: 4, hyper: 4 }
+const SHIP_FIRE_RANGE_BOUNDS = {
+  cruiser: { min: 1, max: 1 },
+  battleship: { min: 1, max: 2 },
+  hyper: { min: 2, max: 3 },
+}
+const DESTRUCTION_PRIORITY = ['destroyer', 'hyper', 'shield', 'carrier', 'cruiser', 'battleship']
+const SHIELD_ABSORB_SELF = 6
+const SHIELD_ABSORB_NEIGHBOR = 3
 
 const SHIP_GLYPHS = {
   destroyer: { body: 'M0,-6.2 L6.2,0 L0,6.2 L-6.2,0 Z' },

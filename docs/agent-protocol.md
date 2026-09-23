@@ -23,12 +23,11 @@ HTTP base: `http://127.0.0.1:3001` (env `GAME_SERVER_URL` for MCP).
 
 | actionId | params | Description |
 |----------|--------|-------------|
-| `execute-marker-movement` | `{ from, moves, combatOptions? }` | `combatOptions.attacker/defender.prioritySkips`: `{ shipType }[]`; optional `destructionSelection` |
+| `execute-marker-movement` | `{ from, moves, combatOptions? }` | `combatOptions.attacker/defender`: `targetPriority?: string[]` (id вражеских кораблей в порядке фокуса), `diceTargets?: Record<shooterId, targetId[]>` (явная цель каждого кубика); без них кубики распределяются автоматически |
 | `execute-marker-bombardment` | `{ from, bombardments, combatOptions? }` | Same combat options |
 | `continue-combat` | `{ combatOptions? }` | Решение продолжать: сначала attacker, затем defender; после двух подтверждений — следующий раунд |
 | `stop-combat` | `{ retreatTo: { q, r } }` | Текущий решающий участник отступает в соседнюю клетку без вражеских кораблей (сначала attacker, затем defender; кроме «Стоять насмерть!») |
-| `confirm-combat-destruction` | `{ destructionSelection: string[] }` | Winner confirms ship IDs to destroy after round |
-| `update-combat-prep` | `{ ready: boolean, prioritySkips?: { shipType }[], supportSide?: 'attacker' \| 'defender' }` | Участники объявляют skip + ready; неучастник с доступной поддержкой выбирает `supportSide` без ready |
+| `update-combat-prep` | `{ ready: boolean, targetPriority?: string[], supportSide?: 'attacker' \| 'defender' }` | Участники объявляют порядок целей + ready; неучастник с доступной поддержкой выбирает `supportSide` без ready |
 | `cancel-combat-prep` | — | Attacker cancels prep before battle starts |
 | `abort-combat` | — | Participant aborts a stuck combat; pending movement is finalized |
 | `surrender` | — | Сдаться в любой момент: `eliminated`, контроль и маркеры сняты, корабли остаются |
@@ -37,7 +36,7 @@ HTTP base: `http://127.0.0.1:3001` (env `GAME_SERVER_URL` for MCP).
 
 Without `combatOptions`, movement/bombardment into combat enters `pendingCombat` with `phase: 'prep'`. Movement: mutual ready → countdown 3s → auto-resolve. Bombardment: attacker-only ready → countdown; multiple targets queued via `queuedBombardmentPlans`. Sync via `GET /state` polling.
 
-Combat FSM phases: `prep` → (roll) → `awaiting-destruction` (winner picks losses) → `awaiting-continue` (attacker then defender decide continue/retreat). Invalid `pendingCombat` is released automatically by the server.
+Combat FSM phases: `prep` → (rounds) → `awaiting-continue` (attacker then defender decide continue/retreat). Бой на попаданиях (ADR 018): каждый раунд обе стороны бросают d6 по порогу класса, попадания применяются одновременно; урон копится в `pendingCombat.damageByShipId` до конца боя, последний раунд лежит в `pendingCombat.lastRound`. Пока в бою никто не уничтожен, раунды бросаются сами. Бой, в котором ни одна сторона не может стрелять, не состоится (`combatResult.stalemate`). Invalid `pendingCombat` is released automatically by the server.
 
 ## GameObservation
 

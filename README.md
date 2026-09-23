@@ -129,7 +129,7 @@ pnpm --filter @galaxy/mcp-server dev
 
 **Важно:** все мутации — только `POST /action` с телом `{ playerId, action: { actionId, params } }`. Клиент добавляет `?geometry=0`, чтобы сервер не строил ASCII-карту для UI.
 
-Боевые actionId: `execute-marker-movement`, `execute-marker-bombardment`, `update-combat-prep`, `cancel-combat-prep`, `continue-combat`, `confirm-combat-destruction`, `stop-combat`.
+Боевые actionId: `execute-marker-movement`, `execute-marker-bombardment`, `update-combat-prep`, `cancel-combat-prep`, `continue-combat`, `stop-combat`, `abort-combat`.
 
 ## Где что искать в коде
 
@@ -186,7 +186,7 @@ node harness/scripts/simulate-lobby.mjs
 node harness/scripts/simulate-combat.mjs
 ```
 
-Гоняет боевой конечный автомат против живого сервера (`GAME_SERVER_URL`, по умолчанию `http://127.0.0.1:3001`): подготовка → countdown → авторазрешение → `confirm-combat-destruction` → `continue-combat` / `stop-combat` с отступлением → `abort-combat`. После каждого шага проверяются инвариант `pendingCombatInvariantViolations`, одинаковые фаза боя и `observationRevision` у всех трёх клиентов и server-логи на автоснятие боя. Итог — `PASS`/`FAIL` с кодом выхода.
+Гоняет боевой конечный автомат против живого сервера (`GAME_SERVER_URL`, по умолчанию `http://127.0.0.1:3001`): подготовка → countdown → авторазрешение → раунды с накоплением урона → `continue-combat` / `stop-combat` с отступлением → `abort-combat`. После каждого шага проверяются инвариант `pendingCombatInvariantViolations`, одинаковые фаза боя и `observationRevision` у всех трёх клиентов и server-логи на автоснятие боя. Итог — `PASS`/`FAIL` с кодом выхода.
 
 Правила берутся из `packages/rules/dist` (нужен `pnpm --filter @galaxy/rules build`) либо из исходников, если запустить через `pnpm tsx harness/scripts/simulate-combat.mjs`.
 

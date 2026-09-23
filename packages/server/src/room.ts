@@ -400,8 +400,6 @@ function maybeAdvanceCombatPrep(room: Room): {
       : combatResult.winnerId === attackerId
         ? defenderId
         : attackerId
-  const shieldAbsorbEntry = combatResult?.log.find((e) => e.step === 'shield-absorb')
-  const shieldContributions = (shieldAbsorbEntry?.data as { contributions?: unknown[] } | undefined)?.contributions
   debugLog(combatResult ? 'combat.auto-resolve' : 'combat.countdown', {
     roomId: room.id,
     phaseBefore: prepBefore?.phase,
@@ -411,9 +409,8 @@ function maybeAdvanceCombatPrep(room: Room): {
     attackerId,
     defenderId,
     loserId,
-    shieldAbsorbed: combatResult?.shieldAbsorbed,
-    rawDamage: combatResult?.rawDamage,
-    shieldContributionCount: Array.isArray(shieldContributions) ? shieldContributions.length : undefined,
+    destroyedShipIds: combatResult?.destroyedShipIds,
+    stalemate: combatResult?.stalemate,
   })
   return { combatResult, changed: true }
 }

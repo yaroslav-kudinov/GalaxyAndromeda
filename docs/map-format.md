@@ -48,7 +48,7 @@ Axial hex coordinates `(q, r)`, flat-top layout.
 
 ## Ships (`startingShips`)
 
-Types: `destroyer`, `cruiser`, `battleship`, `shield`, `hyper`. Unknown types (including legacy `supply`) are dropped on normalize.  
+Types: `destroyer`, `cruiser`, `battleship`, `carrier`, `hyper`. Unknown types (including legacy `supply` and `shield`, removed in ADR 018) are dropped on normalize.  
 Max **4 ships per player** and **8 total** in one hex (e.g. two players in battle).
 
 ## Legacy

@@ -1,6 +1,6 @@
 /**
  * Прогон боевого конечного автомата против живого сервера: prep → countdown →
- * авторазрешение → выбор уничтожения → продолжение / отступление / аварийный выход.
+ * авторазрешение → раунды с накоплением урона → продолжение / отступление / аварийный выход.
  *
  * После каждого шага проверяются:
  *  - инвариант `pendingCombatInvariantViolations` (пустой список = корректное состояние);
@@ -39,9 +39,7 @@ async function loadRules() {
 
 const rules = await loadRules()
 const {
-  buildDestructionSelectionState,
   combatPrepOf,
-  combatRoundStateOf,
   getCombatRetreatDestinations,
   pendingCombatInvariantViolations,
 } = rules
@@ -201,6 +199,11 @@ async function createRoomWithPlayers(map, names) {
     })
     players.push(joined.playerId)
   }
+  // Комнаты стартуют явно: хозяин — первый вошедший.
+  await api(`/rooms/${roomId}/start`, {
+    method: 'POST',
+    body: JSON.stringify({ playerId: players[0] }),
+  })
   return { roomId, code, players }
 }
 
@@ -239,26 +242,6 @@ async function reachAttackerTurnInActions(ctx, attackerId, markerCoord) {
     await act(ctx.roomId, m.activePlayerId, 'advance-phase')
   }
   throw new Error('Ход так и не дошёл до атакующего в фазе «Действия»')
-}
-
-/** Корабли для уничтожения: берём фронт приоритета, помещающийся в остаток урона. */
-function pickDestructionSelection(m, pending) {
-  const fromServer = m.lastCombatResult?.destructionState
-  const state = fromServer ?? computeDestructionState(m, pending)
-  const ids = state?.immediatelyDestroyableIds ?? []
-  return ids.slice(0, 1)
-}
-
-function computeDestructionState(m, pending) {
-  const rs = combatRoundStateOf(pending)
-  if (!rs) return null
-  const [q, r] = pending.cellKey.split(',').map(Number)
-  const battleCell = cellAt(m, { q, r })
-  const loserShips = rs.attackerWon
-    ? (battleCell?.ships ?? []).filter((s) => s.ownerId === rs.defenderId)
-    : rs.incomingAttackerShipIds.map((id) => findShip(m, id)).filter(Boolean)
-  const skipTypes = new Set(rs.attackerWon ? rs.defenderSkipTypes : rs.attackerSkipTypes)
-  return buildDestructionSelectionState(m, loserShips, rs.remainingDamage, skipTypes)
 }
 
 /**
@@ -304,21 +287,10 @@ async function driveCombat(ctx, policy) {
     if (previousPhase === 'prep') run.coverage.add('авторазрешение по countdown')
     previousPhase = pending.phase
 
-    if (pending.phase === 'awaiting-destruction') {
-      const rs = combatRoundStateOf(pending)
-      const selection = pickDestructionSelection(m, pending)
-      await act(ctx.roomId, rs.winnerId, 'confirm-combat-destruction', {
-        destructionSelection: selection,
-      })
-      run.coverage.add('confirm-combat-destruction')
-      m = await checkStep(
-        ctx,
-        `уничтожение: победитель ${rs.winnerId} подтвердил [${selection.join(', ') || 'без уничтожения'}]`,
-      )
-      continue
-    }
-
     if (pending.phase === 'awaiting-continue') {
+      if (Object.keys(pending.damageByShipId ?? {}).length) {
+        run.coverage.add('урон копится между раундами')
+      }
       continueRound += 1
       const decision = policy(continueRound)
       const attackerId = pending.attackerId
@@ -362,56 +334,27 @@ async function driveCombat(ctx, policy) {
 }
 
 /**
- * Атакующий — эсминец, защитник — эсминец под щитом: щит гарантированно съедает
- * разницу очков (максимум 5 при 1d6 против 1d6), поэтому бой всегда доходит
- * до решения «продолжать или отступать».
+ * Два равных смешанных флота: первое уничтожение почти наверняка случится раньше, чем одна из
+ * сторон кончится, — значит бой дойдёт до решения «продолжать или отступать», а линкоры
+ * переживут первое попадание и покажут накопление урона.
  */
 function multiRoundMap() {
+  const fleet = (player) => [
+    { type: 'battleship', player },
+    { type: 'destroyer', player },
+    { type: 'destroyer', player },
+  ]
   return {
     id: 'sim-combat-multiround',
     name: 'Sim combat: многораундовый бой',
     cells: [
-      { q: 0, r: 0, startPlayer: 1, startingShips: [{ type: 'destroyer', player: 1 }] },
+      { q: 0, r: 0, startPlayer: 1, startingShips: fleet(1) },
       { q: -1, r: 0, startPlayer: 1 },
-      { q: 1, r: 0, startPlayer: 2, startingShips: [
-        { type: 'destroyer', player: 2 },
-        { type: 'shield', player: 2 },
-      ] },
+      { q: 1, r: 0, startPlayer: 2, startingShips: fleet(2) },
       { q: 2, r: 0, startPlayer: 2 },
       { q: 1, r: -1 },
       { q: 1, r: 1 },
-      { q: -4, r: 0, startPlayer: 3, startingShips: [{ type: 'supply', player: 3 }] },
-      { q: -5, r: 0, startPlayer: 3 },
-    ],
-  }
-}
-
-/**
- * У защитника нет кораблей с боевыми кубиками, поэтому атакующий побеждает всегда,
- * а очки уничтожения (3d6 = 3…18) меньше суммарного destroyCost флота защитника (20) —
- * значит победитель обязан выбирать корабли вручную.
- */
-function destructionMap() {
-  return {
-    id: 'sim-combat-destruction',
-    name: 'Sim combat: выбор уничтожения',
-    cells: [
-      { q: 0, r: 0, startPlayer: 1, startingShips: [
-        { type: 'destroyer', player: 1 },
-        { type: 'destroyer', player: 1 },
-        { type: 'destroyer', player: 1 },
-      ] },
-      { q: -1, r: 0, startPlayer: 1 },
-      { q: 1, r: 0, startPlayer: 2, startingShips: [
-        { type: 'hyper', player: 2 },
-        { type: 'supply', player: 2 },
-        { type: 'supply', player: 2 },
-        { type: 'supply', player: 2 },
-      ] },
-      { q: 2, r: 0, startPlayer: 2 },
-      { q: 1, r: -1 },
-      { q: 1, r: 1 },
-      { q: -4, r: 0, startPlayer: 3, startingShips: [{ type: 'supply', player: 3 }] },
+      { q: -4, r: 0, startPlayer: 3, startingShips: [{ type: 'destroyer', player: 3 }] },
       { q: -5, r: 0, startPlayer: 3 },
     ],
   }
@@ -456,30 +399,27 @@ async function main() {
   console.log(`Сервер: ${API}`)
   await api('/health')
 
-  await runScenario({
-    scenario: 'Сценарий 1: подготовка → countdown → раунды → отступление защитника',
-    map: multiRoundMap(),
-    attackerCoord: { q: 0, r: 0 },
-    battleCoord: { q: 1, r: 0 },
-    // Первый раунд играем, во втором защитник отступает.
-    policy: (round) => (round === 1 ? 'continue' : 'stop'),
-  })
-
-  const REQUIRED_DESTRUCTION_ATTEMPTS = 4
-  for (let attempt = 1; attempt <= REQUIRED_DESTRUCTION_ATTEMPTS; attempt += 1) {
+  // Исход раундов случаен: повторяем, пока не увидим и отступление, и накопленный урон.
+  const REQUIRED_ATTEMPTS = 6
+  for (let attempt = 1; attempt <= REQUIRED_ATTEMPTS; attempt += 1) {
     await runScenario({
-      scenario: `Сценарий 2: выбор уничтожения (попытка ${attempt})`,
-      map: destructionMap(),
+      scenario: `Сценарий 1: подготовка → countdown → раунды → отступление защитника (попытка ${attempt})`,
+      map: multiRoundMap(),
       attackerCoord: { q: 0, r: 0 },
       battleCoord: { q: 1, r: 0 },
-      // Два раунда играем, дальше закрываем бой аварийным выходом.
-      policy: (round) => (round >= 3 ? 'abort' : 'continue'),
+      // Первый раунд играем, во втором защитник отступает.
+      policy: (round) => (round === 1 ? 'continue' : 'stop'),
     })
-    if (run.coverage.has('confirm-combat-destruction')) break
+    if (
+      run.coverage.has('stop-combat с отступлением')
+      && run.coverage.has('урон копится между раундами')
+    ) {
+      break
+    }
   }
 
   await runScenario({
-    scenario: 'Сценарий 3: аварийный выход из боя (abort-combat)',
+    scenario: 'Сценарий 2: аварийный выход из боя (abort-combat)',
     map: multiRoundMap(),
     attackerCoord: { q: 0, r: 0 },
     battleCoord: { q: 1, r: 0 },
@@ -490,7 +430,7 @@ async function main() {
     'update-combat-prep (обе стороны)',
     'countdown после двух ready',
     'авторазрешение по countdown',
-    'confirm-combat-destruction',
+    'урон копится между раундами',
     'continue-combat',
     'stop-combat с отступлением',
     'abort-combat',

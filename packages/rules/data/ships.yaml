@@ -1,60 +1,51 @@
+# Справочник классов кораблей. Источник истины — код (`ships.ts`, `combat-hits.ts`), этот файл
+# повторяет его для людей. Бой на попаданиях — ADR 018.
+#
+# dice      — кубиков d6 за раунд; боевые и кубики поддержки не различаются.
+# hit       — нужное на кубике значение в своей клетке; с чужой клетки +1 за клетку расстояния,
+#             больше 6 — выстрел невозможен. Отсюда дальность: 6 − hit.
+# hull      — сколько попаданий нужно для уничтожения. Урон копится внутри боя.
+
 destroyer:
   move: 3
-  combatDice: 1
-  combatDieFaces: 4
-  destroyCost: 3
+  dice: 1
+  hit: 6
+  hull: 1
   productionRegionSize: [3, 4]
   cost: { credits: 2, production: 2 }
 
 cruiser:
   move: 2
-  combatDice: 2
-  combatDieFaces: 6
-  supportDice: 1
-  supportDieFaces: 4
-  fireRange: 1
-  destroyCost: 6
+  dice: 2
+  hit: 5
+  hull: 2
   productionRegionSize: [5, 6]
   cost: { credits: 5, production: 3 }
 
-battleship:
-  move: 1
-  combatDice: 3
-  supportDice: 2
-  supportDieFaces: 4
-  fireRange: 2
-  destroyCost: 9
-  productionRegionSize: [18, 19]
-  cost: { credits: 7, production: 6 }
-
-shield:
-  move: 2
-  shieldAbsorb: { self: 6, neighbor: 3 }
-  destroyCost: 4
-  productionRegionSize: [12, 13]
-  cost: { credits: 3, production: 4 }
-
 carrier:
   move: 1
-  # Аура: на клетке боя +1d6 каждому союзнику (не авианосцу); с соседа +1d4. Не стакается.
-  carrierAura: { selfDieFaces: 6, neighborDieFaces: 4 }
-  destroyCost: 5
+  dice: 0
+  hull: 2
+  # Союзнику на своей клетке +2 кубика, на соседней +1. Не авианосцам, не складывается.
+  carrierBonus: { sameCell: 2, adjacent: 1 }
   productionRegionSize: [12, 13]
   cost: { credits: 6, production: 5 }
 
+battleship:
+  move: 1
+  dice: 3
+  hit: 4
+  hull: 3
+  productionRegionSize: [18, 19]
+  cost: { credits: 7, production: 6 }
+
 hyper:
   move: 1
-  supportDice: 3
-  supportDieFaces: 4
-  fireRange: [2, 3]
-  destroyCost: 4
+  dice: 3
+  hit: 3
+  hull: 2
+  # На клетке своего владельца прочность 1. По своей и соседним клеткам не стреляет.
+  hullOnOwnCell: 1
+  minFireRange: 2
   productionRegionSize: [21, 999]
   cost: { credits: 12, production: 12 }
-
-destructionPriority:
-  - destroyer
-  - hyper
-  - shield
-  - carrier
-  - cruiser
-  - battleship

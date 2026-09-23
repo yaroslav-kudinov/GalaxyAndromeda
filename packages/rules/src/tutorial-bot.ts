@@ -6,7 +6,6 @@ const SKIP_PREFERENCE = [
   'execute-claim-picks',
   'execute-recharge-picks',
   'update-combat-prep',
-  'confirm-combat-destruction',
   'continue-combat',
   'stop-combat',
   'advance-phase',

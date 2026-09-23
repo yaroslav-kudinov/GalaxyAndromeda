@@ -4,10 +4,7 @@ import type {
   PlayerState,
   ShipType,
 } from '@galaxy/rules'
-import {
-  combatRoundStateOf,
-  parseHexKey,
-} from '@galaxy/rules'
+import { parseHexKey } from '@galaxy/rules'
 import { playerSlotFromId } from '~/utils/board-adapter'
 import {
   indexShipsById,
@@ -36,11 +33,7 @@ export function combatIncomingShipIds(
   if (pending.phase === 'prep') {
     return pending.prep.incomingAttackerShipIds ?? []
   }
-  return (
-    pending.continuation?.incomingAttackerShipIds
-    ?? pending.roundState?.incomingAttackerShipIds
-    ?? []
-  )
+  return pending.continuation?.incomingAttackerShipIds ?? []
 }
 
 function combatCellCoord(pending: PendingCombat): { q: number; r: number } {
@@ -50,8 +43,6 @@ function combatCellCoord(pending: PendingCombat): { q: number; r: number } {
 function originForIncoming(pending: PendingCombat): { q: number; r: number } | null {
   if (pending.continuation?.movementFrom) return pending.continuation.movementFrom
   if (pending.phase === 'prep' && pending.prep.movementFrom) return pending.prep.movementFrom
-  const rs = combatRoundStateOf(pending)
-  if (rs?.movementFrom) return rs.movementFrom
   return null
 }
 

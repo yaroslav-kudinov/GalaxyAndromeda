@@ -2044,7 +2044,7 @@ describe('production', () => {
   })
 
   it('canBuildShipInRegionSize uses minimum region size only', () => {
-    expect(getShipProductionRegionMin('shield')).toBe(12)
+    expect(getShipProductionRegionMin('carrier')).toBe(12)
     expect(getShipProductionRegionMin('battleship')).toBe(18)
     expect(getShipProductionRegionMin('hyper')).toBe(21)
     expect(getShipProductionRegionMin('cruiser')).toBe(5)

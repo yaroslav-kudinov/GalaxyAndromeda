@@ -17,7 +17,6 @@ import type { Room } from './room.js'
 const MAX_BOT_TICKS = 24
 const OUT_OF_TURN_BOT_ACTIONS = new Set([
   'update-combat-prep',
-  'confirm-combat-destruction',
   'continue-combat',
   'stop-combat',
 ])

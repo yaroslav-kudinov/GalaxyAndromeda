@@ -39,11 +39,6 @@ export const SHIP_GLYPHS: Record<ShipType, ShipGlyphDef> = {
     accent: 'M-5.6,-2.8 L2.8,5.6 M-2.8,-5.6 L5.6,2.8',
   },
 
-  /** Downward triangle */
-  shield: {
-    body: 'M0,9 L9,-6.5 L-9,-6.5 Z',
-  },
-
   /** Wide diamond + deck stripe — авианосец */
   carrier: {
     body: diamond(8.6),
