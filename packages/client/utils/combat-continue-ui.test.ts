@@ -61,15 +61,32 @@ function resultWithRolls(extra?: Partial<CombatResolutionResult>): CombatResolut
 }
 
 describe('combatContinueDecisionRole', () => {
-  it('attacker decides first', () => {
-    const pending = awaitingContinue({ continueDecisions: {} })
+  it('after the first loss the attacker decides first', () => {
+    const pending = awaitingContinue({ continueDecisions: {}, shipsDestroyedInCombat: true })
     assert.equal(combatContinueDecisionRole(pending, 'p-att'), 'attacker')
     assert.equal(combatContinueDecisionRole(pending, 'p-def'), null)
     assert.equal(combatContinueDecisionRole(pending, 'p-other'), null)
   })
 
+  it('before any loss both sides pick targets at once', () => {
+    const pending = awaitingContinue({ continueDecisions: {}, shipsDestroyedInCombat: false })
+    assert.equal(combatContinueDecisionRole(pending, 'p-att'), 'attacker')
+    assert.equal(combatContinueDecisionRole(pending, 'p-def'), 'defender')
+    const defenderDone = awaitingContinue({ continueDecisions: { defender: true } })
+    assert.equal(combatContinueDecisionRole(defenderDone, 'p-def'), null)
+    assert.equal(combatContinueDecisionRole(defenderDone, 'p-att'), 'attacker')
+  })
+
+  it('supporter picks targets until confirmed', () => {
+    const pending = awaitingContinue({ continueDecisions: {} })
+    assert.equal(combatContinueDecisionRole(pending, 'p-sup'), null)
+    assert.equal(combatContinueDecisionRole(pending, 'p-sup', { supporterAwaited: true }), 'support')
+    const confirmed = awaitingContinue({ continueDecisions: {}, supportReady: { 'p-sup': true } })
+    assert.equal(combatContinueDecisionRole(confirmed, 'p-sup', { supporterAwaited: true }), null)
+  })
+
   it('defender decides only after attacker continued', () => {
-    const pending = awaitingContinue({ continueDecisions: { attacker: true } })
+    const pending = awaitingContinue({ continueDecisions: { attacker: true }, shipsDestroyedInCombat: true })
     assert.equal(combatContinueDecisionRole(pending, 'p-att'), null)
     assert.equal(combatContinueDecisionRole(pending, 'p-def'), 'defender')
     assert.equal(
@@ -260,7 +277,7 @@ describe('combatDecisionStatusLine', () => {
           shipsDestroyedInCombat: true,
         }),
       }),
-      'Защитник: продолжить или отступить',
+      'Защитник: цели и продолжить или отступить',
     )
     assert.equal(
       combatDecisionStatusLine({
@@ -269,7 +286,7 @@ describe('combatDecisionStatusLine', () => {
           shipsDestroyedInCombat: false,
         }),
       }),
-      'Атакующий подтверждает продолжение',
+      'Стороны выбирают цели на следующий раунд',
     )
   })
 

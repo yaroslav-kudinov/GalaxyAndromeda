@@ -1,7 +1,8 @@
 import type { CombatResolutionResult, PendingCombat } from '@galaxy/rules'
 import { combatPrepOf } from '@galaxy/rules'
 
-export type CombatContinueRole = 'attacker' | 'defender'
+/** Кто решает перед раундом: атакующий, защитник или третий игрок, чьи корабли поддерживают бой. */
+export type CombatContinueRole = 'attacker' | 'defender' | 'support'
 
 export type CombatContinueExpectation = 'prep' | 'continue-decision' | null
 
@@ -28,26 +29,26 @@ export function isCombatDefender(pending: PendingCombat, playerId: string): bool
 }
 
 /**
- * Чья очередь нажать «продолжить бой» / «отступить».
- * Не зависит от того, чей сейчас ход на карте: сначала атакующий, затем защитник.
+ * Кто сейчас выбирает цели и решает, продолжать ли бой. Не зависит от того, чей ход на карте.
+ * Пока в бою никто не уничтожен, отступать нельзя и все решают одновременно; после первого
+ * уничтожения защитник ждёт решения атакующего.
  */
 export function combatContinueDecisionRole(
   pending: PendingCombat | null | undefined,
   playerId: string,
-  options?: { eliminated?: boolean },
+  options?: { eliminated?: boolean; supporterAwaited?: boolean },
 ): CombatContinueRole | null {
   if (options?.eliminated) return null
   if (pending?.phase !== 'awaiting-continue') return null
-  if (pending.attackerId === playerId && pending.continueDecisions?.attacker == null) {
-    return 'attacker'
+  if (pending.attackerId === playerId) {
+    return pending.continueDecisions?.attacker == null ? 'attacker' : null
   }
-  if (
-    isCombatDefender(pending, playerId)
-    && pending.continueDecisions?.attacker === true
-    && pending.continueDecisions?.defender == null
-  ) {
-    return 'defender'
+  if (isCombatDefender(pending, playerId)) {
+    const attackerFirst = pending.shipsDestroyedInCombat === true
+    if (attackerFirst && pending.continueDecisions?.attacker !== true) return null
+    return pending.continueDecisions?.defender == null ? 'defender' : null
   }
+  if (options?.supporterAwaited && pending.supportReady?.[playerId] !== true) return 'support'
   return null
 }
 
@@ -160,17 +161,16 @@ export function combatDecisionStatusLine(args: {
   if (pending.phase === 'awaiting-continue') {
     const mustContinue = pending.shipsDestroyedInCombat !== true
     const attackerDecided = pending.continueDecisions?.attacker === true
-    if (!attackerDecided) {
-      return mustContinue
-        ? 'Атакующий подтверждает продолжение'
-        : 'Атакующий: продолжить или отступить'
+    const defenderDecided = pending.continueDecisions?.defender === true
+    if (mustContinue) {
+      if (!attackerDecided && !defenderDecided) return 'Стороны выбирают цели на следующий раунд'
+      if (!attackerDecided) return 'Атакующий выбирает цели'
+      if (!defenderDecided) return 'Защитник выбирает цели'
+      return 'Поддержка выбирает цели'
     }
-    if (pending.continueDecisions?.defender !== true) {
-      return mustContinue
-        ? 'Защитник подтверждает продолжение'
-        : 'Защитник: продолжить или отступить'
-    }
-    return 'Ждём подтверждения'
+    if (!attackerDecided) return 'Атакующий: цели и продолжить или отступить'
+    if (!defenderDecided) return 'Защитник: цели и продолжить или отступить'
+    return 'Поддержка выбирает цели'
   }
 
   return 'Ждём подтверждения'

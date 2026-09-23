@@ -39,10 +39,37 @@ async function loadRules() {
 
 const rules = await loadRules()
 const {
+  buildCombatPreviewFromPending,
   combatPrepOf,
   getCombatRetreatDestinations,
   pendingCombatInvariantViolations,
+  playerCombatDice,
+  playerCombatTargets,
 } = rules
+
+/** Цели кубиков, которые видит игрок, но которые назначал не он: их до броска видно быть не должно. */
+function foreignDiceTargets(view) {
+  const pending = view.mech.pendingCombat
+  if (!pending) return []
+  const options = pending.phase === 'prep' ? pending.prep?.combatOptions : pending.combatOptions
+  const owner = new Map()
+  for (const cell of view.mech.cells) for (const ship of cell.ships) owner.set(ship.id, ship.ownerId)
+  return ['attacker', 'defender'].flatMap((side) =>
+    Object.keys(options?.[side]?.diceTargets ?? {}).filter((shooterId) => owner.get(shooterId) !== view.playerId),
+  )
+}
+
+/** Все кубики игрока — в одну цель: так выбор заметно отличается от автоматического. */
+function focusFire(m, playerId) {
+  const preview = buildCombatPreviewFromPending(m)
+  if (!preview) return {}
+  const target = playerCombatTargets(preview, playerId, m.pendingCombat?.damageByShipId ?? {}).at(-1)
+  const out = {}
+  for (const die of playerCombatDice(preview, playerId)) {
+    ;(out[die.shooterShipId] ??= [])[die.index] = target?.shipId ?? ''
+  }
+  return out
+}
 
 async function api(path, init) {
   const url = path.startsWith('/api') ? `${API}${path}` : `${API}/api${path}`
@@ -149,6 +176,10 @@ async function checkStep(ctx, label) {
   }
 
   for (const view of views) {
+    const foreign = foreignDiceTargets(view)
+    if (foreign.length) {
+      fail(ctx, `клиент ${view.name} видит чужие цели до броска`, foreign.map((id) => `  - ${id}`))
+    }
     const violations = pendingCombatInvariantViolations(view.mech)
     if (violations.length) {
       ctx.lastPendingCombat = view.mech.pendingCombat ?? null
@@ -273,7 +304,10 @@ async function driveCombat(ctx, policy) {
 
       const attackerId = pending.attackerId
       const defenderId = prep.defenderId
-      await act(ctx.roomId, attackerId, 'update-combat-prep', { ready: true })
+      await act(ctx.roomId, attackerId, 'update-combat-prep', {
+        ready: true,
+        diceTargets: focusFire(m, attackerId),
+      })
       run.coverage.add('update-combat-prep (обе стороны)')
       m = await checkStep(ctx, `подготовка: атакующий ${attackerId} готов`)
       if (pending.trigger !== 'bombardment') {
@@ -291,10 +325,21 @@ async function driveCombat(ctx, policy) {
       if (Object.keys(pending.damageByShipId ?? {}).length) {
         run.coverage.add('урон копится между раундами')
       }
-      continueRound += 1
-      const decision = policy(continueRound)
       const attackerId = pending.attackerId
       const defenderId = pending.defenderIds[0]
+
+      // До первого уничтожения отступать нельзя: стороны только выбирают цели, в любом порядке.
+      if (pending.shipsDestroyedInCombat !== true) {
+        await act(ctx.roomId, defenderId, 'continue-combat', { diceTargets: focusFire(m, defenderId) })
+        run.coverage.add('цели перед каждым раундом')
+        m = await checkStep(ctx, `раунд ${pending.roundNumber}: защитник ${defenderId} выбрал цели первым`)
+        await act(ctx.roomId, attackerId, 'continue-combat', { diceTargets: focusFire(m, attackerId) })
+        m = await checkStep(ctx, `раунд ${pending.roundNumber}: атакующий ${attackerId} выбрал цели → бросок`)
+        continue
+      }
+
+      continueRound += 1
+      const decision = policy(continueRound)
 
       if (decision === 'abort') {
         await act(ctx.roomId, attackerId, 'abort-combat', {})
@@ -338,12 +383,13 @@ async function driveCombat(ctx, policy) {
  * сторон кончится, — значит бой дойдёт до решения «продолжать или отступать», а линкоры
  * переживут первое попадание и покажут накопление урона.
  */
-function multiRoundMap() {
-  const fleet = (player) => [
+function multiRoundMap(
+  fleet = (player) => [
     { type: 'battleship', player },
     { type: 'destroyer', player },
     { type: 'destroyer', player },
-  ]
+  ],
+) {
   return {
     id: 'sim-combat-multiround',
     name: 'Sim combat: многораундовый бой',
@@ -418,6 +464,18 @@ async function main() {
     }
   }
 
+  // Эсминец против эсминца: на 6+ раунд без уничтожений выпадает в двух случаях из трёх —
+  // тогда стороны выбирают цели, не имея права отступить.
+  for (let attempt = 1; attempt <= 6 && !run.coverage.has('цели перед каждым раундом'); attempt += 1) {
+    await runScenario({
+      scenario: `Сценарий 1б: раунды без уничтожений — только выбор целей (попытка ${attempt})`,
+      map: multiRoundMap((player) => [{ type: 'destroyer', player }]),
+      attackerCoord: { q: 0, r: 0 },
+      battleCoord: { q: 1, r: 0 },
+      policy: () => 'continue',
+    })
+  }
+
   await runScenario({
     scenario: 'Сценарий 2: аварийный выход из боя (abort-combat)',
     map: multiRoundMap(),
@@ -431,6 +489,7 @@ async function main() {
     'countdown после двух ready',
     'авторазрешение по countdown',
     'урон копится между раундами',
+    'цели перед каждым раундом',
     'continue-combat',
     'stop-combat с отступлением',
     'abort-combat',

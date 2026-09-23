@@ -10,7 +10,7 @@ import {
   type CombatOptions,
   type CombatPreview,
 } from './combat.js'
-import { canShipFireFromDistance, hitProbability } from './combat-hits.js'
+import { canShipFireFromDistance, hitProbability, SHIP_HULL } from './combat-hits.js'
 import { hexDistance } from './map.js'
 import {
   canExecuteActionMarkerThisTurn,
@@ -272,6 +272,8 @@ export function buildBombardmentPreview(
     },
     defender: {
       ...base.defender,
+      // Под обстрелом корабль держит обычную прочность: слабость гиперорудия — только в бою.
+      ships: base.defender.ships.map((ship) => ({ ...ship, hull: SHIP_HULL[ship.type] ?? ship.hull })),
       supportingShips: [],
       diceTotal: 0,
       expectedHits: 0,

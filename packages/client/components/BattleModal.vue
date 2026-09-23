@@ -10,10 +10,15 @@ import type {
   ShipType,
 } from '@galaxy/rules'
 import {
+  autoDiceTargetsFor,
+  combatSideOfPlayer,
   COMBAT_PREP_COUNTDOWN_MS,
   estimateBattleOutcome,
+  playerCombatDice,
+  playerCombatTargets,
   SHIP_LABELS,
 } from '@galaxy/rules'
+import { useUiStrings } from '~/i18n/ui-strings'
 import type { GameSnapshot } from '@galaxy/rules'
 import {
   combatDecisionStatusLine,
@@ -34,13 +39,19 @@ const props = defineProps<{
   defenderReady?: boolean
   countdownStartedAt?: number
   /** Fallback: решение continue/retreat прямо в модалке (если баннер скрыт гонкой) */
-  continueDecisionRole?: 'attacker' | 'defender' | null
+  continueDecisionRole?: 'attacker' | 'defender' | 'support' | null
   retreatAllowed?: boolean
   retreatDestinations?: { q: number; r: number }[]
   /** Атакующий может вместо штурма осадить центр власти. */
   siegeAvailable?: boolean
   /** Это ответ осаждённого на новую осаду: нападать необязательно. */
   siegeResponse?: boolean
+  /** Штурм невозможен — ни одна сторона не может стрелять; остаётся осада. */
+  assaultBlocked?: boolean
+  /** Сторона, которую поддерживает этот игрок (третий в бою), если уже выбрана. */
+  supportSide?: 'attacker' | 'defender' | null
+  /** Цели следующего раунда — их держит страница, чтобы баннер и окно показывали одно. */
+  roundTargets?: Record<string, string[]>
 }>()
 
 const emit = defineEmits<{
@@ -54,7 +65,11 @@ const emit = defineEmits<{
   continueCombat: []
   stopCombat: [{ q: number; r: number }]
   establishSiege: []
+  supportReady: [diceTargets: Record<string, string[]>]
+  'update:roundTargets': [value: Record<string, string[]>]
 }>()
+
+const tt = useUiStrings().combatTargets
 
 const {
   panelRef,
@@ -329,16 +344,53 @@ function isLocalFleet(side: 'attacker' | 'defender'): boolean {
 
 const prepOdds = computed(() => estimateBattleOutcome(props.preview, { samples: 200 }))
 
+/** Игрок стреляет в этом бою — ему выбирать цели. */
+const localFiringSide = computed(() => combatSideOfPlayer(props.preview, props.localPlayerId))
+const localEnemyId = computed(() =>
+  localFiringSide.value === 'attacker' ? props.preview.defenderId : props.preview.attackerId,
+)
+
+/** Цели первого раунда. Начинаем с предложения игры; состав боя поменялся — предлагаем заново. */
+const prepTargets = ref<Record<string, string[]>>({})
+const prepTargetsKey = computed(() => [
+  ...playerCombatDice(props.preview, props.localPlayerId).map((die) => `${die.shooterShipId}#${die.index}`),
+  '|',
+  ...playerCombatTargets(props.preview, props.localPlayerId).map((target) => target.shipId),
+].join(','))
+watch(
+  prepTargetsKey,
+  () => {
+    prepTargets.value = autoDiceTargetsFor(props.preview, props.localPlayerId)
+  },
+  { immediate: true },
+)
+
+const showPrepTargets = computed(
+  () =>
+    phase.value === 'pre'
+    && localFiringSide.value != null
+    && !isDefenderObserver.value
+    && !(props.assaultBlocked && isLocalAttacker.value),
+)
+
+const pendingDamage = computed(() => props.snapshot.pendingCombat?.damageByShipId ?? {})
+const pendingRound = computed(() => props.snapshot.pendingCombat?.roundNumber ?? 1)
+
+function localTargetsOptions(): CombatOptions {
+  const side = localFiringSide.value
+  return side ? { [side]: { diceTargets: prepTargets.value } } : {}
+}
+
 function pct(n: number): string {
   return `${Math.round(n * 100)}%`
 }
 
 function startBattle() {
-  emit('resolve', {})
+  emit('resolve', localTargetsOptions())
 }
 
 function submitPrepReady() {
-  emit('prepReady', {})
+  emit('prepReady', localTargetsOptions())
 }
 
 function submitPrepUnready() {
@@ -427,9 +479,19 @@ onUnmounted(() => {
             <p v-if="selfReady" class="observer-hint">
               Готовность подтверждена. Ждём остальных участников.
             </p>
-            <p v-else class="observer-hint">
+            <p v-else-if="!supportSide" class="observer-hint">
               Выберите сторону или «Не поддерживать» — без вашего ответа бой не начнётся.
             </p>
+            <CombatTargetsPanel
+              v-if="showPrepTargets && supportSide"
+              v-model="prepTargets"
+              :preview="preview"
+              :player-id="localPlayerId"
+              :player-color="playerColor(localPlayerId)"
+              :enemy-color="playerColor(localEnemyId)"
+              :round-number="1"
+              :disabled="selfReady || resolving"
+            />
           </template>
           <template v-else>
           <p v-if="isDefenderObserver" class="observer-banner">
@@ -438,6 +500,9 @@ onUnmounted(() => {
           <p v-if="siegeResponse && isLocalAttacker" class="observer-banner">
             Ваш центр власти осадили. Можно напасть на осаждающих сейчас или отказаться — тогда
             гарнизон будет терять по кораблю в начале каждого хода.
+          </p>
+          <p v-if="assaultBlocked && isLocalAttacker" class="observer-banner">
+            {{ tt.assaultBlocked }}
           </p>
           <p v-else-if="siegeAvailable && isLocalAttacker" class="observer-banner">
             Центр власти защищён. Можно штурмовать или осадить: флот встанет рядом с гарнизоном,
@@ -530,10 +595,18 @@ onUnmounted(() => {
                 <span :style="{ color: playerColor(preview.defenderId) }">защита {{ pct(prepOdds.defeat) }}</span>
               </span>
             </p>
-            <p class="hint muted">
-              Кубики распределяются по целям автоматически: сначала добиваются подбитые и самые опасные корабли.
-            </p>
           </div>
+
+          <CombatTargetsPanel
+            v-if="showPrepTargets"
+            v-model="prepTargets"
+            :preview="preview"
+            :player-id="localPlayerId"
+            :player-color="playerColor(localPlayerId)"
+            :enemy-color="playerColor(localEnemyId)"
+            :round-number="1"
+            :disabled="selfReady || resolving || prepPhase === 'countdown'"
+          />
 
           <p v-if="prepPhase === 'countdown' && countdownDisplay != null" class="countdown-banner">
             {{ countdownDisplay || '…' }}
@@ -590,6 +663,19 @@ onUnmounted(() => {
             </div>
           </section>
 
+          <CombatTargetsPanel
+            v-if="showModalContinueActions && localFiringSide && roundTargets"
+            :model-value="roundTargets"
+            :preview="preview"
+            :player-id="localPlayerId"
+            :player-color="playerColor(localPlayerId)"
+            :enemy-color="playerColor(localEnemyId)"
+            :round-number="pendingRound"
+            :damage-by-ship-id="pendingDamage"
+            :disabled="resolving"
+            @update:model-value="emit('update:roundTargets', $event)"
+          />
+
           <section class="roll-log" aria-live="polite">
             <ul class="roll-list">
               <li
@@ -629,6 +715,7 @@ onUnmounted(() => {
               Не поддерживать
             </button>
             <button
+              v-if="supportSide !== 'attacker'"
               type="button"
               class="btn-side"
               :style="sideColorVars(preview.attackerId)"
@@ -638,6 +725,7 @@ onUnmounted(() => {
               Поддержать {{ playerLabel(preview.attackerId) }}
             </button>
             <button
+              v-if="supportSide !== 'defender'"
               type="button"
               class="btn-side btn-side--emphasis"
               :style="sideColorVars(preview.defenderId)"
@@ -645,6 +733,15 @@ onUnmounted(() => {
               @click="emit('supportSide', 'defender')"
             >
               Поддержать {{ playerLabel(preview.defenderId) }}
+            </button>
+            <button
+              v-if="supportSide"
+              type="button"
+              class="btn-primary"
+              :disabled="resolving"
+              @click="emit('supportReady', prepTargets)"
+            >
+              {{ tt.supportReady }}
             </button>
           </template>
           <button
@@ -677,7 +774,7 @@ onUnmounted(() => {
             Осадить
           </button>
           <button
-            v-if="!selfReady"
+            v-if="!selfReady && !(assaultBlocked && isLocalAttacker)"
             type="button"
             class="btn-primary"
             :disabled="resolving || prepPhase === 'countdown'"
@@ -686,7 +783,7 @@ onUnmounted(() => {
             {{ resolving ? 'Отправка…' : 'Готов' }}
           </button>
           <button
-            v-else
+            v-else-if="selfReady"
             type="button"
             class="btn-secondary"
             :disabled="resolving"
@@ -722,9 +819,9 @@ onUnmounted(() => {
             :disabled="resolving"
             @click="emit('continueCombat')"
           >
-            Продолжить бой
+            {{ tt.fire }}
           </button>
-          <template v-if="retreatAllowed">
+          <template v-if="retreatAllowed && continueDecisionRole !== 'support'">
             <button
               v-for="coord in retreatDestinations ?? []"
               :key="`${coord.q},${coord.r}`"
@@ -1157,6 +1254,7 @@ onUnmounted(() => {
   padding: 0.65rem 1rem;
   border-top: 1px solid #334155;
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
   gap: 0.5rem;
 }

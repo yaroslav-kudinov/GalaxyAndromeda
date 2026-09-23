@@ -54,11 +54,9 @@ describe('бой на попаданиях: порог, дальность, пр
     expect(shipHitThreshold('hyper', 2, -4)).toBe(2)
   })
 
-  it('гиперорудие на клетке своего владельца держит одно попадание', () => {
-    expect(shipHullInBattle('hyper', 'p1', 'p1')).toBe(1)
-    expect(shipHullInBattle('hyper', 'p1', 'p2')).toBe(2)
-    expect(shipHullInBattle('hyper', 'p1', null)).toBe(2)
-    expect(shipHullInBattle('battleship', 'p1', 'p1')).toBe(3)
+  it('гиперорудие в бою на своей клетке держит одно попадание', () => {
+    expect(shipHullInBattle('hyper')).toBe(1)
+    expect(shipHullInBattle('battleship')).toBe(3)
   })
 
   it('вероятности попадания по порогу', () => {

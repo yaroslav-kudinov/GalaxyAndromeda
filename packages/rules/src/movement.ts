@@ -38,7 +38,11 @@ import {
   applyCombatResultToSnapshot,
   beginOrAwaitCombatContinuation,
   buildCombatPreview,
+  isBattleUnresolvable,
+  UNRESOLVABLE_BATTLE_MSG,
   buildCombatPreviewFromPending,
+  combatSupportersAwaited,
+  isCombatRetreatAllowed,
   combatPrepOf,
   continuePendingCombat,
   getCombatDestinationKeys,
@@ -515,6 +519,7 @@ export function executeMarkerMovement(
     }
     const preview = buildCombatPreview(game, combatCoord, playerId, incomingShips, previewOptions)
     if (preview) {
+      if (combatOptions && isBattleUnresolvable(preview)) return { errors: [UNRESOLVABLE_BATTLE_MSG] }
       if (!combatOptions) {
         const prepErrors = setupCombatPrepForMovement(
           game,
@@ -947,17 +952,26 @@ function appendCombatParticipantActions(
   if (pending.phase === 'awaiting-continue') {
     const isAttacker = pending.attackerId === playerId
     const isDefender = pending.defenderIds.includes(playerId)
-    if (!isAttacker && !isDefender) return
+    if (!isAttacker && !isDefender) {
+      // Поддерживающий выбирает цели своих кораблей на раунд.
+      const awaited = combatSupportersAwaited(game, buildCombatPreviewFromPending(game))
+      if (awaited.includes(playerId) && pending.supportReady?.[playerId] !== true) {
+        pushUnique({ id: 'continue-combat', type: 'combat', description: 'Подтвердить цели поддержки' })
+      }
+      return
+    }
     pushUnique({
       id: 'continue-combat',
       type: 'combat',
-      description: 'Продолжить бой',
+      description: 'Выбрать цели и продолжить бой',
     })
-    pushUnique({
-      id: 'stop-combat',
-      type: 'combat',
-      description: 'Отступить',
-    })
+    if (isCombatRetreatAllowed(pending)) {
+      pushUnique({
+        id: 'stop-combat',
+        type: 'combat',
+        description: 'Отступить',
+      })
+    }
   }
 }
 
@@ -1034,8 +1048,7 @@ function dispatchGameAction(
     const continuation = pending?.continuation
     const combatKey = pending?.cellKey
     const attackerId = pending?.attackerId
-    const combatOptions = params?.combatOptions as CombatOptions | undefined
-    const result = continuePendingCombat(game, playerId, combatOptions)
+    const result = continuePendingCombat(game, playerId, { diceTargets: params?.diceTargets })
     if (
       result.errors.length === 0
       && (result.combatResult || result.combatVanished)
@@ -1118,7 +1131,7 @@ function dispatchGameAction(
     if (supportSide != null && supportSide !== 'attacker' && supportSide !== 'defender') {
       return { errors: ['Некорректная сторона поддержки'] }
     }
-    return updateCombatPrep(game, playerId, ready, targetPriority, supportSide)
+    return updateCombatPrep(game, playerId, ready, targetPriority, supportSide, params?.diceTargets)
   }
 
   if (actionId === 'cancel-combat-prep') {

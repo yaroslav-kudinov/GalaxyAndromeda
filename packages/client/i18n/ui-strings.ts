@@ -105,6 +105,32 @@ export const uiStringsRu = {
     untilTurn: (turn: number) => `до хода ${turn} включительно`,
     nextChoice: (turn: number) => `Следующий выбор — в начале хода ${turn}.`,
   },
+  combatTargets: {
+    heading: (round: number) => `Цели · раунд ${round}`,
+    diceLeft: (free: number, total: number) => `Свободно кубиков: ${free} из ${total}`,
+    allAssigned: 'Все кубики распределены',
+    freeGoAuto: 'Свободные кубики игра раздаст сама',
+    auto: 'Авто',
+    autoHint: 'Распределить, как предложила бы игра: сначала добивать подбитые и самые опасные',
+    clear: 'Снять все',
+    add: 'Добавить кубик',
+    remove: 'Убрать кубик',
+    hits: (damage: number, hull: number) => `Попаданий ${damage} из ${hull}`,
+    expected: (value: string) => `≈ ${value} попад.`,
+    needs: (threshold: number) => `${threshold}+`,
+    dieTitle: (ship: string, threshold: number, target: string | null) =>
+      target ? `${ship}: нужно ${threshold}+ → ${target}` : `${ship}: нужно ${threshold}+, цель не выбрана`,
+    pickDieHint: 'Щёлкните кубик внизу, затем «+» у цели. Щелчок по назначенному кубику возвращает его.',
+    noDice: 'Вашим кораблям в этом раунде нечем стрелять.',
+    noTargets: 'Целей не осталось.',
+    support: 'поддержка',
+    fire: 'Огонь',
+    supportBanner: (round: number) =>
+      `Раунд ${round}: ваши корабли поддерживают бой. Выберите цели и подтвердите — без вас раунд не начнётся.`,
+    supportPickSide: 'Выберите сторону — затем цели своих кораблей.',
+    supportReady: 'Готов',
+    assaultBlocked: 'Штурм невозможен: ни одна сторона не может стрелять. Можно только осадить.',
+  },
   turnAnnounce: {
     matchStart: 'Начало партии',
     rechargeHint:

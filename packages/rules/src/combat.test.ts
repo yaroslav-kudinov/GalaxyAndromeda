@@ -37,9 +37,15 @@ import {
   setupPendingCombat,
   stopPendingCombat,
   updateCombatPrep,
+  UNRESOLVABLE_BATTLE_MSG,
   validateSingleCombatDestination,
 } from './combat.js'
-import { applyGameActionOnSnapshot, executeMarkerMovement, resolveCombatPrep } from './movement.js'
+import {
+  applyGameActionOnSnapshot,
+  executeMarkerMovement,
+  getLegalActionsForSnapshot,
+  resolveCombatPrep,
+} from './movement.js'
 import { advanceGameSnapshot } from './turn.js'
 import {
   buildBombardmentPreview,
@@ -493,21 +499,42 @@ describe('бой перемещением', () => {
     expect(cellAt(game, 1, 0).ships.map((s) => s.id).sort()).toEqual(['raid-1', 'raid-2'])
   })
 
-  it('бой, в котором никто не может стрелять, не состоялся: атакующий остаётся на месте', () => {
+  it('бой, в котором никто не может стрелять, не допускается вовсе', () => {
     const { map, game } = duelBoard()
     addShip(game, 0, 0, 'player-1', 'carrier', 'att-cv')
     addShip(game, 1, 0, 'player-2', 'carrier', 'def-cv')
     placeActionMarker(game, 'player-1', { q: 0, r: 0 })
 
+    for (const options of [{}, undefined]) {
+      const result = executeMarkerMovement(game, map, 'player-1', { q: 0, r: 0 }, [
+        { shipId: 'att-cv', to: { q: 1, r: 0 } },
+      ], options)
+      expect(result.errors).toEqual([UNRESOLVABLE_BATTLE_MSG])
+      expect(game.pendingCombat).toBeUndefined()
+      expect(cellAt(game, 0, 0).ships.map((s) => s.id)).toEqual(['att-cv'])
+      expect(game.actionMarkerResolvedThisTurn).toBeFalsy()
+    }
+  })
+
+  it('на центр власти, где бой невозможен, можно только осадить', () => {
+    const { map, game } = duelBoard()
+    addShip(game, 0, 0, 'player-1', 'carrier', 'att-cv')
+    addShip(game, 1, 0, 'player-2', 'carrier', 'def-cv')
+    cellAt(game, 1, 0).isPowerCenter = true
+    placeActionMarker(game, 'player-1', { q: 0, r: 0 })
+
     const result = executeMarkerMovement(game, map, 'player-1', { q: 0, r: 0 }, [
       { shipId: 'att-cv', to: { q: 1, r: 0 } },
-    ], {})
+    ])
     expect(result.errors).toEqual([])
-    expect(result.combatResult?.stalemate).toBe(true)
+    const prep = combatPrepOf(game.pendingCombat)!
+    expect(prep.siegeAvailable).toBe(true)
+    expect(prep.assaultBlocked).toBe(true)
+    expect(updateCombatPrep(game, 'player-1', true).errors).toEqual([UNRESOLVABLE_BATTLE_MSG])
+    expect(applyGameActionOnSnapshot(game, map, 'player-1', 'establish-siege').errors).toEqual([])
+    expect(game.sieges?.['1,0']?.besiegerId).toBe('player-1')
+    // Ответить осаждённому нечем — вопроса о нападении нет.
     expect(game.pendingCombat).toBeUndefined()
-    expect(cellAt(game, 0, 0).ships.map((s) => s.id)).toEqual(['att-cv'])
-    expect(cellAt(game, 1, 0).ships.map((s) => s.id)).toEqual(['def-cv'])
-    expect(game.actionMarkerResolvedThisTurn).toBe(true)
   })
 
   it('урон копится между раундами одного боя и исчезает вместе с боем', () => {
@@ -562,8 +589,8 @@ describe('бой перемещением', () => {
     expect(cellAt(game, 1, 0).controlOwnerId).toBe('player-1')
   })
 
-  it('когда уничтожений ещё не было, раунды идут сами', () => {
-    const { game } = duelBoard()
+  it('перед каждым раундом стороны выбирают цели, даже если уничтожений ещё не было', () => {
+    const { map, game } = duelBoard()
     game.turnNumber = 2
     addShip(game, 0, 0, 'player-1', 'destroyer', 'att')
     addShip(game, 1, 0, 'player-2', 'destroyer', 'def')
@@ -571,7 +598,7 @@ describe('бой перемещением', () => {
       game,
       { q: 1, r: 0 },
       'player-1',
-      1,
+      2,
       'movement',
       {
         movementFrom: { q: 0, r: 0 },
@@ -581,15 +608,92 @@ describe('бой перемещением', () => {
       { shipsDestroyedInCombat: false },
     )
 
-    // Три пустых раунда, затем атакующий попадает.
-    const continued = continuePendingCombat(game, 'player-1', undefined, diceSequence([1, 1, 1, 1, 1, 1, 6, 1]))
-    expect(continued.errors).toEqual([])
-    expect(continued.combatResult?.destroyedShipIds).toEqual(['def'])
-    expect(continued.combatResult?.attackerWon).toBe(true)
+    // Отступать нельзя: остаётся только подтвердить цели.
+    const legal = (playerId: string) =>
+      getLegalActionsForSnapshot(game, map.id, playerId).map((action) => action.id)
+    expect(legal('player-1')).toContain('continue-combat')
+    expect(legal('player-1')).not.toContain('stop-combat')
+
+    // Пока никто не уничтожен, защитник может подтвердить раньше атакующего.
+    expect(continuePendingCombat(game, 'player-2').errors).toEqual([])
+    expect(game.pendingCombat?.phase).toBe('awaiting-continue')
+    const empty = continuePendingCombat(game, 'player-1', {}, diceSequence([1, 1]))
+    expect(empty.errors).toEqual([])
+    // Раунд прошёл впустую — и снова ждём решений.
+    expect(game.pendingCombat?.roundNumber).toBe(3)
+    expect(isAwaitingContinue(game.pendingCombat) && game.pendingCombat.continueDecisions).toEqual({})
+
+    expect(continuePendingCombat(game, 'player-1').errors).toEqual([])
+    const hit = continuePendingCombat(game, 'player-2', {}, diceSequence([6, 1]))
+    expect(hit.combatResult?.destroyedShipIds).toEqual(['def'])
+    expect(hit.combatResult?.attackerWon).toBe(true)
     expect(game.pendingCombat).toBeUndefined()
   })
 
-  it('beginOrAwaitCombatContinuation берёт урон из результата раунда', () => {
+  it('выбранные цели действуют один раунд', () => {
+    const { game } = duelBoard()
+    addShip(game, 1, 0, 'player-1', 'battleship', 'att-bb')
+    addShip(game, 1, 0, 'player-2', 'destroyer', 'def-1')
+    addShip(game, 1, 0, 'player-2', 'destroyer', 'def-2')
+    addShip(game, 1, 0, 'player-2', 'destroyer', 'def-3')
+    setupPendingCombat(game, { q: 1, r: 0 }, 'player-1', 2, 'stack', undefined, {
+      shipsDestroyedInCombat: false,
+    })
+
+    // Все три кубика линкора — во второй эсминец; сама игра разбросала бы их по двум.
+    expect(continuePendingCombat(game, 'player-1', {
+      diceTargets: { 'att-bb': ['def-2', 'def-2', 'def-2'] },
+    }).errors).toEqual([])
+    const round = continuePendingCombat(game, 'player-2', {}, diceSequence([6, 6, 6, 1, 1, 1]))
+    expect(round.errors).toEqual([])
+    expect(round.combatResult?.destroyedShipIds).toEqual(['def-2'])
+    expect(game.pendingCombat?.phase).toBe('awaiting-continue')
+    // К следующему раунду выбор сброшен.
+    expect(game.pendingCombat?.combatOptions?.attacker?.diceTargets).toBeUndefined()
+  })
+
+  it('кубики можно назначать только своим кораблям и только по врагам в бою', () => {
+    const { game } = duelBoard()
+    addShip(game, 1, 0, 'player-1', 'cruiser', 'att-cr')
+    addShip(game, 1, 0, 'player-2', 'destroyer', 'def-dd')
+    setupPendingCombat(game, { q: 1, r: 0 }, 'player-1', 2, 'stack', undefined, {
+      shipsDestroyedInCombat: false,
+    })
+    expect(continuePendingCombat(game, 'player-1', { diceTargets: { 'def-dd': ['att-cr'] } }).errors[0])
+      .toMatch(/своим кораблям/)
+    expect(continuePendingCombat(game, 'player-1', { diceTargets: { 'att-cr': ['att-cr'] } }).errors[0])
+      .toMatch(/не вражеский/)
+    expect(continuePendingCombat(game, 'player-1', { diceTargets: { 'att-cr': ['def-dd', 'def-dd', 'def-dd'] } }).errors[0])
+      .toMatch(/больше кубиков/)
+    expect(continuePendingCombat(game, 'player-1', { diceTargets: { 'att-cr': ['def-dd', ''] } }).errors).toEqual([])
+  })
+
+  it('поддерживающий тоже подтверждает цели перед раундом', () => {
+    const { map, game } = duelBoard([{ q: 1, r: -1 }])
+    game.participatingPlayerIds = ['player-1', 'player-2', 'player-3']
+    if (!game.players.some((p) => p.id === 'player-3')) {
+      game.players.push({ ...game.players[0]!, id: 'player-3', name: 'Игрок 3' })
+    }
+    addShip(game, 1, 0, 'player-1', 'cruiser', 'att-cr')
+    addShip(game, 1, 0, 'player-2', 'cruiser', 'def-cr')
+    addShip(game, 1, -1, 'player-3', 'cruiser', 'sup-cr')
+    setupPendingCombat(game, { q: 1, r: 0 }, 'player-1', 2, 'stack', undefined, {
+      shipsDestroyedInCombat: false,
+    })
+    game.pendingCombat!.combatOptions = { supportSides: { 'player-3': 'attacker' } }
+
+    expect(getLegalActionsForSnapshot(game, map.id, 'player-3').map((a) => a.id)).toContain('continue-combat')
+    expect(continuePendingCombat(game, 'player-1').errors).toEqual([])
+    expect(continuePendingCombat(game, 'player-2').errors).toEqual([])
+    // Без поддерживающего раунд не бросается.
+    expect(game.pendingCombat?.roundNumber).toBe(2)
+    const rolled = continuePendingCombat(game, 'player-3', {}, diceSequence([1, 1, 1, 1, 1, 1]))
+    expect(rolled.errors).toEqual([])
+    expect(game.pendingCombat?.roundNumber).toBe(3)
+    expect(isAwaitingContinue(game.pendingCombat) && game.pendingCombat.supportReady).toBeFalsy()
+  })
+
+  it('beginOrAwaitCombatContinuation переносит урон в следующий раунд и ждёт решений', () => {
     const { game } = duelBoard()
     addShip(game, 0, 0, 'player-1', 'battleship', 'att-bb')
     addShip(game, 1, 0, 'player-2', 'destroyer', 'def-dd')
@@ -597,7 +701,6 @@ describe('бой перемещением', () => {
     const first = resolveCombatAtCell(game, { q: 1, r: 0 }, 'player-1', incoming, {}, diceSequence([1, 1, 1, 6]))
     expect(first.damageByShipId).toEqual({ 'att-bb': 1 })
 
-    // Без уничтожений следующий раунд бросается сразу — и в нём урон линкора уже 1.
     const followUp = beginOrAwaitCombatContinuation(
       game,
       {
@@ -612,13 +715,12 @@ describe('бой перемещением', () => {
         shipsDestroyedInCombat: false,
         seedCombatResult: first,
       },
-      diceSequence([1, 1, 1, 6, 1, 1, 1, 6]),
     )
     expect(followUp.errors).toEqual([])
-    const lastRound = followUp.combatResult?.rounds?.at(-1)
-    expect(lastRound?.destroyedShipIds).toEqual(['att-bb'])
-    expect(game.pendingCombat).toBeUndefined()
-    expect(cellAt(game, 0, 0).ships).toEqual([])
+    expect(game.pendingCombat?.phase).toBe('awaiting-continue')
+    expect(game.pendingCombat?.roundNumber).toBe(2)
+    expect(game.pendingCombat?.damageByShipId).toEqual({ 'att-bb': 1 })
+    expect(buildCombatPreviewFromPending(game)?.attacker.ships[0]?.damage).toBe(1)
   })
 })
 
@@ -1302,5 +1404,28 @@ describe('pendingCombat FSM', () => {
     addShip(game, 0, 1, 'player-2', 'destroyer', 'dd-1')
     cellAt(game, 0, 1).controlOwnerId = 'player-2'
     expect(isCombatDestination(game, 'player-1', { q: 0, r: 1 })).toBe(true)
+  })
+})
+
+describe('прочность гиперорудия', () => {
+  it('в бою держит одно попадание, под обстрелом — два', () => {
+    const { game } = duelBoard([{ q: 2, r: 0 }])
+    addShip(game, 0, 0, 'player-1', 'battleship', 'att-bb')
+    addShip(game, 2, 0, 'player-2', 'hyper', 'def-hy')
+    cellAt(game, 2, 0).controlOwnerId = 'player-2'
+
+    const battle = buildCombatPreview(game, { q: 2, r: 0 }, 'player-1', [
+      { id: 'att-bb', type: 'battleship', ownerId: 'player-1' },
+    ])!
+    expect(battle.defender.ships[0]?.hull).toBe(1)
+
+    const bombardment = buildBombardmentPreview(
+      game,
+      { q: 2, r: 0 },
+      'player-1',
+      [{ id: 'att-bb', type: 'battleship', ownerId: 'player-1' }],
+      { q: 0, r: 0 },
+    )!
+    expect(bombardment.defender.ships[0]?.hull).toBe(2)
   })
 })

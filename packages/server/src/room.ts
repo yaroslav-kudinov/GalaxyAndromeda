@@ -14,6 +14,7 @@ import type {
 
 import {
   maskDoctrineChoice,
+  maskPendingCombatForViewer,
 
   buildObservation,
 
@@ -469,7 +470,7 @@ function roomObservation(
     turnLimit: s.turnLimit ?? null,
     matchSeed: s.matchSeed ?? null,
     gameOver: s.gameOver ?? null,
-    pendingCombat: s.pendingCombat ?? null,
+    pendingCombat: maskPendingCombatForViewer(s, playerId) ?? null,
     productionTokensSpentThisTurn: s.productionTokensSpentThisTurn ?? null,
     overtimeRegionByPlayer: s.overtimeRegionByPlayer ?? null,
     actionMarkerLimitByPlayer: s.actionMarkerLimitByPlayer ?? null,

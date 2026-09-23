@@ -70,6 +70,8 @@ describe('tutorial corridor', () => {
     game.phase = 'actions'
     game.activePlayerId = 'player-1'
     game.participatingPlayerIds = ['player-1', 'player-2', 'player-3']
+    // Раунд без потерь теперь ждёт выбора целей — кубики как в обучении, бой кончается в первом раунде.
+    game.scriptedDiceValue = 6
 
     const source = game.cells.find((cell) => cell.coord.q === -3 && cell.coord.r === 0)!
     const home = game.cells.find((cell) => cell.coord.q === -5 && cell.coord.r === 0)!

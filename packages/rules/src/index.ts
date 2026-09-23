@@ -43,3 +43,4 @@ export {
   trimExcessActionMarkers,
   syncActionMarkerLimits,
 } from './marker-pools.js'
+export * from './combat-targets.js'

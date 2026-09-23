@@ -26,6 +26,11 @@ import {
   type CombatTargetState,
   type FireRange,
 } from './combat-hits.js'
+import {
+  combatSideOfPlayer,
+  playerCombatDice,
+  validateDiceTargets,
+} from './combat-targets.js'
 import { doctrineShotModifier } from './doctrines.js'
 import { hexDistance } from './map.js'
 import { transferControlIfEnemyOwned } from './claim.js'
@@ -187,6 +192,8 @@ export interface CombatPrepState {
   incomingAttackerShipIds?: string[]
   /** Атакующий может вместо штурма осадить этот центр власти. */
   siegeAvailable?: boolean
+  /** Штурм невозможен — ни одна сторона не может стрелять; остаётся только осада. */
+  assaultBlocked?: boolean
   /**
    * Бой на клетке, где уже стоят корабли обеих сторон: вылазка из осады или штурм осаждающими.
    * Атакующие — корабли атакующего на этой клетке.
@@ -622,7 +629,6 @@ function buildSidePreview(
   supportPositionOverrides?: ReadonlyMap<string, HexCoord>,
   options: { canFireFromBattleHex?: boolean; collectSupport?: boolean } = {},
 ): CombatSidePreview {
-  const battleCell = cellAt(game, battleCoord)
   const battleHexShipIds = new Set(battleHexShips.map((s) => s.id))
   const modifier = combatShotModifier(game, playerId, enemyOwnerId)
   const carriers = carrierPositions(
@@ -642,7 +648,7 @@ function buildSidePreview(
       type: ship.type,
       ownerId: ship.ownerId,
       side: role,
-      hull: shipHullInBattle(ship.type, ship.ownerId, battleCell?.controlOwnerId),
+      hull: shipHullInBattle(ship.type),
       damage: damageByShipId[ship.id] ?? 0,
       dice: threshold == null ? 0 : shipDice(ship.type) + bonusDice,
       bonusDice,
@@ -897,6 +903,18 @@ export function combatSideFirepower(preview: CombatPreview, role: CombatRole): n
   const side = role === 'attacker' ? preview.attacker : preview.defender
   if (preview.trigger === 'bombardment' && role === 'defender') return 0
   return shootersOf(side).reduce((sum, s) => sum + s.dice, 0)
+}
+
+export const UNRESOLVABLE_BATTLE_MSG =
+  'Такой бой невозможен: ни одна сторона не может стрелять'
+
+/**
+ * Бой, который математически не может закончиться: ни у одной стороны нет выстрела (авианосцы
+ * против авианосцев, гиперорудие в упор). Такие бои не начинаются вовсе.
+ */
+export function isBattleUnresolvable(preview: CombatPreview): boolean {
+  if (preview.trigger === 'bombardment') return false
+  return combatSideFirepower(preview, 'attacker') === 0 && combatSideFirepower(preview, 'defender') === 0
 }
 
 /**
@@ -1493,8 +1511,8 @@ export function setupPendingCombat(
   }
 }
 
-/** Защитный потолок автоматических раундов подряд. */
-const MAX_AUTO_COMBAT_ROUNDS = 64
+/** Защитный потолок раундов одного боя: бой без решений людей не должен крутиться вечно. */
+const MAX_COMBAT_ROUNDS = 64
 
 type ContinuedRoundStep = {
   errors: string[]
@@ -1507,10 +1525,57 @@ type ContinuedRoundStep = {
   damageByShipId: Record<string, number>
 }
 
+/** Опции следующего раунда: цели выбираются заново, порядок целей и поддержка остаются. */
+function optionsForNextRound(options: CombatOptions | undefined): CombatOptions | undefined {
+  if (!options) return undefined
+  const side = (s: CombatSideOptions | undefined): CombatSideOptions | undefined => {
+    if (!s) return undefined
+    const { diceTargets: _dropped, ...rest } = s
+    return Object.keys(rest).length ? rest : undefined
+  }
+  const next: CombatOptions = { ...options }
+  const attacker = side(options.attacker)
+  const defender = side(options.defender)
+  if (attacker) next.attacker = attacker
+  else delete next.attacker
+  if (defender) next.defender = defender
+  else delete next.defender
+  return next
+}
+
 /**
- * После раунда: если уничтожений ещё не было — автоматически бросаем следующие раунды
- * (без UI «продолжить/отступить»), пока не случится уничтожение или конец боя.
- * Если уничтожения уже были — обычный awaiting-continue с выбором отступления.
+ * Третьи игроки, чьи корабли стреляют в этом бою: перед раундом они тоже выбирают цели.
+ * Выбывшие не спрашиваются — их кубики раздаёт игра.
+ */
+export function combatSupportersAwaited(game: GameSnapshot, preview: CombatPreview | null): string[] {
+  const pending = game.pendingCombat
+  if (!pending || !preview) return []
+  const main = new Set([pending.attackerId, ...pending.defenderIds])
+  const out = new Set<string>()
+  for (const side of [preview.attacker, preview.defender]) {
+    for (const ship of side.supportingShips) {
+      if (main.has(ship.ownerId) || ship.dice <= 0) continue
+      if (isEliminatedPlayer(game, ship.ownerId)) continue
+      out.add(ship.ownerId)
+    }
+  }
+  return [...out]
+}
+
+/** Все, кто решает перед раундом, решили: можно бросать. */
+function roundReadyToRoll(game: GameSnapshot): boolean {
+  const pending = game.pendingCombat
+  if (!isAwaitingContinue(pending)) return false
+  if (pending.continueDecisions.attacker !== true || pending.continueDecisions.defender !== true) {
+    return false
+  }
+  const supporters = combatSupportersAwaited(game, buildCombatPreviewFromPending(game))
+  return supporters.every((playerId) => pending.supportReady?.[playerId] === true)
+}
+
+/**
+ * После раунда: если бой продолжается, стороны снова выбирают цели и решают, продолжать ли.
+ * Пока в бою никто не уничтожен, отступать нельзя — остаётся только выбрать цели.
  */
 export function beginOrAwaitCombatContinuation(
   game: GameSnapshot,
@@ -1530,19 +1595,11 @@ export function beginOrAwaitCombatContinuation(
   },
   rng: () => number = Math.random,
 ): { errors: string[]; combatResult?: CombatResolutionResult; combatVanished?: boolean } {
-  let shipsDestroyedInCombat = args.shipsDestroyedInCombat
-  let completedRoundNumber = args.completedRoundNumber
-  let combatOptions = args.combatOptions
-  let damageByShipId = { ...(args.damageByShipId ?? args.seedCombatResult?.damageByShipId ?? {}) }
-  let lastResult: CombatResolutionResult | undefined = args.seedCombatResult
+  const lastResult = args.seedCombatResult
+  const damageByShipId = { ...(args.damageByShipId ?? lastResult?.damageByShipId ?? {}) }
 
-  if (lastResult?.stalemate) {
-    game.pendingCombat = undefined
-    return { errors: [], combatResult: lastResult }
-  }
-
-  for (let autoRound = 0; autoRound < MAX_AUTO_COMBAT_ROUNDS; autoRound++) {
-    const shouldContinue = args.continuation
+  const shouldContinue = !lastResult?.stalemate && (
+    args.continuation
       ? combatShouldContinueWithIncomingShips(
           game,
           args.coord,
@@ -1550,103 +1607,44 @@ export function beginOrAwaitCombatContinuation(
           args.continuation.incomingAttackerShipIds,
         )
       : combatShouldContinueAfterRound(game, args.coord, args.attackerId)
-
-    if (!shouldContinue) {
-      game.pendingCombat = undefined
-      return { errors: [], combatResult: lastResult }
-    }
-
-    const pendingOptions = {
-      shipsDestroyedInCombat,
-      damageByShipId,
-      lastRound: lastResult?.rounds?.at(-1),
-    }
-
-    if (shipsDestroyedInCombat) {
-      setupPendingCombat(
-        game,
-        args.coord,
-        args.attackerId,
-        completedRoundNumber + 1,
-        args.trigger,
-        args.continuation,
-        pendingOptions,
-      )
-      if (combatOptions) game.pendingCombat!.combatOptions = combatOptions
-      // Пустые решения — стороны явно выбирают continue/retreat (не автозаполнять).
-      if (isAwaitingContinue(game.pendingCombat)) {
-        game.pendingCombat.continueDecisions = {}
-        applyEliminatedContinueDefaults(game)
-        if (
-          game.pendingCombat.continueDecisions.attacker === true
-          && game.pendingCombat.continueDecisions.defender === true
-        ) {
-          const auto = finishContinueAfterBothSidesReady(game, combatOptions, rng)
-          if (auto.combatResult) lastResult = auto.combatResult
-          if (auto.errors.length) return { errors: auto.errors, combatResult: lastResult }
-          if (auto.combatVanished) {
-            return { errors: [], combatResult: lastResult, combatVanished: true }
-          }
-        }
-      }
-      return { errors: [], combatResult: lastResult }
-    }
-
-    // Нет уничтожений — сразу следующий раунд, без решения continue/retreat.
-    setupPendingCombat(
-      game,
-      args.coord,
-      args.attackerId,
-      completedRoundNumber + 1,
-      args.trigger,
-      args.continuation,
-      pendingOptions,
-    )
-    if (combatOptions) game.pendingCombat!.combatOptions = combatOptions
-    if (isAwaitingContinue(game.pendingCombat)) {
-      game.pendingCombat.continueDecisions = { attacker: true, defender: true }
-    }
-
-    const step = executeContinuedCombatRound(game, combatOptions, rng)
-    if (step.errors.length) {
-      return { errors: step.errors, combatResult: step.combatResult ?? lastResult }
-    }
-    if (step.combatVanished) {
-      return { errors: [], combatResult: step.combatResult ?? lastResult, combatVanished: true }
-    }
-    if (step.combatResult) lastResult = step.combatResult
-
-    shipsDestroyedInCombat = step.shipsDestroyedInCombat
-    completedRoundNumber = step.completedRoundNumber
-    combatOptions = step.combatOptions ?? combatOptions
-    damageByShipId = step.damageByShipId
-
-    if (!step.shouldContinue) {
-      game.pendingCombat = undefined
-      return { errors: [], combatResult: lastResult }
-    }
-    // shouldContinue && !shipsDestroyed → ещё один авто-раунд в цикле
-    // shouldContinue && shipsDestroyed → на следующей итерации откроется awaiting-continue
+  )
+  if (!shouldContinue || args.completedRoundNumber >= MAX_COMBAT_ROUNDS) {
+    game.pendingCombat = undefined
+    return { errors: [], combatResult: lastResult }
   }
 
-  // Защитный потолок: must-continue без отступления.
   setupPendingCombat(
     game,
     args.coord,
     args.attackerId,
-    completedRoundNumber + 1,
+    args.completedRoundNumber + 1,
     args.trigger,
     args.continuation,
-    { shipsDestroyedInCombat: false, damageByShipId, lastRound: lastResult?.rounds?.at(-1) },
+    {
+      shipsDestroyedInCombat: args.shipsDestroyedInCombat,
+      damageByShipId,
+      lastRound: lastResult?.rounds?.at(-1),
+    },
   )
-  if (combatOptions) game.pendingCombat!.combatOptions = combatOptions
+  const nextOptions = optionsForNextRound(args.combatOptions)
+  if (nextOptions) game.pendingCombat!.combatOptions = nextOptions
+
+  // Бой без живых решающих (сдались оба) дожимается сам.
+  applyEliminatedContinueDefaults(game)
+  if (roundReadyToRoll(game)) {
+    const auto = finishContinueAfterBothSidesReady(game, rng)
+    return {
+      errors: auto.errors,
+      combatResult: auto.combatResult ?? lastResult,
+      combatVanished: auto.combatVanished,
+    }
+  }
   return { errors: [], combatResult: lastResult }
 }
 
-/** Исполнение одного раунда, когда оба решения «продолжить» уже приняты. */
+/** Исполнение одного раунда, когда все решения перед ним приняты. */
 function executeContinuedCombatRound(
   game: GameSnapshot,
-  combatOptions: CombatOptions | undefined,
   rng: () => number,
 ): ContinuedRoundStep {
   const pending = game.pendingCombat
@@ -1664,7 +1662,7 @@ function executeContinuedCombatRound(
   const coord = { q, r }
   const damageBefore = { ...(pending.damageByShipId ?? {}) }
   const incomingShips = incomingShipsForPendingContinuation(game, pending)
-  const opts = combatOptions ?? pending.combatOptions
+  const opts = pending.combatOptions
   const preview = buildCombatPreview(game, coord, pending.attackerId, incomingShips, {
     attackerMovementPlans: pending.continuation?.movementPlans,
     supportSides: opts?.supportSides,
@@ -1722,7 +1720,7 @@ function executeContinuedCombatRound(
       : combatShouldContinueAfterRound(game, coord, attackerId)
   )
 
-  // Не ставим следующий pending здесь — этим управляет цикл beginOrAwait / caller.
+  // Следующий pending ставит beginOrAwaitCombatContinuation.
   game.pendingCombat = undefined
 
   return {
@@ -1741,76 +1739,92 @@ export function syncEliminatedCombatAutomation(
   game: GameSnapshot,
   rng: () => number = Math.random,
 ): void {
-  const pending = game.pendingCombat
-  if (!isAwaitingContinue(pending)) return
+  if (!isAwaitingContinue(game.pendingCombat)) return
   applyEliminatedContinueDefaults(game)
-  if (
-    pending.continueDecisions?.attacker === true
-    && pending.continueDecisions?.defender === true
-  ) {
-    finishContinueAfterBothSidesReady(game, pending.combatOptions, rng)
-  }
+  if (roundReadyToRoll(game)) finishContinueAfterBothSidesReady(game, rng)
 }
 
+/**
+ * Решение перед раундом: выбранные цели и «продолжить». Цели можно не присылать — тогда кубики
+ * игрока раздаст игра. Атакующий, защитник и поддерживающие решают независимо; только после
+ * первого уничтожения защитник ждёт решения атакующего — он вправе отступить, узнав его.
+ */
 export function continuePendingCombat(
   game: GameSnapshot,
   playerId: string,
-  combatOptions?: CombatOptions,
+  options: { diceTargets?: unknown } = {},
   rng: () => number = Math.random,
 ): { errors: string[]; combatResult?: CombatResolutionResult; combatVanished?: boolean } {
   const pending = game.pendingCombat
   if (!isAwaitingContinue(pending)) return { errors: ['Нет незавершённого боя'] }
 
-  const isParticipant =
-    playerId === pending.attackerId || pending.defenderIds.includes(playerId)
-  if (!isParticipant) return { errors: ['Продолжить бой может только участник боя'] }
+  const preview = buildCombatPreviewFromPending(game)
+  const isAttacker = playerId === pending.attackerId
+  const isDefender = playerId === pending.defenderIds[0]
+  const isSupporter = !isAttacker && !isDefender
+    && combatSupportersAwaited(game, preview).includes(playerId)
+  if (!isAttacker && !isDefender && !isSupporter) {
+    return { errors: ['Продолжить бой может только участник боя'] }
+  }
   if (isEliminatedPlayer(game, playerId)) {
     return { errors: ['Выбывший игрок не решает продолжение боя'] }
   }
 
-  // Пока уничтожений не было — отступления нет; крутим раунды, пока не определится исход.
-  if (!isCombatRetreatAllowed(pending)) {
-    const [q, r] = pending.cellKey.split(',').map(Number)
-    return beginOrAwaitCombatContinuation(
-      game,
-      {
-        coord: { q, r },
-        attackerId: pending.attackerId,
-        completedRoundNumber: Math.max(0, pending.roundNumber - 1),
-        trigger: pending.trigger,
-        continuation: pending.continuation,
-        combatOptions: combatOptions ?? pending.combatOptions,
-        shipsDestroyedInCombat: false,
-        damageByShipId: pending.damageByShipId,
-      },
-      rng,
-    )
+  if (isAttacker && pending.continueDecisions.attacker != null) {
+    return { errors: ['Атакующий уже выбрал продолжение боя'] }
   }
+  if (isDefender) {
+    if (isCombatRetreatAllowed(pending) && pending.continueDecisions.attacker !== true) {
+      return { errors: ['Сначала решение о продолжении принимает атакующий'] }
+    }
+    if (pending.continueDecisions.defender != null) {
+      return { errors: ['Защитник уже выбрал продолжение боя'] }
+    }
+  }
+  if (isSupporter && pending.supportReady?.[playerId] === true) {
+    return { errors: ['Вы уже подтвердили цели на этот раунд'] }
+  }
+
+  if (options.diceTargets != null && preview) {
+    const errors = mergePlayerDiceTargets(
+      pending,
+      preview,
+      playerId,
+      options.diceTargets,
+      pending.damageByShipId ?? {},
+    )
+    if (errors.length) return { errors }
+  }
+
+  if (isAttacker) pending.continueDecisions = { ...pending.continueDecisions, attacker: true }
+  else if (isDefender) pending.continueDecisions = { ...pending.continueDecisions, defender: true }
+  else pending.supportReady = { ...pending.supportReady, [playerId]: true }
 
   applyEliminatedContinueDefaults(game)
+  if (roundReadyToRoll(game)) return finishContinueAfterBothSidesReady(game, rng)
+  return { errors: [] }
+}
 
-  const defenderId = pending.defenderIds[0]
-  if (playerId === pending.attackerId) {
-    if (pending.continueDecisions?.attacker != null) {
-      return { errors: ['Атакующий уже выбрал продолжение боя'] }
-    }
-    pending.continueDecisions = { ...pending.continueDecisions, attacker: true }
-    applyEliminatedContinueDefaults(game)
-    if (pending.continueDecisions?.defender === true) {
-      return finishContinueAfterBothSidesReady(game, combatOptions, rng)
-    }
-    return { errors: [] }
-  }
-  if (playerId !== defenderId) return { errors: ['Продолжить бой может только участник боя'] }
-  if (pending.continueDecisions?.attacker !== true) {
-    return { errors: ['Сначала решение о продолжении принимает атакующий'] }
-  }
-  if (pending.continueDecisions?.defender != null) {
-    return { errors: ['Защитник уже выбрал продолжение боя'] }
-  }
-  pending.continueDecisions = { ...pending.continueDecisions, defender: true }
-
-  return finishContinueAfterBothSidesReady(game, combatOptions, rng)
+/** Записать выбор целей игрока в опции его стороны. */
+function mergePlayerDiceTargets(
+  holder: { combatOptions?: CombatOptions },
+  preview: CombatPreview,
+  playerId: string,
+  raw: unknown,
+  damageByShipId: Readonly<Record<string, number>>,
+): string[] {
+  const role = combatSideOfPlayer(preview, playerId)
+  if (!role) return ['Вашим кораблям в этом бою нечем стрелять']
+  const { errors, value } = validateDiceTargets(preview, playerId, raw, damageByShipId)
+  if (errors.length) return errors
+  const options: CombatOptions = holder.combatOptions ?? {}
+  const own = new Set(playerCombatDice(preview, playerId).map((die) => die.shooterShipId))
+  const kept = Object.fromEntries(
+    Object.entries(options[role]?.diceTargets ?? {}).filter(([shooterId]) => !own.has(shooterId)),
+  )
+  options[role] = { ...options[role], diceTargets: { ...kept, ...value } }
+  holder.combatOptions = options
+  return []
 }
 
 function applyEliminatedContinueDefaults(game: GameSnapshot): void {
@@ -1827,7 +1841,6 @@ function applyEliminatedContinueDefaults(game: GameSnapshot): void {
 
 function finishContinueAfterBothSidesReady(
   game: GameSnapshot,
-  combatOptions: CombatOptions | undefined,
   rng: () => number,
 ): { errors: string[]; combatResult?: CombatResolutionResult; combatVanished?: boolean } {
   const pending = game.pendingCombat
@@ -1838,7 +1851,7 @@ function finishContinueAfterBothSidesReady(
   const trigger = pending.trigger
   const continuation = pending.continuation
 
-  const step = executeContinuedCombatRound(game, combatOptions, rng)
+  const step = executeContinuedCombatRound(game, rng)
   if (step.errors.length) {
     return { errors: step.errors, combatResult: step.combatResult }
   }
@@ -1854,7 +1867,7 @@ function finishContinueAfterBothSidesReady(
       completedRoundNumber: step.completedRoundNumber,
       trigger,
       continuation,
-      combatOptions: combatOptions ?? step.combatOptions,
+      combatOptions: step.combatOptions,
       shipsDestroyedInCombat: step.shipsDestroyedInCombat,
       damageByShipId: step.damageByShipId,
       seedCombatResult: step.combatResult,
@@ -1985,6 +1998,10 @@ export function setupCombatPrepForMovement(
     attackerMovementPlans: moves,
   })
   if (!preview) return ['Не удалось подготовить бой']
+  const siegeAvailable = canBesiegeCell(game, playerId, combatCoord)
+  const assaultBlocked = isBattleUnresolvable(preview)
+  // Штурм невозможен, а осадить нельзя — вход на клетку не состоится.
+  if (assaultBlocked && !siegeAvailable) return [UNRESOLVABLE_BATTLE_MSG]
 
   game.pendingCombat = {
     cellKey: hexKey(combatCoord.q, combatCoord.r),
@@ -2002,7 +2019,8 @@ export function setupCombatPrepForMovement(
       movementFrom: from,
       movementPlans: moves.map((m) => ({ ...m, to: { ...m.to } })),
       incomingAttackerShipIds: [...incomingShipIds],
-      ...(canBesiegeCell(game, playerId, combatCoord) ? { siegeAvailable: true } : {}),
+      ...(siegeAvailable ? { siegeAvailable: true } : {}),
+      ...(assaultBlocked ? { assaultBlocked: true } : {}),
     },
   }
   pushCombatEvent(game, `Подготовка к бою на (${combatCoord.q},${combatCoord.r})`)
@@ -2023,6 +2041,7 @@ export function setupCombatPrepForAssault(
   if (!attackers.length) return ['На клетке нет ваших кораблей']
   const preview = buildCombatPreview(game, coord, playerId, attackers)
   if (!preview) return ['На клетке нет противника']
+  if (isBattleUnresolvable(preview)) return [UNRESOLVABLE_BATTLE_MSG]
 
   game.pendingCombat = {
     cellKey: hexKey(coord.q, coord.r),
@@ -2109,6 +2128,7 @@ export function updateCombatPrep(
   ready: boolean,
   targetPriority?: string[],
   supportSide?: CombatRole | null,
+  diceTargets?: unknown,
 ): { errors: string[] } {
   const pending = game.pendingCombat
   const prep = combatPrepOf(pending)
@@ -2162,6 +2182,13 @@ export function updateCombatPrep(
     if (prep.phase === 'countdown') {
       return { errors: ['Обратный отсчёт уже идёт — отмените готовность, чтобы изменить поддержку'] }
     }
+    if (diceTargets != null && prep.combatOptions.supportSides?.[playerId]) {
+      const withSide = buildCombatPreviewFromPending(game)
+      const errors = withSide
+        ? mergePlayerDiceTargets(prep, withSide, playerId, diceTargets, {})
+        : ['Не удалось проверить цели']
+      if (errors.length) return { errors }
+    }
     prep.readyBy[playerId] = ready
     if (!ready) delete prep.readyBy[playerId]
     const attackerReady = isCombatPrepSideReady(game, pending.attackerId, prep.readyBy)
@@ -2189,11 +2216,20 @@ export function updateCombatPrep(
     prep.combatOptions[side] = prevSideOptions
   }
 
-  if (prep.phase === 'countdown' && ready && targetPriority) {
-    return { errors: ['Обратный отсчёт уже идёт — отмените готовность, чтобы изменить порядок целей'] }
+  if (prep.phase === 'countdown' && ready && (targetPriority || diceTargets != null)) {
+    return { errors: ['Обратный отсчёт уже идёт — отмените готовность, чтобы изменить цели'] }
   }
 
   mergeSideTargetPriority(side, prep.combatOptions, targetPriority)
+  if (diceTargets != null) {
+    const errors = preview
+      ? mergePlayerDiceTargets(prep, preview, playerId, diceTargets, {})
+      : ['Не удалось проверить цели']
+    if (errors.length) {
+      restore()
+      return { errors }
+    }
+  }
 
   if (targetPriority) {
     const priorityErrors = validatePendingCombatPrepOptions(game)
@@ -2211,6 +2247,11 @@ export function updateCombatPrep(
   }
   if (prep.phase === 'countdown') {
     return { errors: [] }
+  }
+
+  if (ready && isAttacker && prep.assaultBlocked) {
+    restore()
+    return { errors: [UNRESOLVABLE_BATTLE_MSG] }
   }
 
   if (ready) {

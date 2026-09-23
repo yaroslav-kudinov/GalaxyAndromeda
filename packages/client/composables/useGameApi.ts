@@ -329,10 +329,12 @@ export async function updateCombatPrepAction(
   playerId: string,
   ready: boolean,
   targetPriority?: string[],
+  diceTargets?: Record<string, string[]>,
 ): Promise<GameObservation> {
   return submitGameAction(roomId, playerId, 'update-combat-prep', {
     ready,
     ...(targetPriority ? { targetPriority } : {}),
+    ...(diceTargets ? { diceTargets } : {}),
   })
 }
 

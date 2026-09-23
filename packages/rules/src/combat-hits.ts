@@ -39,10 +39,11 @@ export const SHIP_HULL: Record<ShipType, number> = {
 }
 
 /**
- * Гиперорудие на клетке своего владельца уязвимо: прочность 1. Это цель для рейда — вблизи оно
- * ещё и не стреляет вовсе, из-за минимальной дальности.
+ * Гиперорудие в бою на своей клетке уязвимо: прочность 1. Это цель для рейда — вблизи оно ещё и
+ * не стреляет вовсе, из-за минимальной дальности. Под обстрелом с расстояния держит два
+ * попадания, как в таблице.
  */
-export const HYPER_HULL_ON_OWN_CELL = 1
+export const HYPER_HULL_IN_BATTLE = 1
 
 /** Минимальная дальность стрельбы. Только у гиперорудия: по соседям оно не бьёт. */
 export const SHIP_MIN_FIRE_RANGE: Partial<Record<ShipType, number>> = {
@@ -111,15 +112,11 @@ export function hitProbability(threshold: number | null): number {
 }
 
 /**
- * Прочность корабля в конкретном бою. `battleCellOwnerId` — владелец клетки, где идёт бой:
- * гиперорудие на своей клетке теряет прочность.
+ * Прочность корабля в бою на его клетке: гиперорудие держит одно попадание. Под обстрелом
+ * действует обычная прочность — `SHIP_HULL`.
  */
-export function shipHullInBattle(
-  type: ShipType,
-  ownerId: string,
-  battleCellOwnerId: string | null | undefined,
-): number {
-  if (type === 'hyper' && battleCellOwnerId === ownerId) return HYPER_HULL_ON_OWN_CELL
+export function shipHullInBattle(type: ShipType): number {
+  if (type === 'hyper') return HYPER_HULL_IN_BATTLE
   return SHIP_HULL[type] ?? 1
 }
 

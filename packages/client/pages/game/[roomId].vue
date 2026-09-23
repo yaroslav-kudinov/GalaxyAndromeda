@@ -36,7 +36,9 @@ import {
   shouldConfirmPlanningPhaseAdvance,
   MAX_LOBBY_PLAYERS,
   actionMarkerLimitForPlayer,
+  autoDiceTargetsFor,
   buildCombatPreviewFromPending,
+  combatSupportersAwaited,
   combatPrepOf,
   combatResolutionFingerprint,
   combatResolutionFromPending,
@@ -648,11 +650,47 @@ const combatPrepDefenderReady = computed(() => {
   return prep.readyBy[prep.defenderId] === true
 })
 
+/** Превью текущего боя по доске — для выбора целей перед раундом. */
+const pendingCombatPreview = computed(() =>
+  snapshot.value && pendingCombatState.value ? buildCombatPreviewFromPending(snapshot.value) : null,
+)
+
 const combatDecisionRole = computed(() => {
   const me = snapshot.value?.players.find((p) => p.id === playerId.value)
+  const supporterAwaited = !!snapshot.value
+    && combatSupportersAwaited(snapshot.value, pendingCombatPreview.value).includes(playerId.value)
   return combatContinueDecisionRole(pendingCombatState.value, playerId.value, {
     eliminated: me?.eliminated === true,
+    supporterAwaited,
   })
+})
+
+/**
+ * Цели на следующий раунд. Раунд начинается с предложения игры; игрок правит его, пока не
+ * нажмёт «Огонь». Новый раунд — новое предложение: урон изменился.
+ */
+const roundTargets = ref<Record<string, string[]>>({})
+watch(
+  () => {
+    const pending = pendingCombatState.value
+    return pending?.phase === 'awaiting-continue' ? `${pending.cellKey}:${pending.roundNumber}` : null
+  },
+  (key) => {
+    const preview = pendingCombatPreview.value
+    roundTargets.value = key && preview
+      ? autoDiceTargetsFor(preview, playerId.value, pendingCombatState.value?.damageByShipId ?? {})
+      : {}
+  },
+  { immediate: true },
+)
+
+/** Противник игрока в текущем бою — чьи корабли служат целями. */
+const combatEnemyId = computed(() => {
+  const preview = pendingCombatPreview.value
+  if (!preview) return null
+  const onAttackerSide = preview.attackerId === playerId.value
+    || preview.attacker.supportingShips.some((ship) => ship.ownerId === playerId.value)
+  return onAttackerSide ? preview.defenderId : preview.attackerId
 })
 
 const currentCombatRollsKey = computed(() => combatResultRollsKey(battleResolution.value))
@@ -1712,12 +1750,18 @@ async function submitCombatPrepReady(combatOptions: CombatOptions) {
     if (!prep || !pending) return
 
     const isAttacker = pending.attackerId === playerId.value
-    const targetPriority = isAttacker
-      ? combatOptions.attacker?.targetPriority
-      : combatOptions.defender?.targetPriority
+    const sideOptions = isAttacker ? combatOptions.attacker : combatOptions.defender
+    const targetPriority = sideOptions?.targetPriority
+    const diceTargets = sideOptions?.diceTargets
 
     bumpObservationEpoch()
-    const obs = await updateCombatPrepAction(roomId.value, playerId.value, true, targetPriority)
+    const obs = await updateCombatPrepAction(
+      roomId.value,
+      playerId.value,
+      true,
+      targetPriority,
+      diceTargets,
+    )
     applyObservation(obs)
     persistLocal()
     markerActionHint.value = 'Готовность отправлена'
@@ -1752,7 +1796,7 @@ async function submitCombatSupportSide(side: 'attacker' | 'defender' | null) {
   try {
     bumpObservationEpoch()
     const obs = await submitGameAction(roomId.value, playerId.value, 'update-combat-prep', {
-      ready: true,
+      ready: side == null,
       supportSide: side,
     })
     applyObservation(obs)
@@ -1760,7 +1804,7 @@ async function submitCombatSupportSide(side: 'attacker' | 'defender' | null) {
     markerActionHint.value =
       side == null
         ? 'Вы не поддерживаете никого — готовность подтверждена'
-        : 'Поддержка выбрана — готовность подтверждена'
+        : 'Сторона выбрана — назначьте цели и подтвердите готовность'
   } catch (e) {
     markerActionHint.value = actionErrorMessage(e, 'Не удалось выбрать поддержку')
   } finally {
@@ -1888,6 +1932,23 @@ async function cancelCombatPrepAction() {
   }
 }
 
+/** Поддерживающий подтвердил сторону и цели первого раунда. */
+async function submitSupportReady(diceTargets: Record<string, string[]>) {
+  if (battleResolving.value) return
+  battleResolving.value = true
+  try {
+    bumpObservationEpoch()
+    const obs = await updateCombatPrepAction(roomId.value, playerId.value, true, undefined, diceTargets)
+    applyObservation(obs)
+    persistLocal()
+    markerActionHint.value = 'Готовность подтверждена'
+  } catch (e) {
+    markerActionHint.value = actionErrorMessage(e, 'Не удалось подтвердить готовность')
+  } finally {
+    battleResolving.value = false
+  }
+}
+
 async function continuePendingCombatAction() {
   const role = combatDecisionRole.value
   if (!pendingCombatState.value || !role) return
@@ -1895,7 +1956,9 @@ async function continuePendingCombatAction() {
   const prevResultKey = battleResolutionKey.value
   bumpObservationEpoch()
   try {
-    const obs = await submitGameAction(roomId.value, playerId.value, 'continue-combat')
+    const obs = await submitGameAction(roomId.value, playerId.value, 'continue-combat', {
+      diceTargets: roundTargets.value,
+    })
     applyObservation(obs)
     persistLocal()
     // Новый раунд / конец боя — показать актуальный lastCombatResult (не старый флот).
@@ -1911,11 +1974,9 @@ async function continuePendingCombatAction() {
         dismissedCombatRollsKey.value = null
       }
     }
-    markerActionHint.value = role === 'attacker'
-      ? 'Вы продолжили бой — ждём решения защитника'
-      : (combatPhase.value === 'awaiting-continue'
-        ? 'Бой продолжен'
-        : 'Бой завершён')
+    markerActionHint.value = combatPhase.value === 'awaiting-continue'
+      ? 'Цели выбраны — ждём остальных участников боя'
+      : 'Бой завершён'
   } catch (e) {
     markerActionHint.value = actionErrorMessage(e, 'Не удалось продолжить бой')
   }
@@ -3001,12 +3062,13 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
       class="map-pick-banner map-pick-banner--combat"
       role="status"
     >
-      <p class="map-pick-text">
+      <p v-if="combatDecisionRole === 'support'" class="map-pick-text">
+        {{ ui.combatTargets.supportBanner(pendingCombatState.roundNumber) }}
+      </p>
+      <p v-else class="map-pick-text">
         Бой на ({{ pendingCombatState.cellKey }}) — раунд {{ pendingCombatState.roundNumber }}.
         <template v-if="!combatRetreatAllowed">
-          Пока в этом бою никто не уничтожен — отступление недоступно, бой продолжается.
-          <template v-if="combatDecisionRole === 'attacker'">Подтвердите продолжение.</template>
-          <template v-else>Атакующий продолжил — подтвердите продолжение как защитник.</template>
+          Пока в этом бою никто не уничтожен — отступление недоступно. Выберите цели на раунд.
         </template>
         <template v-else-if="combatDecisionRole === 'attacker'">
           Ваш ход как атакующего: продолжить сражение или отступить на подсвеченную клетку.
@@ -3015,15 +3077,26 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
           Атакующий продолжил бой — ваш ход как защитника: продолжить или отступить на подсвеченную клетку.
         </template>
       </p>
-      <p v-if="combatRetreatAllowed" class="map-pick-text map-pick-text--hint">
+      <CombatTargetsPanel
+        v-if="pendingCombatPreview"
+        v-model="roundTargets"
+        class="map-pick-targets"
+        :preview="pendingCombatPreview"
+        :player-id="playerId"
+        :player-color="sidePanelPlayerColor(playerId)"
+        :enemy-color="sidePanelPlayerColor(combatEnemyId ?? '')"
+        :round-number="pendingCombatState.roundNumber"
+        :damage-by-ship-id="pendingCombatState.damageByShipId ?? {}"
+      />
+      <p v-if="combatRetreatAllowed && combatDecisionRole !== 'support'" class="map-pick-text map-pick-text--hint">
         Клетки отступления подсвечены на карте. Можно нажать на клетку или на кнопку ниже;
         наведение на кнопку подсвечивает клетку ярче.
       </p>
       <div class="map-pick-actions">
         <button type="button" class="map-pick-primary" @click="continuePendingCombatAction">
-          Продолжить бой
+          {{ ui.combatTargets.fire }}
         </button>
-        <template v-if="combatRetreatAllowed">
+        <template v-if="combatRetreatAllowed && combatDecisionRole !== 'support'">
           <span v-if="!retreatDestinations.length" class="map-pick-error">
             Нет доступной соседней клетки для отступления.
           </span>
@@ -3087,6 +3160,11 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
       :retreat-destinations="retreatDestinations"
       :siege-available="battleSiegeAvailable"
       :siege-response="combatPrepState?.siegeResponse === true"
+      :assault-blocked="combatPrepState?.assaultBlocked === true"
+      :support-side="combatPrepState?.combatOptions.supportSides?.[playerId] ?? null"
+      :round-targets="roundTargets"
+      @update:round-targets="roundTargets = $event"
+      @support-ready="submitSupportReady"
       @establish-siege="establishSiegeAction"
       @close="closeBattleModal"
       @resolve="resolveBattleWithOptions"
@@ -3697,6 +3775,11 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
 }
 .map-pick-banner--combat {
   border-color: rgba(248, 113, 113, 0.6);
+}
+.map-pick-banner--combat .map-pick-targets {
+  margin: 0.4rem 0;
+  max-height: 45vh;
+  overflow-y: auto;
 }
 .board-layer {
   position: absolute;

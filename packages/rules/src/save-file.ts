@@ -128,11 +128,19 @@ export interface PendingCombatPrep extends PendingCombatBase {
   prep: CombatPrepState
 }
 
-/** Стороны решают, продолжать бой или отступать */
+/**
+ * Перед каждым раундом, кроме первого: стороны выбирают цели и решают, продолжать ли бой.
+ * Первый раунд готовится в фазе `prep`.
+ */
 export interface PendingCombatAwaitingContinue extends PendingCombatBase {
   phase: 'awaiting-continue'
-  /** Решения продолжать бой; сначала атакующий, затем защитник. */
+  /**
+   * Решения продолжать бой. Пока в бою никто не уничтожен, отступать нельзя и стороны
+   * подтверждают цели в любом порядке; после первого уничтожения сначала решает атакующий.
+   */
   continueDecisions: Partial<Record<'attacker' | 'defender', boolean>>
+  /** Третьи игроки, чьи корабли поддерживают бой, подтвердили цели на этот раунд. */
+  supportReady?: Record<string, boolean>
 }
 
 /**
@@ -219,6 +227,7 @@ export function clonePendingCombat(pending: PendingCombat | undefined): PendingC
         ...base,
         phase: 'awaiting-continue',
         continueDecisions: { ...pending.continueDecisions },
+        ...(pending.supportReady ? { supportReady: { ...pending.supportReady } } : {}),
       }
   }
 }
