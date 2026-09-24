@@ -35,6 +35,12 @@ const DEFAULT_PAUSE_MS = 600
 /** Бот ничего не может сделать, а партия стоит: пора аварийно сдвинуть её. */
 const STALL_MS = 15_000
 
+/**
+ * Сколько боты ждут, пока человек закроет итог своего боя. Дольше не ждём: окно могло и не
+ * открыться (перезагрузка страницы), а партия стоять не должна.
+ */
+export const COMBAT_RESULT_HOLD_MS = 60_000
+
 /** Отказы движка подряд, после которых бот ждёт перемен в партии, а не долбит одно и то же. */
 const MAX_REJECTS = 3
 
@@ -115,6 +121,12 @@ export function stepLobbyBots(room: Room, apply: ApplyBotAction, now = Date.now(
   if (!roomHasLobbyBots(room) || room.status !== 'playing' || room.state.gameOver) return 'idle'
   const runtime = runtimeOf(room, now)
   if (now < runtime.nextAt) return 'waiting'
+  // Человек смотрит итог своего боя: новый бой бота подменил бы его на экране.
+  const hold = room.combatResultHold
+  if (hold) {
+    if (now - hold.since < COMBAT_RESULT_HOLD_MS) return 'waiting'
+    room.combatResultHold = undefined
+  }
 
   if (runtime.turn !== room.state.turnNumber) {
     runtime.turn = room.state.turnNumber

@@ -367,3 +367,46 @@ export function validateGarrisonDeparture(
   }
   return []
 }
+
+/** Центр власти, который перейдёт к другому игроку в начале следующего хода. */
+export interface PowerCenterCaptureAhead {
+  coord: HexCoord
+  /** Кто забирает. */
+  capturerId: string
+  /** У кого забирают; `null` — нейтральный центр. */
+  ownerId: string | null
+  /**
+   * `siege` — у осаждённого гарнизона остался последний корабль, тик осады его снимет.
+   * `claim` — на центре только корабли захватчика: займёт его захватом, в счёт лимита.
+   */
+  by: 'siege' | 'claim'
+}
+
+/**
+ * Какие центры власти сменят хозяина в начале следующего хода, если до конца хода на них ничего
+ * не изменится. Для подсветки на карте: партия решается центрами, и потерю центра игрок должен
+ * видеть заранее.
+ */
+export function powerCentersCapturedNextTurn(game: GameSnapshot): PowerCenterCaptureAhead[] {
+  const ahead: PowerCenterCaptureAhead[] = []
+  for (const cell of game.cells) {
+    if (!cell.isPowerCenter) continue
+    const key = keyOf(cell.coord)
+    const siege = game.sieges?.[key]
+    if (siege) {
+      const garrison = cell.ships.filter((ship) => ship.ownerId === siege.besiegedId)
+      if (garrison.length <= 1) {
+        ahead.push({ coord: { ...cell.coord }, capturerId: siege.besiegerId, ownerId: siege.besiegedId, by: 'siege' })
+      }
+      continue
+    }
+    const owners = new Set(cell.ships.map((ship) => ship.ownerId))
+    if (owners.size !== 1) continue
+    const [capturerId] = [...owners]
+    if (!capturerId || cell.controlOwnerId === capturerId) continue
+    // Выбор клеток этого хода ещё идёт — центр решается сейчас, а не на следующий ход.
+    if ((game.claimPicksRemainingByPlayer?.[capturerId] ?? 0) > 0) continue
+    ahead.push({ coord: { ...cell.coord }, capturerId, ownerId: cell.controlOwnerId ?? null, by: 'claim' })
+  }
+  return ahead
+}

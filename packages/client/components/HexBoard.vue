@@ -38,6 +38,8 @@ const props = withDefaults(
     tokenPickKeys?: string[]
     /** Клетки, чья фишка уже выбрана для оплаты */
     tokenPickedKeys?: string[]
+    /** Центры власти, которые перейдут к другому игроку в начале следующего хода: цвет захватчика и пояснение */
+    captureAhead?: Record<string, { color: string; note: string }>
     myTerritoryKeys?: string[]
     /** Слоты игроков (1–6), чьи территории не рисуем на карте */
     hideTerritoryPlayers?: number[]
@@ -102,6 +104,7 @@ const props = withDefaults(
     supplyChainKeys: () => [],
     tokenPickKeys: () => [],
     tokenPickedKeys: () => [],
+    captureAhead: () => ({}),
     myTerritoryKeys: () => [],
     hideTerritoryPlayers: () => [],
     movementSourceKey: null,
@@ -1159,6 +1162,14 @@ function onPointerCancel(e: PointerEvent) {
           pointer-events="none"
         />
 
+        <polygon
+          v-if="props.captureAhead[hexKey(cell.q, cell.r)]"
+          :points="insetHexPoints(cell.q, cell.r, 0.9)"
+          class="hex-capture-ahead"
+          :stroke="props.captureAhead[hexKey(cell.q, cell.r)]?.color"
+          pointer-events="none"
+        />
+
         <HexCellOverview
           :cell="cell"
           :cx="center(cell.q, cell.r).x"
@@ -1277,6 +1288,7 @@ function onPointerCancel(e: PointerEvent) {
         :cell="hoverTooltipCell"
         :region-info="hoverTooltipRegionInfo"
         :players="players"
+        :capture-note="props.captureAhead[hexKey(hoverTooltipCell.q, hoverTooltipCell.r)]?.note ?? null"
         :x="hoverTooltipPos.x"
         :y="hoverTooltipPos.y"
       />
@@ -1498,6 +1510,25 @@ function onPointerCancel(e: PointerEvent) {
   stroke-width: 3.2;
   filter: drop-shadow(0 0 7px rgba(56, 189, 248, 0.85));
   animation: tutorial-outline-pulse 1.15s ease-in-out infinite;
+}
+/* Центр власти сменит хозяина в начале следующего хода: бегущий пунктир цвета захватчика. */
+.hex-capture-ahead {
+  fill: none;
+  stroke-width: 3;
+  stroke-dasharray: 7 5;
+  stroke-linejoin: round;
+  animation: capture-ahead-march 1.4s linear infinite;
+  filter: drop-shadow(0 0 3px rgba(15, 23, 42, 0.9));
+}
+@keyframes capture-ahead-march {
+  to {
+    stroke-dashoffset: -24;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .hex-capture-ahead {
+    animation: none;
+  }
 }
 .hex.token-pick {
   stroke: #facc15;

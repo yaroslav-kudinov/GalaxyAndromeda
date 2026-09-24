@@ -75,7 +75,8 @@ const faceDownTokens = computed(() => {
   return out.sort((a, b) => b.value - a.value)
 })
 const rechargeNeed = computed(() => Math.min(rechargeOwed.value, faceDownTokens.value.length))
-const rechargeSelected = ref<string[]>([])
+/** Выбранные фишки перезарядки — у страницы, чтобы их можно было отмечать и на карте. */
+const rechargeSelected = defineModel<string[]>('rechargeSelected', { default: () => [] })
 
 const siegeCells = computed(() => siegeLossesOwedBy(props.snapshot, props.playerId))
 const garrisonOf = (key: string): ShipUnit[] =>

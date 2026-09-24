@@ -462,7 +462,18 @@ export function runGame(map: MapDefinition, seed: number, options: RunOptions): 
           }
         }
       }
-      // Вскрытие доктрин сразу считает захват — он может принести победу.
+      // Захват и перезарядка у всех сразу: центры власти хода считаются после захватов всех.
+      if (game.phase === 'planning') {
+        for (const playerId of playerIds) {
+          if (claimPicksRemaining(game, playerId) > 0) {
+            applyGameActionOnSnapshot(game, map, playerId, 'execute-claim-picks')
+          }
+          if (rechargePicksRemaining(game, playerId) > 0) {
+            applyGameActionOnSnapshot(game, map, playerId, 'execute-recharge-picks')
+          }
+        }
+      }
+      // Вскрытие доктрин и захват могут принести победу.
       if (game.gameOver) continue
 
       let progressed = false

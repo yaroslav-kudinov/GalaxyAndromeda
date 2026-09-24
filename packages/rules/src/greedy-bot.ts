@@ -534,6 +534,12 @@ export function greedyBotStep(
         act(game, map, playerId, 'choose-doctrine', { doctrineId: pickDoctrine(game, playerId) })
       }
     }
+    // Захват и перезарядка — тоже сразу, не дожидаясь очереди: пока бот не выбрал клетки,
+    // центры власти хода не подсчитаны и победа ни у кого не проверяется.
+    for (const playerId of botIds) {
+      if (claimPicksRemaining(game, playerId) > 0) act(game, map, playerId, 'execute-claim-picks')
+      if (rechargePicksRemaining(game, playerId) > 0) act(game, map, playerId, 'execute-recharge-picks')
+    }
   }
   // Вскрытие доктрин сразу считает захват — он может принести победу.
   if (game.gameOver) return
