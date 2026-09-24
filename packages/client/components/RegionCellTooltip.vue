@@ -14,6 +14,8 @@ const props = defineProps<{
   players?: PlayerState[]
   /** Центр власти сменит хозяина в начале следующего хода — почему и к кому. */
   captureNote?: string | null
+  /** Клетка в осаде — кто осаждает и что будет с гарнизоном. */
+  siegeNote?: string | null
   x: number
   y: number
 }>()
@@ -53,6 +55,10 @@ const regionOwnerName = computed(() => {
       <li v-if="cell.isPowerCenter" class="token-row token-row--power">
         <span class="token-icon" aria-hidden="true">♛</span>
         <span>Центр власти</span>
+      </li>
+      <li v-if="siegeNote" class="token-row token-row--siege">
+        <span class="token-icon" aria-hidden="true">⚔</span>
+        <span>{{ siegeNote }}</span>
       </li>
       <li v-if="cell.isPowerCenter && captureNote" class="token-row token-row--capture">
         <span class="token-icon" aria-hidden="true">⚑</span>
@@ -206,6 +212,10 @@ const regionOwnerName = computed(() => {
 }
 .token-row--power {
   color: #fde68a;
+}
+.token-row--siege {
+  color: #fdba74;
+  font-weight: 600;
 }
 .token-row--capture {
   color: #fca5a5;

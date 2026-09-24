@@ -40,6 +40,8 @@ const props = withDefaults(
     tokenPickedKeys?: string[]
     /** Центры власти, которые перейдут к другому игроку в начале следующего хода: цвет захватчика и пояснение */
     captureAhead?: Record<string, { color: string; note: string }>
+    /** Осаждённые клетки: цвет осаждающего и пояснение для подсказки. */
+    siegeMarks?: Record<string, { color: string; note: string }>
     myTerritoryKeys?: string[]
     /** Слоты игроков (1–6), чьи территории не рисуем на карте */
     hideTerritoryPlayers?: number[]
@@ -105,6 +107,7 @@ const props = withDefaults(
     tokenPickKeys: () => [],
     tokenPickedKeys: () => [],
     captureAhead: () => ({}),
+    siegeMarks: () => ({}),
     myTerritoryKeys: () => [],
     hideTerritoryPlayers: () => [],
     movementSourceKey: null,
@@ -1162,6 +1165,25 @@ function onPointerCancel(e: PointerEvent) {
           pointer-events="none"
         />
 
+        <template v-if="props.siegeMarks[hexKey(cell.q, cell.r)]">
+          <!-- Осада: «зубчатое» кольцо и значок цвета осаждающего. Неподвижно, в отличие от
+               бегущего пунктира «перейдёт на следующий ход». -->
+          <polygon
+            :points="insetHexPoints(cell.q, cell.r, 0.97)"
+            class="hex-siege-ring"
+            :stroke="props.siegeMarks[hexKey(cell.q, cell.r)]?.color"
+            pointer-events="none"
+          />
+          <g
+            class="hex-siege-badge"
+            :transform="`translate(${center(cell.q, cell.r).x - size * 0.42}, ${center(cell.q, cell.r).y - size * 0.6})`"
+            pointer-events="none"
+          >
+            <circle r="7.5" :stroke="props.siegeMarks[hexKey(cell.q, cell.r)]?.color" />
+            <path d="M-4,-4 L4,4 M4,-4 L-4,4 M-4.8,1.4 L-1.4,4.8 M4.8,1.4 L1.4,4.8" />
+          </g>
+        </template>
+
         <polygon
           v-if="props.captureAhead[hexKey(cell.q, cell.r)]"
           :points="insetHexPoints(cell.q, cell.r, 0.9)"
@@ -1289,6 +1311,7 @@ function onPointerCancel(e: PointerEvent) {
         :region-info="hoverTooltipRegionInfo"
         :players="players"
         :capture-note="props.captureAhead[hexKey(hoverTooltipCell.q, hoverTooltipCell.r)]?.note ?? null"
+        :siege-note="props.siegeMarks[hexKey(hoverTooltipCell.q, hoverTooltipCell.r)]?.note ?? null"
         :x="hoverTooltipPos.x"
         :y="hoverTooltipPos.y"
       />
@@ -1510,6 +1533,24 @@ function onPointerCancel(e: PointerEvent) {
   stroke-width: 3.2;
   filter: drop-shadow(0 0 7px rgba(56, 189, 248, 0.85));
   animation: tutorial-outline-pulse 1.15s ease-in-out infinite;
+}
+/* Осада: неподвижное «зубчатое» кольцо и значок со скрещёнными клинками цвета осаждающего. */
+.hex-siege-ring {
+  fill: none;
+  stroke-width: 4.5;
+  stroke-dasharray: 5 3.5;
+  stroke-linecap: butt;
+  filter: drop-shadow(0 0 3px rgba(15, 23, 42, 0.95));
+}
+.hex-siege-badge circle {
+  fill: #0f172a;
+  stroke-width: 2;
+}
+.hex-siege-badge path {
+  fill: none;
+  stroke: #f8fafc;
+  stroke-width: 1.6;
+  stroke-linecap: round;
 }
 /* Центр власти сменит хозяина в начале следующего хода: бегущий пунктир цвета захватчика. */
 .hex-capture-ahead {

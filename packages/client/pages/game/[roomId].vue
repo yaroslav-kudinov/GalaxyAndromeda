@@ -1230,6 +1230,26 @@ const boardCaptureAhead = computed(() => {
   return out
 })
 
+/** Осаждённые клетки: зубчатое кольцо цвета осаждающего и пояснение в подсказке. */
+const boardSiegeMarks = computed(() => {
+  const game = snapshot.value
+  const out: Record<string, { color: string; note: string }> = {}
+  if (!game || game.gameOver) return out
+  for (const [key, siege] of Object.entries(game.sieges ?? {})) {
+    const cell = game.cells.find((candidate) => hexKey(candidate.coord.q, candidate.coord.r) === key)
+    const garrison = cell?.ships.filter((ship) => ship.ownerId === siege.besiegedId).length ?? 0
+    out[key] = {
+      color: playerColorById.value[siege.besiegerId] ?? '#f97316',
+      note: ui.siegeMark.note(
+        playerNameById.value[siege.besiegerId] ?? siege.besiegerId,
+        playerNameById.value[siege.besiegedId] ?? siege.besiegedId,
+        garrison,
+      ),
+    }
+  }
+  return out
+})
+
 function sidePanelPlayerColor(ownerId: string): string {
   return playerColorById.value[ownerId] ?? '#64748b'
 }
@@ -3161,6 +3181,7 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
         :token-pick-keys="boardTokenPickKeys"
         :token-picked-keys="boardTokenPickedKeys"
         :capture-ahead="boardCaptureAhead"
+        :siege-marks="boardSiegeMarks"
         :players="snapshot?.players ?? []"
         :snapshot="snapshot"
         :map-id="mapDefinition?.id ?? null"
