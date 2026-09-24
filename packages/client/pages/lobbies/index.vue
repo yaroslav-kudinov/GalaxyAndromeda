@@ -69,6 +69,7 @@ function slotsForLobby(lobby: LobbyListEntry): LobbyPlayerSlot[] {
     color: p.color,
     joined: p.joined,
     active: p.active,
+    bot: p.bot,
     isYou: claim?.playerId === p.id,
   }))
 }

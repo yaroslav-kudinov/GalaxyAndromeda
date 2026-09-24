@@ -13,11 +13,17 @@ HTTP base: `http://127.0.0.1:3001` (env `GAME_SERVER_URL` for MCP).
 | POST | `/rooms/:id/rejoin` | Body: `{ playerId, playerName?, preferredPlayerId? }` → смена слота в лобби или возврат в свой слот |
 | POST | `/rooms/:id/start` | Body: `{ playerId }` — хост начинает партию (`playing`) |
 | POST | `/rooms/:id/close` | Body: `{ playerId }` — хост закрывает комнату подготовки (до старта) |
-| GET | `/rooms/:id/bootstrap` | Карта, слоты, `status`, `hostPlayerId`, `joinedPlayerIds` |
+| POST | `/rooms/:id/bots` | Body: `{ playerId, preferredPlayerId? }` → `{ ok, botPlayerId }`. Хост сажает бота на свободное место (выбранное или первое); только пока `lobby`, не в обучении |
+| POST | `/rooms/:id/bots/remove` | Body: `{ playerId, botPlayerId }` → `{ ok, botPlayerId }`. Хост освобождает место бота; только пока `lobby` |
+| GET | `/rooms/:id/bootstrap` | Карта, слоты (`players[].bot`), `status`, `hostPlayerId`, `joinedPlayerIds`, `botPlayerIds` |
 | GET | `/rooms/:id/state?playerId=` | `GameObservation` |
 | GET | `/rooms/:id/legal-actions?playerId=` | `LegalAction[]` |
-| POST | `/rooms/:id/action` | Body: `{ playerId, action: { actionId, params? } }` |
+| POST | `/rooms/:id/action` | Body: `{ playerId, action: { actionId, params? } }`. От имени места бота — отказ: за бота ходит сервер |
 | GET | `/rooms/:id/events` | Last 20 `GameEvent` |
+
+### Боты в лобби
+
+Место бота — обычный участник партии (`players[].isAi: true`, в `GET /lobbies` и `bootstrap` — `bot: true`). За него ходит сервер: жадный бот из `@galaxy/rules` (`planGreedyBotAction`, тот же, что в замерах баланса) делает одно действие за шаг с паузой, чтобы люди видели ход. Боты отвечают в бою за себя и ждут решений людей; ходят, пока в комнате есть хотя бы один человек онлайн (presence). Если партия стоит дольше 15 секунд и дело не в человеке — бой одних ботов снимается, ход бота передаётся. Обучение этим механизмом не пользуется: там соперников задаёт сценарий.
 
 ### Combat actions
 

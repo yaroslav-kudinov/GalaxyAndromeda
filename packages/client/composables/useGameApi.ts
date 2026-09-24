@@ -106,8 +106,10 @@ export interface RoomBootstrap {
   status?: 'lobby' | 'playing'
   hostPlayerId?: string | null
   joinedPlayerIds: string[]
+  /** Места, за которые ходит сервер. */
+  botPlayerIds?: string[]
   availablePlayerIds?: string[]
-  players: { id: string; name: string; color: string; joined?: boolean }[]
+  players: { id: string; name: string; color: string; joined?: boolean; bot?: boolean }[]
 }
 
 export interface JoinResult {
@@ -121,6 +123,7 @@ export interface LobbyPlayerEntry {
   color: string
   joined: boolean
   active: boolean
+  bot?: boolean
 }
 
 export interface LobbyListEntry {
@@ -251,6 +254,30 @@ export async function startRoom(roomId: string, playerId: string): Promise<{ ok:
   return apiFetch(`/rooms/${roomId}/start`, {
     method: 'POST',
     body: JSON.stringify({ playerId }),
+  })
+}
+
+/** Хозяин лобби сажает бота на свободное место. */
+export async function addRoomBot(
+  roomId: string,
+  playerId: string,
+  preferredPlayerId?: string,
+): Promise<{ ok: true; botPlayerId: string }> {
+  return apiFetch(`/rooms/${roomId}/bots`, {
+    method: 'POST',
+    body: JSON.stringify({ playerId, preferredPlayerId }),
+  })
+}
+
+/** Хозяин лобби освобождает место бота. */
+export async function removeRoomBot(
+  roomId: string,
+  playerId: string,
+  botPlayerId: string,
+): Promise<{ ok: true; botPlayerId: string }> {
+  return apiFetch(`/rooms/${roomId}/bots/remove`, {
+    method: 'POST',
+    body: JSON.stringify({ playerId, botPlayerId }),
   })
 }
 

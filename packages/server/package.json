@@ -7,7 +7,7 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
-    "test": "tsx --test src/room-chat.test.ts",
+    "test": "tsx --test src/room-chat.test.ts src/lobby-bots.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

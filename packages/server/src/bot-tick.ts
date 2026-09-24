@@ -21,7 +21,7 @@ const OUT_OF_TURN_BOT_ACTIONS = new Set([
   'stop-combat',
 ])
 
-export function tutorialBotIds(room: Room): string[] {
+export function roomBotIds(room: Room): string[] {
   if (room.botPlayerIds?.length) return room.botPlayerIds
   return room.botPlayerId ? [room.botPlayerId] : []
 }
@@ -36,7 +36,7 @@ export function runBotTicksForRoom(
   room: Room,
   applyBotAction: (room: Room, botId: string, actionId: string, params?: Record<string, unknown>) => void,
 ): void {
-  const botIds = tutorialBotIds(room)
+  const botIds = roomBotIds(room)
   if (!botIds.length || room.mode !== 'tutorial') return
   let ticks = 0
 

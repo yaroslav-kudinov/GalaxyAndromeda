@@ -84,9 +84,10 @@ import {
   manualAdvanceScenarioStep,
   runBotTicksForRoom,
   scenarioObservationExtras,
-  tutorialBotIds,
+  roomBotIds,
   tutorialShouldHoldActionTurnForCombatResult,
 } from './bot-tick.js'
+import { LOBBY_BOT_NAMES, LOBBY_BOT_TICK_MS, roomHasLobbyBots, stepLobbyBots } from './lobby-bots.js'
 import { clientIp } from './catalog.js'
 import { canCreateRoom, trackRoomCreate } from './security.js'
 
@@ -133,7 +134,10 @@ export interface Room {
   /** Слот бота в tutorial-режиме */
   botPlayerId?: string
 
-  /** Все управляемые сценарием слоты; botPlayerId оставлен для старых комнат. */
+  /**
+   * Места, за которые ходит сервер: в обучении их задаёт сценарий, в обычной комнате —
+   * хозяин лобби. botPlayerId оставлен для старых комнат.
+   */
   botPlayerIds?: string[]
 
   /** Время создания комнаты (ISO) */
@@ -329,12 +333,14 @@ function isPlayerActive(roomId: string, playerId: string, now = Date.now()): boo
 export function listLobbies(now = Date.now()) {
   return [...rooms.values()].map((room) => {
     ensureRoomParticipatingSynced(room)
+    const bots = roomBotIds(room)
     const slots = room.state.players.slice(0, room.maxPlayers).map((p) => ({
       id: p.id,
       name: p.name,
       color: p.color,
       joined: room.playerIds.includes(p.id),
       active: isPlayerActive(room.id, p.id, now),
+      bot: bots.includes(p.id),
     }))
     return {
       roomId: room.id,
@@ -442,7 +448,7 @@ function roomObservation(
   let legal = room.status === 'playing'
     ? getLegalActionsForSnapshot(room.state, room.map.id, playerId)
     : []
-  if (room.mode === 'tutorial' && !tutorialBotIds(room).includes(playerId) && room.scenarioId) {
+  if (room.mode === 'tutorial' && !roomBotIds(room).includes(playerId) && room.scenarioId) {
     const script = loadScenarioScriptById(room.scenarioId)
     if (script) {
       legal = filterScenarioLegalActions(
@@ -653,19 +659,117 @@ function assignPlayerToSlot(room: Room, playerId: string, playerName: string): b
   if (!existing) return false
 
   const name = sanitizePlayerName(playerName, existing.name)
+  const isBot = roomBotIds(room).includes(playerId)
   existing.name = name
-  existing.isAi = tutorialBotIds(room).includes(playerId)
+  existing.isAi = isBot
 
   if (!room.playerIds.includes(playerId)) {
     room.playerIds.push(playerId)
   }
-  if (!room.hostPlayerId) room.hostPlayerId = playerId
+  // Бот не хозяин комнаты и онлайн не бывает.
+  if (!room.hostPlayerId && !isBot) room.hostPlayerId = playerId
   if (!room.state.activePlayerId) room.state.activePlayerId = playerId
 
   syncParticipatingPlayerIds(room.state, room.playerIds)
-  touchPresence(room.id, playerId, name)
+  if (!isBot) touchPresence(room.id, playerId, name)
   scheduleRoomPersist(room)
   return true
+}
+
+export type LobbyBotResult = { ok: true; room: Room; botPlayerId: string } | { ok: false; error: string }
+
+function lobbyBotHostError(room: Room | undefined, playerId: string): string | null {
+  if (!room) return 'Комната не найдена'
+  if (room.mode === 'tutorial') return 'В обучении соперников задаёт сценарий'
+  if (room.status !== 'lobby') return 'Ботов можно менять только до начала игры'
+  if (!room.playerIds.includes(playerId)) return 'Игрок не зарегистрирован в комнате'
+  if (room.hostPlayerId !== playerId) return 'Ботов сажает только создатель комнаты'
+  return null
+}
+
+/** Хозяин лобби сажает бота на свободное место (выбранное или первое по порядку). */
+export function addLobbyBot(
+  roomId: string,
+  playerId: string,
+  preferredPlayerId?: string,
+): LobbyBotResult {
+  const room = rooms.get(roomId)
+  const error = lobbyBotHostError(room, playerId)
+  if (error || !room) return { ok: false, error: error ?? 'Комната не найдена' }
+
+  const resolved = resolveJoinPlayerId(room.playerIds, room.maxPlayers, preferredPlayerId)
+  if (!resolved.ok) return { ok: false, error: resolved.error }
+
+  const bots = roomBotIds(room)
+  const usedNames = new Set(
+    room.state.players.filter((p) => bots.includes(p.id)).map((p) => p.name),
+  )
+  const name = LOBBY_BOT_NAMES.find((candidate) => !usedNames.has(candidate))
+    ?? `Бот ${bots.length + 1}`
+  room.botPlayerIds = [...bots, resolved.playerId]
+  if (!assignPlayerToSlot(room, resolved.playerId, name)) {
+    room.botPlayerIds = bots
+    return { ok: false, error: 'Слот не найден' }
+  }
+  debugLog('room.bot-add', { roomId, playerId: resolved.playerId, name })
+  return { ok: true, room, botPlayerId: resolved.playerId }
+}
+
+/** Хозяин лобби освобождает место бота. */
+export function removeLobbyBot(
+  roomId: string,
+  playerId: string,
+  botPlayerId: string,
+): LobbyBotResult {
+  const room = rooms.get(roomId)
+  const error = lobbyBotHostError(room, playerId)
+  if (error || !room) return { ok: false, error: error ?? 'Комната не найдена' }
+  if (!roomBotIds(room).includes(botPlayerId)) return { ok: false, error: 'На этом месте не бот' }
+
+  room.botPlayerIds = roomBotIds(room).filter((id) => id !== botPlayerId)
+  room.playerIds = room.playerIds.filter((id) => id !== botPlayerId)
+  const player = room.state.players.find((p) => p.id === botPlayerId)
+  if (player) {
+    player.isAi = false
+    const seat = /^player-(\d+)$/.exec(botPlayerId)
+    player.name = seat ? `Игрок ${seat[1]}` : botPlayerId
+  }
+  syncParticipatingPlayerIds(room.state, room.playerIds)
+  scheduleRoomPersist(room)
+  debugLog('room.bot-remove', { roomId, playerId: botPlayerId })
+  return { ok: true, room, botPlayerId }
+}
+
+let lobbyBotTimer: NodeJS.Timeout | null = null
+
+/** Боты ходят, пока в комнате есть человек онлайн: брошенная партия ждёт людей. */
+function hasActiveHuman(room: Room, now: number): boolean {
+  const bots = roomBotIds(room)
+  return room.playerIds.some((id) => !bots.includes(id) && isPlayerActive(room.id, id, now))
+}
+
+/** Один проход по комнатам с ботами: отсчёт подготовки боя и не больше одного действия бота. */
+export function tickLobbyBots(now = Date.now()): void {
+  for (const room of rooms.values()) {
+    if (!roomHasLobbyBots(room) || room.status !== 'playing' || room.state.gameOver) continue
+    if (!hasActiveHuman(room, now)) continue
+    const advanced = maybeAdvanceCombatPrep(room)
+    if (advanced.changed) bumpObservationRevision(room, 'combat-countdown')
+    stepLobbyBots(room, applyBotActionInternal, now)
+  }
+}
+
+/** Фоновый ход ботов обычных комнат; безопасен при повторном вызове. */
+export function startLobbyBotLoop(): void {
+  if (lobbyBotTimer) return
+  lobbyBotTimer = setInterval(() => {
+    try {
+      tickLobbyBots()
+    } catch (error) {
+      console.error('@galaxy/server lobby bots tick failed', error)
+    }
+  }, LOBBY_BOT_TICK_MS)
+  lobbyBotTimer.unref?.()
 }
 
 export function joinRoom(
@@ -716,6 +820,9 @@ export function rejoinRoom(
   const room = rooms.get(roomId)
   if (!room) {
     return { ok: false, error: 'Комната не найдена', availablePlayerIds: [] }
+  }
+  if (roomBotIds(room).includes(playerId)) {
+    return { ok: false, error: 'За это место играет бот', availablePlayerIds: [] }
   }
 
   const resolved = resolveRejoinPlayerId(
@@ -879,6 +986,9 @@ export function submitAction(
 
   ensureRoomParticipatingSynced(room)
   assertRoomMember(room, playerId)
+  if (roomBotIds(room).includes(playerId)) {
+    throw new Error('За это место играет бот')
+  }
 
   if (room.status !== 'playing') {
     throw new Error('Игра ещё не начата — дождитесь старта в комнате подготовки')
@@ -891,7 +1001,7 @@ export function submitAction(
   if (
     room.mode === 'tutorial'
     && room.scenarioId
-    && !tutorialBotIds(room).includes(playerId)
+    && !roomBotIds(room).includes(playerId)
   ) {
     const script = loadScenarioScriptById(room.scenarioId)
     const tutorialError = script
@@ -958,7 +1068,7 @@ export function submitAction(
 
   maybeScheduleVictoryRoomClose(room)
 
-  if (room.mode === 'tutorial' && !tutorialBotIds(room).includes(playerId)) {
+  if (room.mode === 'tutorial' && !roomBotIds(room).includes(playerId)) {
     advanceTutorialScenario(room, action, playerId)
     maybeAutoAdvanceTutorialActionTurn(room)
     runBotTicksForRoom(room, applyBotActionInternal)
@@ -976,7 +1086,7 @@ function maybeAutoAdvanceTutorialActionTurn(room: Room): boolean {
     || room.state.pendingCombat
     || !room.state.actionMarkerResolvedThisTurn
     || !activePlayerId
-    || tutorialBotIds(room).includes(activePlayerId)
+    || roomBotIds(room).includes(activePlayerId)
     || tutorialShouldHoldActionTurnForCombatResult(room)
   ) return false
   try {
@@ -1047,6 +1157,7 @@ export function closeRoom(roomId: string, playerId: string): RoomCloseResult {
 
 export function registerHttpRoutes(app: FastifyInstance): void {
   startEmptyLobbyJanitor()
+  startLobbyBotLoop()
 
   app.addHook('onResponse', async (req, reply) => {
     if (reply.statusCode >= 400) {
@@ -1257,6 +1368,30 @@ export function registerHttpRoutes(app: FastifyInstance): void {
     },
   )
 
+  app.post<{
+    Params: { id: string }
+    Body: { playerId: string; preferredPlayerId?: string }
+  }>(
+    '/rooms/:id/bots',
+    async (req, reply) => {
+      const result = addLobbyBot(req.params.id, req.body.playerId, req.body.preferredPlayerId)
+      if (!result.ok) return reply.status(400).send({ error: result.error })
+      return { ok: true, botPlayerId: result.botPlayerId }
+    },
+  )
+
+  app.post<{
+    Params: { id: string }
+    Body: { playerId: string; botPlayerId: string }
+  }>(
+    '/rooms/:id/bots/remove',
+    async (req, reply) => {
+      const result = removeLobbyBot(req.params.id, req.body.playerId, req.body.botPlayerId)
+      if (!result.ok) return reply.status(400).send({ error: result.error })
+      return { ok: true, botPlayerId: result.botPlayerId }
+    },
+  )
+
 
 
   app.get<{ Params: { id: string } }>('/rooms/:id/bootstrap', async (req, reply) => {
@@ -1276,11 +1411,13 @@ export function registerHttpRoutes(app: FastifyInstance): void {
       status: room.status,
       hostPlayerId: room.hostPlayerId,
       joinedPlayerIds: [...room.playerIds],
+      botPlayerIds: [...roomBotIds(room)],
       players: room.state.players.slice(0, room.maxPlayers).map((p) => ({
         id: p.id,
         name: p.name,
         color: p.color,
         joined: room.playerIds.includes(p.id),
+        bot: roomBotIds(room).includes(p.id),
       })),
       availablePlayerIds: freeLobbyPlayerIds(room.playerIds, room.maxPlayers),
     }

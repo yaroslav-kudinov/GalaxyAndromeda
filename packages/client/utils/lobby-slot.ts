@@ -17,6 +17,7 @@ export function bootstrapToLobbySlots(bootstrap: RoomBootstrap) {
     name: p.name,
     color: p.color,
     joined: p.joined ?? bootstrap.joinedPlayerIds.includes(p.id),
+    bot: p.bot ?? bootstrap.botPlayerIds?.includes(p.id) ?? false,
   }))
 }
 
