@@ -1076,8 +1076,26 @@ function dispatchGameAction(
   if (game.gameOver) return { errors: ['Игра завершена'] }
 
   if (actionId === 'surrender') {
+    const pending = game.pendingCombat
+    const continuation = pending?.continuation
+    const combatKey = pending?.cellKey
+    const attackerId = pending?.attackerId
     const errors = surrenderPlayer(game, map.id, playerId)
-    if (!errors.length) syncEliminatedCombatAutomation(game)
+    if (errors.length) return { errors }
+    // Сдавшийся не решит судьбу осады — решение снимается, партия не ждёт его.
+    if (game.siegeContinuationChoice?.playerId === playerId) delete game.siegeContinuationChoice
+    const { combatResult } = syncEliminatedCombatAutomation(game)
+    // Бой, доигранный за сдавшегося, мог кончиться — отложенное движение дожимается, как обычно.
+    if (!game.pendingCombat && pending && continuation && combatKey && attackerId) {
+      finishPendingMovementPlans(
+        game,
+        attackerId,
+        continuation.movementFrom,
+        continuation.movementPlans,
+        combatResult ?? null,
+        combatKey,
+      )
+    }
     return { errors }
   }
 
