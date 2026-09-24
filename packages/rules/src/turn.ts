@@ -1,4 +1,4 @@
-import { autoResolveAllClaimPicks, claimPicksRemaining, maybeApplyTurnEndClaims } from './claim.js'
+import { applyTurnEndClaims, autoResolveAllClaimPicks, claimPicksRemaining } from './claim.js'
 import { trimGameEventLog } from './event-log.js'
 import {
   autoResolveDoctrines,
@@ -12,12 +12,11 @@ import {
 } from './markers.js'
 import {
   autoResolveAllRechargePicks,
-  grantRechargeBudgetFor,
   refreshRechargeBudgets,
   rechargePicksRemaining,
 } from './resource-recharge.js'
 import { applySiegeTick, autoResolveAllSiegeLosses, siegeLossesOwedBy } from './siege.js'
-import { applyVictoryAndDefeatChecks } from './victory.js'
+import { applyVictoryAndDefeatChecks, isTurnLimitReached } from './victory.js'
 import type { GameSnapshot } from './save-file.js'
 import { gameStateFromSnapshot } from './save-file.js'
 import type { GameState, Phase, PlayerState } from './types.js'
@@ -204,12 +203,11 @@ function applyTurnState(game: GameSnapshot, state: GameState, prevPhase: Phase, 
   game.activePlayerId = state.activePlayerId
   game.eventLog = state.eventLog
   syncActionMarkerTurnTracking(game, prevPhase, prevActivePlayerId)
-  maybeApplyTurnEndClaims(game, prevPhase, state.mapId)
   // Выход из планирования: несделанный выбор не должен подвешивать партию.
-  // Захват первым: от него зависит число центров власти, а значит и бюджет.
+  // Порядок тот же, что у игрока: осада, доктрины, захват, перезарядка.
   if (prevPhase === 'planning' && game.phase !== 'planning') {
     autoResolveAllSiegeLosses(game)
-    grantBudgetsAfterDoctrines(game, autoResolveDoctrines(game))
+    settleAfterDoctrines(game, state.mapId, autoResolveDoctrines(game))
     autoResolveAllClaimPicks(game, state.mapId)
     autoResolveAllRechargePicks(game)
   }
@@ -288,7 +286,7 @@ function skipPlayersWithoutPhaseActions(
   const errors = advanceGamePhase(state, game.participatingPlayerIds)
   if (errors.length) return errors
   applyTurnState(game, state, prevPhase, prevActivePlayerId)
-  if (game.phase === 'planning' && prevPhase !== 'planning') beginTurnPlanning(game)
+  if (game.phase === 'planning' && prevPhase !== 'planning') beginTurnPlanning(game, mapId)
   applyVictoryAndDefeatChecks(game, mapId)
   return []
 }
@@ -407,14 +405,18 @@ export function advanceGamePhase(
 }
 
 /**
- * Выдать бюджет перезарядки тем, чьи доктрины только что вступили в силу, — кроме тех, у
- * кого ещё не закрыт выбор клеток: их бюджет выдаётся в момент закрытия этого выбора.
+ * Захват и бюджет перезарядки на этот ход. Оба зависят от доктрины: «Экспансия» прибавляет
+ * клетку захвата, «Производство» — фишки. Захват первым: он меняет число центров власти, а
+ * с ним и бюджет, поэтому бюджет тому, кто выбирает клетки, выдаётся после выбора.
  */
-export function grantBudgetsAfterDoctrines(game: GameSnapshot, revealed: readonly string[]): void {
-  for (const playerId of revealed) {
-    if (claimPicksRemaining(game, playerId) > 0) continue
-    grantRechargeBudgetFor(game, playerId)
-  }
+export function settleTurnClaimsAndBudgets(game: GameSnapshot, mapId: string): void {
+  applyTurnEndClaims(game, mapId)
+  refreshRechargeBudgets(game, (playerId) => claimPicksRemaining(game, playerId) > 0)
+}
+
+/** Доктрины вскрыты — лимит захвата и бюджет теперь известны. */
+export function settleAfterDoctrines(game: GameSnapshot, mapId: string, revealed: readonly string[]): void {
+  if (revealed.length) settleTurnClaimsAndBudgets(game, mapId)
 }
 
 /**
@@ -423,17 +425,22 @@ export function grantBudgetsAfterDoctrines(game: GameSnapshot, revealed: readonl
  * 1. маркеры действия — на новый ход;
  * 2. тик осады — гибель последнего корабля гарнизона меняет число центров власти;
  * 3. окно доктрин — доктрина действует с начала хода, в котором выбрана;
- * 4. бюджет перезарядки — зависит и от центров власти, и от доктрины, поэтому ждёт, пока
- *    доктрины вскроют и закроется выбор клеток.
+ * 4. захват клеток за прошлый ход, затем бюджет перезарядки. Оба зависят от доктрины,
+ *    поэтому в первый ход окна ждут, пока доктрины вскроют (`settleAfterDoctrines`).
+ *
+ * Игрок решает в том же порядке — см. `planningStepFor`.
  */
-export function beginTurnPlanning(game: GameSnapshot): void {
+export function beginTurnPlanning(game: GameSnapshot, mapId: string): void {
   refreshActionMarkerCapacity(game)
   applySiegeTick(game)
-  openDoctrineWindowIfDue(game)
-  refreshRechargeBudgets(
-    game,
-    (playerId) => claimPicksRemaining(game, playerId) > 0 || !!game.doctrineChoice,
-  )
+  // Ход сверх лимита не играется — партию сейчас решит лимит, новое окно доктрин ни к чему.
+  const lastTurnPlayed = isTurnLimitReached(game)
+  if (!lastTurnPlayed) openDoctrineWindowIfDue(game)
+  game.claimPicksRemainingByPlayer = {}
+  game.rechargePicksRemainingByPlayer = {}
+  if (!game.doctrineChoice) settleTurnClaimsAndBudgets(game, mapId)
+  // Выбирать клетки уже некому, а захват последнего хода должен войти в итог.
+  if (lastTurnPlayed) autoResolveAllClaimPicks(game, mapId)
 }
 
 /**
@@ -448,7 +455,7 @@ export function leaveLegacyEventsPhase(game: GameSnapshot, mapId: string): strin
   const errors = advanceGamePhase(state, game.participatingPlayerIds)
   if (errors.length) return errors
   applyTurnState(game, state, prevPhase, prevActivePlayerId)
-  beginTurnPlanning(game)
+  beginTurnPlanning(game, mapId)
   return []
 }
 
@@ -472,7 +479,7 @@ export function advanceGameSnapshot(game: GameSnapshot, mapId: string): string[]
   if (errors.length) return errors
 
   applyTurnState(game, state, prevPhase, prevActivePlayerId)
-  if (game.phase === 'planning' && prevPhase !== 'planning') beginTurnPlanning(game)
+  if (game.phase === 'planning' && prevPhase !== 'planning') beginTurnPlanning(game, mapId)
   applyVictoryAndDefeatChecks(game, mapId)
   return game.phase === prevPhase ? skipPlayersWithoutPhaseActions(game, mapId) : []
 }

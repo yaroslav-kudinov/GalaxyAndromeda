@@ -250,8 +250,32 @@ function findShip(m, shipId) {
   return null
 }
 
+/**
+ * Решения начала хода — строго по порядку: доктрина (все разом), затем у каждого клетки
+ * захвата и фишки перезарядки. Без них маркеры не ставятся и ход не передаётся.
+ */
+async function settlePlanningDecisions(ctx) {
+  const m = mech(await getState(ctx.roomId, ctx.players[0]))
+  if (m.phase !== 'planning') return
+  if (m.doctrineChoice) {
+    for (const playerId of ctx.players) {
+      if (m.doctrineChoice.pickedBy?.includes(playerId)) continue
+      await act(ctx.roomId, playerId, 'choose-doctrine', { doctrineId: 'none' })
+    }
+  }
+  const settled = mech(await getState(ctx.roomId, ctx.players[0]))
+  for (const playerId of ctx.players) {
+    if (settled.claimPicksRemainingByPlayer?.[playerId]) await act(ctx.roomId, playerId, 'execute-claim-picks')
+  }
+  const recharged = mech(await getState(ctx.roomId, ctx.players[0]))
+  for (const playerId of ctx.players) {
+    if (recharged.rechargePicksRemainingByPlayer?.[playerId]) await act(ctx.roomId, playerId, 'execute-recharge-picks')
+  }
+}
+
 /** Планирование: маркер действия атакующему, затем передача хода до фазы «Действия». */
 async function reachAttackerTurnInActions(ctx, attackerId, markerCoord) {
+  await settlePlanningDecisions(ctx)
   let guard = 16
   while (guard-- > 0) {
     const m = mech(await getState(ctx.roomId, ctx.players[0]))

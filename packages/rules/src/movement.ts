@@ -71,7 +71,8 @@ import {
   effectiveMoveRange,
 } from './doctrines.js'
 import { getShipMoveRange } from './ships.js'
-import { advanceGameSnapshot, grantBudgetsAfterDoctrines, leaveLegacyEventsPhase } from './turn.js'
+import { advanceGameSnapshot, leaveLegacyEventsPhase, settleAfterDoctrines } from './turn.js'
+import { planningOrderError, planningStepFor } from './planning-order.js'
 import type { HexCoord, LegalAction, MapDefinition, ShipType, ShipUnit } from './types.js'
 import { hexKey } from './types.js'
 import { getLegalActions } from './game.js'
@@ -89,7 +90,6 @@ import {
   establishSiegeRecord,
   executeSiegeLosses,
   siegeLossesOwedBy,
-  SIEGE_LOSS_ERRORS,
   SIEGE_CONTINUATION_ERRORS,
   openSiegeContinuationChoice,
   resolveSiegeContinuation,
@@ -464,6 +464,14 @@ function finishPendingMovementPlans(
     if (combatKey && moveKey === combatKey && combatResult && !combatResult.attackerWon) {
       continue
     }
+    // Пока шёл бой, в клетку назначения могли прийти чужие корабли (защитник отступил туда,
+    // куда летели другие корабли маркера). Второго боя маркер не даёт — корабль остаётся на месте.
+    // В клетку боя входят после победы или при установке осады — это решил вызывающий.
+    const decidedByCombat = moveKey === combatKey && !!combatResult?.attackerWon
+    if (!decidedByCombat && isCombatDestination(game, playerId, move.to)) {
+      summaries.push(`клетка (${move.to.q},${move.to.r}) занята чужими кораблями — корабль остался на месте`)
+      continue
+    }
 
     const shipInfo = findShipOnBoard(game, move.shipId)
     if (!shipInfo) continue
@@ -616,6 +624,14 @@ export function executeMarkerMovement(
   for (const move of moves) {
     const moveKey = hexKey(move.to.q, move.to.r)
     if (combatKey && moveKey === combatKey && combatResult && !combatResult.attackerWon) {
+      continue
+    }
+    // Пока шёл бой, в клетку назначения могли прийти чужие корабли (защитник отступил туда,
+    // куда летели другие корабли маркера). Второго боя маркер не даёт — корабль остаётся на месте.
+    // В клетку боя входят после победы или при установке осады — это решил вызывающий.
+    const decidedByCombat = moveKey === combatKey && !!combatResult?.attackerWon
+    if (!decidedByCombat && isCombatDestination(game, playerId, move.to)) {
+      summaries.push(`клетка (${move.to.q},${move.to.r}) занята чужими кораблями — корабль остался на месте`)
       continue
     }
 
@@ -896,6 +912,12 @@ export function getLegalActionsForSnapshot(
     })
   }
 
+  // Пока не приняты решения начала хода, передача хода не предлагается.
+  if (planningStepFor(game, playerId) !== 'markers') {
+    const advance = actions.findIndex((action) => action.id === 'advance-phase')
+    if (advance >= 0) actions.splice(advance, 1)
+  }
+
   const me = game.players.find((p) => p.id === playerId)
   if (!game.gameOver && me && !me.eliminated) {
     actions.push({
@@ -1152,9 +1174,12 @@ function dispatchGameAction(
   // Боевые решения может делать участник боя (победитель / attacker / defender),
   // а не только activePlayer текущей фазы.
   // Доктрину выбирают все одновременно, не дожидаясь своей очереди.
+  // Решения начала хода — строго по порядку: осада, доктрина, захват, перезарядка, маркеры.
+  const orderError = planningOrderError(game, playerId, actionId)
+  if (orderError) return { errors: [orderError] }
   if (actionId === 'choose-doctrine') {
     const { errors, revealed } = chooseDoctrine(game, playerId, params?.doctrineId)
-    if (!errors.length) grantBudgetsAfterDoctrines(game, revealed)
+    if (!errors.length) settleAfterDoctrines(game, map.id, revealed)
     return { errors }
   }
   const isCombatDecisionAction =
@@ -1271,10 +1296,8 @@ function dispatchGameAction(
   }
 
   if (actionId === 'advance-phase') {
-    // Потерю в осаде выбирает сам осаждённый — без выбора ход не передаётся.
-    if (game.phase === 'planning' && siegeLossesOwedBy(game, playerId).length > 0) {
-      return { errors: [SIEGE_LOSS_ERRORS.chooseFirst] }
-    }
+    // Долги планирования — потери в осаде, доктрина, захват, перезарядка — закрыты выше:
+    // без них ход не передаётся (`planningOrderError`).
     return { errors: advanceGameSnapshot(game, map.id) }
   }
 

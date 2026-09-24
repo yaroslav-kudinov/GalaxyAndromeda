@@ -1002,6 +1002,52 @@ describe('продолжение и отступление', () => {
     expect(cellAt(game, 1, 0).ships.some((s) => s.id === 'att-dd')).toBe(true)
     expect(retreatCell.ships.some((s) => s.id === 'def-dd')).toBe(true)
   })
+
+  /** Маркер атакующего ведёт один корабль в бой, другой — на соседнюю с боем пустую клетку. */
+  function splitMarkerBattle() {
+    const { map, game } = duelBoard([{ q: 0, r: 1 }, { q: 1, r: -1 }])
+    addShip(game, 0, 0, 'player-1', 'destroyer', 'att')
+    addShip(game, 0, 0, 'player-1', 'destroyer', 'att-side')
+    addShip(game, 1, 0, 'player-2', 'destroyer', 'def')
+    setupPendingCombat(
+      game,
+      { q: 1, r: 0 },
+      'player-1',
+      2,
+      'movement',
+      {
+        movementFrom: { q: 0, r: 0 },
+        movementPlans: [
+          { shipId: 'att', to: { q: 1, r: 0 } },
+          { shipId: 'att-side', to: { q: 1, r: -1 } },
+        ],
+        incomingAttackerShipIds: ['att'],
+      },
+      { shipsDestroyedInCombat: true },
+    )
+    expect(continuePendingCombat(game, 'player-1').errors).toEqual([])
+    return { map, game }
+  }
+
+  it('защитник не отступает туда, куда тем же маркером летят корабли атакующего', () => {
+    const { map, game } = splitMarkerBattle()
+    expect(getCombatRetreatDestinations(game, 'player-2')).toEqual([{ q: 0, r: 1 }])
+    expect(
+      applyGameActionOnSnapshot(game, map, 'player-2', 'stop-combat', { retreatTo: { q: 1, r: -1 } }).errors[0],
+    ).toMatch(/Нельзя отступить/)
+  })
+
+  it('после боя корабль маркера не садится в клетку, где за время боя оказались чужие корабли', () => {
+    const { map, game } = splitMarkerBattle()
+    // Чужой корабль появился на клетке назначения, пока шёл бой.
+    addShip(game, 1, -1, 'player-2', 'destroyer', 'late')
+    expect(
+      applyGameActionOnSnapshot(game, map, 'player-2', 'stop-combat', { retreatTo: { q: 0, r: 1 } }).errors,
+    ).toEqual([])
+    expect(cellAt(game, 1, 0).ships.map((s) => s.id)).toEqual(['att'])
+    expect(cellAt(game, 1, -1).ships.map((s) => s.id)).toEqual(['late'])
+    expect(cellAt(game, 0, 0).ships.map((s) => s.id)).toEqual(['att-side'])
+  })
 })
 
 describe('итог боя на доске', () => {

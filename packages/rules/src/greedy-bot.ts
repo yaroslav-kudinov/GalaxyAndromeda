@@ -525,13 +525,18 @@ export function greedyBotStep(
     stepCombat(game, map)
     return
   }
-  if (game.phase === 'planning' && game.doctrineChoice) {
+  if (game.phase === 'planning') {
+    // Потери в осаде и доктрина — вне очереди и раньше всего: доктрины вскрываются, когда
+    // выбрали все, а до своих потерь в осаде игрок доктрину не выбирает (`planningStepFor`).
     for (const playerId of botIds) {
+      if (siegeLossesOwedBy(game, playerId).length > 0) act(game, map, playerId, 'execute-siege-losses')
       if (doctrineChoiceOwed(game, playerId)) {
         act(game, map, playerId, 'choose-doctrine', { doctrineId: pickDoctrine(game, playerId) })
       }
     }
   }
+  // Вскрытие доктрин сразу считает захват — он может принести победу.
+  if (game.gameOver) return
   const active = game.activePlayerId
   if (!active || !botIds.has(active)) return
   let progressed = false

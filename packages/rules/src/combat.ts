@@ -1735,10 +1735,17 @@ export function getCombatRetreatDestinations(
   if (!isAttacker && !isDefender) return []
   if (isDefender && pending.continueDecisions?.attacker !== true) return []
 
+  // Защитник не уходит туда, куда тем же маркером летят другие корабли атакующего: после боя
+  // они сели бы к нему без боя.
+  const attackerHeading = isDefender
+    ? new Set((pending.continuation?.movementPlans ?? []).map((move) => hexKey(move.to.q, move.to.r)))
+    : new Set<string>()
+
   return game.cells
     .filter((cell) =>
       hexDistance(battleCoord, cell.coord) === 1
-      && !cell.ships.some((ship) => ship.ownerId !== playerId),
+      && !cell.ships.some((ship) => ship.ownerId !== playerId)
+      && !attackerHeading.has(hexKey(cell.coord.q, cell.coord.r)),
     )
     .map((cell) => ({ ...cell.coord }))
 }

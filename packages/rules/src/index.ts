@@ -45,3 +45,4 @@ export {
 } from './marker-pools.js'
 export * from './combat-targets.js'
 export * from './greedy-bot.js'
+export * from './planning-order.js'
