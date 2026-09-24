@@ -4,6 +4,7 @@
  * итоги шагов совпадают с тем, что о них говорит текст.
  *
  * Usage: node harness/scripts/simulate-tutorial.mjs  (GAME_SERVER_URL, по умолчанию :3001)
+ *        SIM_STOP_AT=<id шага> — остановиться на шаге, не закрывая долги, и оставить комнату
  */
 
 const API = (process.env.GAME_SERVER_URL ?? 'http://127.0.0.1:3001').replace(/\/$/, '')
@@ -58,6 +59,7 @@ async function main() {
 
   const seen = []
   let waits = 0
+  let debtsSettled = 0
   for (let guard = 0; guard < 400; guard++) {
     const obs = await api(`/rooms/${roomId}/state?playerId=${playerId}`)
     const mech = obs.mechanics
@@ -67,6 +69,17 @@ async function main() {
       seen.push(step.id)
       console.log(`  шаг ${step.stepNumber}/${step.stepCount} ${step.id}${step.manual ? ' (Далее)' : ''}`)
       checkStepOutcome(step.id, mech, playerId)
+    }
+    // SIM_STOP_AT=<id шага> — остановиться на шаге и оставить комнату для проверки глазами.
+    if (process.env.SIM_STOP_AT === step.id) {
+      console.log(`STOP: комната ${roomId}, ученик ${playerId}, шаг ${step.id}`)
+      return
+    }
+    // Клиент не передаёт ход, пока не закрыты долги планирования, — ученик закрывает их сам,
+    // явным выбором, на любом шаге. Отказ сервера здесь — тот самый тупик обучения.
+    if (await settlePlanningDebts(roomId, mech, playerId)) {
+      debtsSettled += 1
+      continue
     }
     if (step.manual) {
       if (step.id === 'complete') break
@@ -90,7 +103,54 @@ async function main() {
   }
 
   if (seen.at(-1) !== 'complete') fail(`обучение остановилось на шаге ${seen.at(-1)}`)
-  console.log(`PASS: пройдено шагов ${seen.length}, итоги шагов сходятся с текстом`)
+  console.log(
+    `PASS: пройдено шагов ${seen.length}, итоги шагов сходятся с текстом; `
+      + `решений планирования принято: ${debtsSettled}`,
+  )
+}
+
+/**
+ * Долг планирования — выбрать явно: клетки захвата (первые по списку) или фишки перезарядки
+ * (самые крупные). Возвращает true, если что-то отправлено.
+ */
+async function settlePlanningDebts(roomId, mech, playerId) {
+  if (mech.phase !== 'planning') return false
+  const claims = mech.claimPicksRemainingByPlayer?.[playerId] ?? 0
+  if (claims > 0) {
+    const candidates = mech.cells.filter(
+      (c) => c.controlOwnerId !== playerId
+        && c.ships.some((s) => s.ownerId === playerId)
+        && !c.ships.some((s) => s.ownerId !== playerId),
+    )
+    await api(`/rooms/${roomId}/action`, {
+      method: 'POST',
+      body: JSON.stringify({
+        playerId,
+        action: { actionId: 'execute-claim-picks', params: { picks: candidates.slice(0, claims).map((c) => c.coord) } },
+      }),
+    })
+    return true
+  }
+  const recharge = mech.rechargePicksRemainingByPlayer?.[playerId] ?? 0
+  if (recharge > 0) {
+    const faceDown = mech.cells
+      .filter((c) => c.controlOwnerId === playerId)
+      .flatMap((c) => c.resourceTokens.map((t, tokenIndex) => ({ coord: c.coord, tokenIndex, t })))
+      .filter((entry) => entry.t.faceUp === false)
+      .sort((a, b) => b.t.value - a.t.value)
+    await api(`/rooms/${roomId}/action`, {
+      method: 'POST',
+      body: JSON.stringify({
+        playerId,
+        action: {
+          actionId: 'execute-recharge-picks',
+          params: { picks: faceDown.slice(0, recharge).map(({ coord, tokenIndex }) => ({ coord, tokenIndex })) },
+        },
+      }),
+    })
+    return true
+  }
+  return false
 }
 
 /** Текст шага утверждает, что произошло, — сверяем с доской. */

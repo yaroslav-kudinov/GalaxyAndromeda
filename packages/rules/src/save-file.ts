@@ -508,6 +508,11 @@ export function parseGalaxySave(raw: unknown): GalaxySaveFile {
     return normalizeGalaxySave(raw)
   }
   if (isRecord(raw) && raw.format === GALAXY_SAVE_FORMAT) {
+    // Сохранение старой версии без партии — это просто карта (так их пишет редактор):
+    // карта от смены правил не устаревает.
+    if (raw.game == null && isRecord(raw.map) && isLegacyMapDefinition(raw.map)) {
+      return galaxySaveFromMap(normalizeMapDefinition(raw.map as MapDefinition))
+    }
     throw new Error(
       `Сохранение версии ${String(raw.version)} не поддерживается: правила игры изменились, `
         + `нужна версия ${GALAXY_SAVE_VERSION}. Старую партию продолжить нельзя, начните новую. `

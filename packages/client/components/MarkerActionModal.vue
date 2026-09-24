@@ -11,6 +11,8 @@ import type {
 import {
   SHIP_LABELS,
   autoAllocateTokens,
+  buildCombatPreview,
+  isBattleUnresolvable,
   canBuildShipInRegionSize,
   getBombardableShipsAtMarker,
   getBuildableShipsForMarker,
@@ -93,10 +95,11 @@ const sharedCellEnemy = computed(() => {
     (c) => c.coord.q === props.source.q && c.coord.r === props.source.r,
   )
   if (!cell) return false
-  return (
-    cell.ships.some((ship) => ship.ownerId === props.playerId)
-    && cell.ships.some((ship) => ship.ownerId !== props.playerId)
-  )
+  const own = cell.ships.filter((ship) => ship.ownerId === props.playerId)
+  if (!own.length || !cell.ships.some((ship) => ship.ownerId !== props.playerId)) return false
+  // Бой, в котором никто не может стрелять, сервер не начнёт — не предлагаем его.
+  const preview = buildCombatPreview(props.snapshot, props.source, props.playerId, own)
+  return !!preview && !isBattleUnresolvable(preview)
 })
 
 /** Клик по фону закрывает окно, но не после перетаскивания за шапку */

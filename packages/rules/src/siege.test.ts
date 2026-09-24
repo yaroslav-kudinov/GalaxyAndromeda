@@ -377,6 +377,13 @@ describe('осада: действия сторон', () => {
     expect(round?.shipRolls.flatMap((log) => log.dice).filter((die) => die.rerolls?.length)).toHaveLength(2)
   })
 
+  it('перебросы: сдавшийся осаждённый бой не подвешивает — остаток доигрывает игра', () => {
+    const { map, game } = sortieWithMisses()
+    expect(game.pendingCombat?.phase).toBe('awaiting-rerolls')
+    expect(applyGameActionOnSnapshot(game, map, 'player-2', 'surrender').errors).toEqual([])
+    expect(game.pendingCombat?.phase).not.toBe('awaiting-rerolls')
+  })
+
   it('перебросы: можно закончить досрочно или отдать остаток игре', () => {
     const burned = sortieWithMisses()
     expect(applyGameActionOnSnapshot(burned.game, burned.map, 'player-2', 'finish-combat-rerolls').errors).toEqual([])
@@ -492,6 +499,13 @@ describe('осада: третий игрок', () => {
     expect(siegeAt(game, { q: 1, r: 0 })).toEqual({ besiegerId: 'player-3', besiegedId: 'player-2', sinceTurn: game.turnNumber })
     expect(game.pendingCombat?.attackerId).toBe('player-2')
     expect(combatPrepOf(game.pendingCombat)?.siegeResponse).toBe(true)
+  })
+
+  it('сдавшийся победитель судьбу осады не решает — партия его не ждёт', () => {
+    const { map, game } = thirdPartyWon()
+    expect(game.siegeContinuationChoice?.playerId).toBe('player-3')
+    expect(applyGameActionOnSnapshot(game, map, 'player-3', 'surrender').errors).toEqual([])
+    expect(game.siegeContinuationChoice).toBeUndefined()
   })
 
   it('победитель отходит на соседнюю клетку — осада снята', () => {

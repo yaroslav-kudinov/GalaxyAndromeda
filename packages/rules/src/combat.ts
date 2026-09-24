@@ -2016,10 +2016,20 @@ function executeContinuedCombatRound(
 export function syncEliminatedCombatAutomation(
   game: GameSnapshot,
   rng: () => number = Math.random,
-): void {
-  if (!isAwaitingContinue(game.pendingCombat)) return
+): { combatResult?: CombatResolutionResult } {
+  const pending = game.pendingCombat
+  // Выбывший осаждённый перебрасывать не будет — остаток перебросов раздаёт игра.
+  if (pending?.phase === 'awaiting-rerolls') {
+    const owner = pending.rolledRound.rerolls?.playerId
+    if (owner && isEliminatedPlayer(game, owner)) {
+      return { combatResult: finishCombatRerolls(game, owner, { auto: true }, rng).combatResult }
+    }
+    return {}
+  }
+  if (!isAwaitingContinue(pending)) return {}
   applyEliminatedContinueDefaults(game)
-  if (roundReadyToRoll(game)) finishContinueAfterBothSidesReady(game, rng)
+  if (roundReadyToRoll(game)) return { combatResult: finishContinueAfterBothSidesReady(game, rng).combatResult }
+  return {}
 }
 
 /**

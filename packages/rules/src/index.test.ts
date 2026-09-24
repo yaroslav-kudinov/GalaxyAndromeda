@@ -127,6 +127,7 @@ import {
   galaxySaveFromMap,
   gameSnapshotFromGameState,
   gameSnapshotFromMap,
+  GALAXY_SAVE_VERSION,
   gameSnapshotFromObservation,
   gameStateFromSnapshot,
   isMapOnlySave,
@@ -493,11 +494,14 @@ describe('galaxy save file', () => {
 
   it('rejects a save from an older rules version with a readable message', () => {
     const map = createEmptyMap('old', 'Old')
-    const stale = { ...galaxySaveFromMap(map), version: 1 }
+    const staleGame = { ...galaxySaveFromMap(map), version: 1, game: gameSnapshotFromMap(map) }
 
-    expect(() => parseGalaxySave(stale)).toThrow(/Сохранение версии 1 не поддерживается/)
-    // Карты остаются импортируемыми: у них нет поля format вовсе.
+    expect(() => parseGalaxySave(staleGame)).toThrow(/Сохранение версии 1 не поддерживается/)
+    // Карты остаются импортируемыми: и без поля format, и старое сохранение без партии.
     expect(parseGalaxySave(map).map.id).toBe('old')
+    const staleMapOnly = { ...galaxySaveFromMap(map), version: 1 }
+    expect(parseGalaxySave(staleMapOnly).map.id).toBe('old')
+    expect(parseGalaxySave(staleMapOnly).version).toBe(GALAXY_SAVE_VERSION)
   })
   it('parses legacy MapDefinition JSON', () => {
     const map = createEmptyMap('legacy', 'Legacy')
