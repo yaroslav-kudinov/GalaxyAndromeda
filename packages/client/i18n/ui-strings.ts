@@ -137,6 +137,48 @@ export const uiStringsRu = {
     supportReady: 'Готов',
     assaultBlocked: 'Штурм невозможен: ни одна сторона не может стрелять. Можно только осадить.',
   },
+  battleField: {
+    supportLine: 'поддержка',
+    bombardLine: 'обстрел',
+    round: (n: number) => `Раунд ${n}`,
+    hits: (n: number) => `попаданий ${n}`,
+    destroyed: 'уничтожен',
+    noFire: 'не стреляет',
+    stats: (dice: number, threshold: number) => `${dice}к · ${threshold}+`,
+    expected: (value: string) => `≈ ${value}`,
+    likelyKill: 'хватит добить',
+    diceFree: (free: number, total: number) => `Свободно кубиков: ${free} из ${total}`,
+    allAssigned: 'Все кубики назначены',
+    hint:
+      'Щёлкните по вражескому кораблю — ему уйдёт свободный кубик: выбранный или самый точный. Щелчок по кубику на цели возвращает его, правый щелчок по цели снимает один кубик.',
+    auto: 'Авто',
+    autoHint: 'Распределить, как предложила бы игра: сначала добивать подбитые и самые опасные',
+    clear: 'Снять все',
+    dieGroup: (threshold: number, count: number) => (count > 1 ? `${threshold}+ ×${count}` : `${threshold}+`),
+    dieTarget: (target: string) => `→ ${target}`,
+    dieFree: 'свободен',
+    returnDie: (threshold: number) => `Кубик ${threshold}+ — щёлкните, чтобы вернуть`,
+    dieTitle: (threshold: number, target: string) =>
+      target
+        ? `Кубик ${threshold}+ → ${target}. Щёлкните, чтобы вернуть`
+        : `Кубик ${threshold}+: щёлкните, затем выберите цель — или сразу щёлкните по цели`,
+    rolledTitle: (value: number, threshold: number, hit: boolean, target: string) =>
+      `${value} (нужно ${threshold}+)${target ? ` → ${target}` : ''}: ${hit ? 'попадание' : 'промах'}`,
+    shipTitle: (
+      name: string,
+      owner: string,
+      damage: number,
+      hull: number,
+      dice: number,
+      threshold: number | null,
+      distance: number,
+    ) =>
+      `${name} · ${owner}. Попаданий ${damage} из ${hull}. `
+      + (dice && threshold != null ? `Кубиков: ${dice}, попадает на ${threshold}+` : 'Не стреляет')
+      + (distance > 0 ? `, стреляет с расстояния ${distance}` : ''),
+    ready: 'готов',
+    notReady: 'ждём',
+  },
   combatRerolls: {
     heading: (round: number) => `Раунд ${round}: перебросы гарнизона`,
     left: (count: number) => `Перебросов: ${count}`,

@@ -690,15 +690,6 @@ watch(
   { immediate: true },
 )
 
-/** Противник игрока в текущем бою — чьи корабли служат целями. */
-const combatEnemyId = computed(() => {
-  const preview = pendingCombatPreview.value
-  if (!preview) return null
-  const onAttackerSide = preview.attackerId === playerId.value
-    || preview.attacker.supportingShips.some((ship) => ship.ownerId === playerId.value)
-  return onAttackerSide ? preview.defenderId : preview.attackerId
-})
-
 const currentCombatRollsKey = computed(() => combatResultRollsKey(battleResolution.value))
 
 const battleResolutionKey = computed(() =>
@@ -3287,16 +3278,18 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
           Атакующий продолжил бой — ваш ход как защитника: продолжить или отступить на подсвеченную клетку.
         </template>
       </p>
-      <CombatTargetsPanel
+      <BattleField
         v-if="pendingCombatPreview"
-        v-model="roundTargets"
+        v-model:targets="roundTargets"
         class="map-pick-targets"
         :preview="pendingCombatPreview"
-        :player-id="playerId"
-        :player-color="sidePanelPlayerColor(playerId)"
-        :enemy-color="sidePanelPlayerColor(combatEnemyId ?? '')"
+        :local-player-id="playerId"
+        :player-colors="playerColorById"
+        :player-names="playerNameById"
         :round-number="pendingCombatState.roundNumber"
         :damage-by-ship-id="pendingCombatState.damageByShipId ?? {}"
+        editable
+        show-dice
       />
       <p v-if="combatRetreatAllowed && combatDecisionRole !== 'support'" class="map-pick-text map-pick-text--hint">
         Клетки отступления подсвечены на карте. Можно нажать на клетку или на кнопку ниже;
@@ -4044,10 +4037,14 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
 }
 .map-pick-banner--combat {
   border-color: rgba(248, 113, 113, 0.6);
+  /* Поле боя: флотам нужна ширина, иначе корабли встают по одному в строку. */
+  width: min(96vw, 640px);
+  max-width: min(96vw, 640px);
 }
 .map-pick-banner--combat .map-pick-targets {
+  align-self: stretch;
   margin: 0.4rem 0;
-  max-height: 45vh;
+  max-height: 48vh;
   overflow-y: auto;
 }
 .board-layer {
