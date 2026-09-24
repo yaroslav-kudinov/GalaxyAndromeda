@@ -42,6 +42,13 @@ export const uiStringsRu = {
     addBot: 'Посадить бота',
     removeBot: 'Убрать бота',
     freeSeat: 'свободно',
+    botLevelLabel: 'Сложность бота',
+    botLevel: { easy: 'Лёгкий', medium: 'Средний', hard: 'Сложный' } as Record<'easy' | 'medium' | 'hard', string>,
+    botLevelHint: {
+      easy: 'Играет прямолинейно: занимает ближайшее и нападает, когда сильнее.',
+      medium: 'Меняет планы по обстановке — расширяется, копит силы, атакует. Свои центры власти почти не защищает.',
+      hard: 'Играет на победу: защищает свои центры власти, мешает лидеру и добивает партию.',
+    } as Record<'easy' | 'medium' | 'hard', string>,
   },
   chat: {
     title: 'Чат',
@@ -83,6 +90,8 @@ export const uiStringsRu = {
     inRoom: 'в комнате',
     awaited: 'ждём игрока',
     bot: 'бот',
+    botWithLevel: (level: 'easy' | 'medium' | 'hard') =>
+      `бот · ${{ easy: 'лёгкий', medium: 'средний', hard: 'сложный' }[level]}`,
   },
   coach: {
     badge: 'Обучение',

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { GalaxySaveFile, GameSnapshot, HexCoord, LegalAction, MapDefinition, ScenarioHighlight, ScenarioStep, ShipMovePlan, BombardmentPlan, CombatOptions, CombatResolutionResult, TokenSpendRef } from '@galaxy/rules'
+import type { BotDifficulty, GalaxySaveFile, GameSnapshot, HexCoord, LegalAction, MapDefinition, ScenarioHighlight, ScenarioStep, ShipMovePlan, BombardmentPlan, CombatOptions, CombatResolutionResult, TokenSpendRef } from '@galaxy/rules'
 import {
   createEmptyMap,
   GALAXY_SAVE_VERSION,
@@ -52,7 +52,7 @@ import {
   formatRechargeBudgetHint,
   getCombatRetreatDestinations,
 } from '@galaxy/rules'
-import { advanceScenarioStep, fetchObservation, fetchRoomBootstrap, GameApiError, joinRoom, rejoinRoom, startRoom, closeRoom, addRoomBot, removeRoomBot, markCombatResultSeen, submitGameAction, updateCombatPrepAction } from '~/composables/useGameApi'
+import { advanceScenarioStep, fetchObservation, fetchRoomBootstrap, GameApiError, joinRoom, rejoinRoom, startRoom, closeRoom, addRoomBot, removeRoomBot, setRoomBotDifficulty, markCombatResultSeen, submitGameAction, updateCombatPrepAction } from '~/composables/useGameApi'
 import { loadGameSessionForRoom, saveGameSession, persistLocalGalaxySave, clearLocalGalaxySave, loadLocalGalaxySaveRaw, pruneOnlineGalaxySaveCache } from '~/composables/useGameSession'
 import { loadPlayerClaim, savePlayerClaim } from '~/composables/usePlayerClaim'
 import { bootstrapToLobbySlots, defaultSlotForRoom, roomHasFreeSlot } from '~/utils/lobby-slot'
@@ -2587,6 +2587,20 @@ async function startLobbyGame() {
   }
 }
 
+async function changeLobbyBotDifficulty(slotId: string, difficulty: BotDifficulty) {
+  if (!isLobbyHost.value || joinBusy.value) return
+  joinBusy.value = true
+  joinError.value = null
+  try {
+    await setRoomBotDifficulty(roomId.value, playerId.value, slotId, difficulty)
+    await refreshJoinLobby()
+  } catch (e) {
+    joinError.value = e instanceof Error ? e.message : 'Не удалось изменить сложность бота'
+  } finally {
+    joinBusy.value = false
+  }
+}
+
 async function changeLobbyBot(slotId: string, change: 'add' | 'remove') {
   if (!isLobbyHost.value || joinBusy.value) return
   joinBusy.value = true
@@ -3104,6 +3118,7 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
           @slot-pick="onLobbySlotPicked"
           @add-bot="changeLobbyBot($event, 'add')"
           @remove-bot="changeLobbyBot($event, 'remove')"
+          @bot-difficulty="changeLobbyBotDifficulty"
         />
       </div>
     </div>

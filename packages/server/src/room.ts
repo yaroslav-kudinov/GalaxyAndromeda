@@ -4,6 +4,8 @@ import type {
 
   ActionPayload,
 
+  BotDifficulty,
+
   GameObservation,
 
   GameSnapshot,
@@ -57,6 +59,7 @@ import {
   filterScenarioLegalActions,
   getCurrentStep,
   scenarioActionError,
+  isBotDifficulty,
   type GalaxySaveFile,
 
 } from '@galaxy/rules'
@@ -87,7 +90,13 @@ import {
   roomBotIds,
   tutorialShouldHoldActionTurnForCombatResult,
 } from './bot-tick.js'
-import { LOBBY_BOT_NAMES, LOBBY_BOT_TICK_MS, roomHasLobbyBots, stepLobbyBots } from './lobby-bots.js'
+import {
+  DEFAULT_LOBBY_BOT_DIFFICULTY,
+  LOBBY_BOT_NAMES,
+  LOBBY_BOT_TICK_MS,
+  roomHasLobbyBots,
+  stepLobbyBots,
+} from './lobby-bots.js'
 import { clientIp } from './catalog.js'
 import { canCreateRoom, trackRoomCreate } from './security.js'
 
@@ -145,6 +154,9 @@ export interface Room {
    * бой не подменил итог на экране. Не сохраняется: после перезапуска ждать некого.
    */
   combatResultHold?: { humans: string[]; since: number }
+
+  /** Сложность ботов лобби по местам; места нет — `DEFAULT_LOBBY_BOT_DIFFICULTY`. */
+  botDifficulty?: Record<string, BotDifficulty>
 
   /** Время создания комнаты (ISO) */
   createdAt?: string
@@ -347,6 +359,7 @@ export function listLobbies(now = Date.now()) {
       joined: room.playerIds.includes(p.id),
       active: isPlayerActive(room.id, p.id, now),
       bot: bots.includes(p.id),
+      ...(bots.includes(p.id) && room.mode !== 'tutorial' ? { botDifficulty: lobbyBotDifficulty(room, p.id) } : {}),
     }))
     return {
       roomId: room.id,
@@ -736,11 +749,17 @@ function lobbyBotHostError(room: Room | undefined, playerId: string): string | n
   return null
 }
 
+/** Сложность бота на месте `botPlayerId`. */
+export function lobbyBotDifficulty(room: Room, botPlayerId: string): BotDifficulty {
+  return room.botDifficulty?.[botPlayerId] ?? DEFAULT_LOBBY_BOT_DIFFICULTY
+}
+
 /** Хозяин лобби сажает бота на свободное место (выбранное или первое по порядку). */
 export function addLobbyBot(
   roomId: string,
   playerId: string,
   preferredPlayerId?: string,
+  difficulty: BotDifficulty = DEFAULT_LOBBY_BOT_DIFFICULTY,
 ): LobbyBotResult {
   const room = rooms.get(roomId)
   const error = lobbyBotHostError(room, playerId)
@@ -760,8 +779,28 @@ export function addLobbyBot(
     room.botPlayerIds = bots
     return { ok: false, error: 'Слот не найден' }
   }
-  debugLog('room.bot-add', { roomId, playerId: resolved.playerId, name })
+  room.botDifficulty = { ...room.botDifficulty, [resolved.playerId]: isBotDifficulty(difficulty) ? difficulty : DEFAULT_LOBBY_BOT_DIFFICULTY }
+  scheduleRoomPersist(room)
+  debugLog('room.bot-add', { roomId, playerId: resolved.playerId, name, difficulty })
   return { ok: true, room, botPlayerId: resolved.playerId }
+}
+
+/** Хозяин лобби меняет сложность бота до начала игры. */
+export function setLobbyBotDifficulty(
+  roomId: string,
+  playerId: string,
+  botPlayerId: string,
+  difficulty: unknown,
+): LobbyBotResult {
+  const room = rooms.get(roomId)
+  const error = lobbyBotHostError(room, playerId)
+  if (error || !room) return { ok: false, error: error ?? 'Комната не найдена' }
+  if (!roomBotIds(room).includes(botPlayerId)) return { ok: false, error: 'На этом месте не бот' }
+  if (!isBotDifficulty(difficulty)) return { ok: false, error: 'Такой сложности нет' }
+  room.botDifficulty = { ...room.botDifficulty, [botPlayerId]: difficulty }
+  scheduleRoomPersist(room)
+  debugLog('room.bot-difficulty', { roomId, playerId: botPlayerId, difficulty })
+  return { ok: true, room, botPlayerId }
 }
 
 /** Хозяин лобби освобождает место бота. */
@@ -776,6 +815,7 @@ export function removeLobbyBot(
   if (!roomBotIds(room).includes(botPlayerId)) return { ok: false, error: 'На этом месте не бот' }
 
   room.botPlayerIds = roomBotIds(room).filter((id) => id !== botPlayerId)
+  if (room.botDifficulty) delete room.botDifficulty[botPlayerId]
   room.playerIds = room.playerIds.filter((id) => id !== botPlayerId)
   const player = room.state.players.find((p) => p.id === botPlayerId)
   if (player) {
@@ -1441,11 +1481,24 @@ export function registerHttpRoutes(app: FastifyInstance): void {
 
   app.post<{
     Params: { id: string }
-    Body: { playerId: string; preferredPlayerId?: string }
+    Body: { playerId: string; botPlayerId: string; difficulty: string }
+  }>(
+    '/rooms/:id/bots/difficulty',
+    async (req, reply) => {
+      const result = setLobbyBotDifficulty(req.params.id, req.body.playerId, req.body.botPlayerId, req.body.difficulty)
+      if (!result.ok) return reply.status(400).send({ error: result.error })
+      return { ok: true, botPlayerId: result.botPlayerId }
+    },
+  )
+
+  app.post<{
+    Params: { id: string }
+    Body: { playerId: string; preferredPlayerId?: string; difficulty?: string }
   }>(
     '/rooms/:id/bots',
     async (req, reply) => {
-      const result = addLobbyBot(req.params.id, req.body.playerId, req.body.preferredPlayerId)
+      const difficulty = isBotDifficulty(req.body.difficulty) ? req.body.difficulty : DEFAULT_LOBBY_BOT_DIFFICULTY
+      const result = addLobbyBot(req.params.id, req.body.playerId, req.body.preferredPlayerId, difficulty)
       if (!result.ok) return reply.status(400).send({ error: result.error })
       return { ok: true, botPlayerId: result.botPlayerId }
     },
@@ -1489,6 +1542,9 @@ export function registerHttpRoutes(app: FastifyInstance): void {
         color: p.color,
         joined: room.playerIds.includes(p.id),
         bot: roomBotIds(room).includes(p.id),
+        ...(roomBotIds(room).includes(p.id) && room.mode !== 'tutorial'
+          ? { botDifficulty: lobbyBotDifficulty(room, p.id) }
+          : {}),
       })),
       availablePlayerIds: freeLobbyPlayerIds(room.playerIds, room.maxPlayers),
     }
