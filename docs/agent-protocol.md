@@ -14,6 +14,7 @@ HTTP base: `http://127.0.0.1:3001` (env `GAME_SERVER_URL` for MCP).
 | POST | `/rooms/:id/start` | Body: `{ playerId }` — хост начинает партию (`playing`) |
 | POST | `/rooms/:id/close` | Body: `{ playerId }` — хост закрывает комнату подготовки (до старта) |
 | POST | `/rooms/:id/bots` | Body: `{ playerId, preferredPlayerId? }` → `{ ok, botPlayerId }`. Хост сажает бота на свободное место (выбранное или первое); только пока `lobby`, не в обучении |
+| POST | `/rooms/:id/combat-result/seen` | Body: `{ playerId }` → `{ ok }`. Игрок посмотрел итог боя (закрыл окно): боты лобби снова ходят. Любое действие игрока засчитывается так же |
 | POST | `/rooms/:id/bots/remove` | Body: `{ playerId, botPlayerId }` → `{ ok, botPlayerId }`. Хост освобождает место бота; только пока `lobby` |
 | GET | `/rooms/:id/bootstrap` | Карта, слоты (`players[].bot`), `status`, `hostPlayerId`, `joinedPlayerIds`, `botPlayerIds` |
 | GET | `/rooms/:id/state?playerId=` | `GameObservation` |
@@ -23,7 +24,7 @@ HTTP base: `http://127.0.0.1:3001` (env `GAME_SERVER_URL` for MCP).
 
 ### Боты в лобби
 
-Место бота — обычный участник партии (`players[].isAi: true`, в `GET /lobbies` и `bootstrap` — `bot: true`). За него ходит сервер: жадный бот из `@galaxy/rules` (`planGreedyBotAction`, тот же, что в замерах баланса) делает одно действие за шаг с паузой, чтобы люди видели ход. Боты отвечают в бою за себя и ждут решений людей; ходят, пока в комнате есть хотя бы один человек онлайн (presence). Если партия стоит дольше 15 секунд и дело не в человеке — бой одних ботов снимается, ход бота передаётся. Обучение этим механизмом не пользуется: там соперников задаёт сценарий.
+Место бота — обычный участник партии (`players[].isAi: true`, в `GET /lobbies` и `bootstrap` — `bot: true`). За него ходит сервер: жадный бот из `@galaxy/rules` (`planGreedyBotAction`, тот же, что в замерах баланса) делает одно действие за шаг с паузой, чтобы люди видели ход. Боты отвечают в бою за себя и ждут решений людей; ходят, пока в комнате есть хотя бы один человек онлайн (presence). Если партия стоит дольше 15 секунд и дело не в человеке — бой одних ботов снимается, ход бота передаётся. Бой с участием человека закончился итогом — боты ждут, пока этот человек не закроет окно итога (`/combat-result/seen`) или не сходит сам, но не дольше минуты: иначе новый бой бота подменил бы итог на экране. Решения начала хода (потери в осаде, доктрина, клетки, фишки) боты принимают сразу, вне очереди. Обучение этим механизмом не пользуется: там соперников задаёт сценарий.
 
 ### Combat actions
 
@@ -77,7 +78,7 @@ Combat FSM phases: `prep` → (rounds) → `awaiting-continue` (attacker then de
 
 **Sync contract:** server is source of truth. `observationRevision` increments on each state change (actions, combat auto-resolve). `pendingCombat`, `doctrineChoice`, `gameOver`, `lastCombatResult` use **explicit `null`** when cleared — clients must not preserve local values when server sends `null`. `lastCombatResult` is cached until the next non-prep action so both players can poll the same round result.
 
-Цикл хода — две фазы: `planning` → `actions` (ADR 020). Колоды событий и фазы `events` больше нет; сохранение, застрявшее в `events`, при первом чтении переводится в планирование. В начале планирования: тик осады, в первый ход окна доктрин — выбор доктрины (`choose-doctrine`), затем долги захвата и перезарядки. Решения строго по порядку (`planningStepFor`): `execute-siege-losses` → `choose-doctrine` → ожидание вскрытия доктрин всех игроков → `execute-claim-picks` → `execute-recharge-picks` → `toggle-marker` / `advance-phase`. Действие следующего шага до закрытия предыдущего отклоняется с текстом шага; `advance-phase` в `legalActions` появляется только после всех решений. В первый ход окна захват и бюджет перезарядки считаются в момент вскрытия доктрин, поэтому `claimPicksRemainingByPlayer` до вскрытия пуст.
+Цикл хода — две фазы: `planning` → `actions` (ADR 020). Колоды событий и фазы `events` больше нет; сохранение, застрявшее в `events`, при первом чтении переводится в планирование. В начале планирования: тик осады, в первый ход окна доктрин — выбор доктрины (`choose-doctrine`), затем долги захвата и перезарядки. Решения строго по порядку (`planningStepFor`): `execute-siege-losses` → `choose-doctrine` → ожидание вскрытия доктрин всех игроков → `execute-claim-picks` → `execute-recharge-picks` → `toggle-marker` / `advance-phase`. Действие следующего шага до закрытия предыдущего отклоняется с текстом шага; `advance-phase` в `legalActions` появляется только после всех решений. В первый ход окна захват и бюджет перезарядки считаются в момент вскрытия доктрин, поэтому `claimPicksRemainingByPlayer` до вскрытия пуст. Победа и выбывание не проверяются, пока у кого-то из оставшихся игроков `claimPicksRemainingByPlayer` не пуст (`turnClaimsUnsettled`): захваты хода одновременны. Прогноз смены хозяина центров на следующий ход — `powerCentersCapturedNextTurn(game)` из `@galaxy/rules`.
 
 ## ASCII legend
 

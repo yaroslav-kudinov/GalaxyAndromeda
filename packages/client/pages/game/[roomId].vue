@@ -31,6 +31,8 @@ import {
   claimPicksRemaining,
   eligibleClaimCells,
   planningStepFor,
+  rechargePicksRemaining,
+  powerCentersCapturedNextTurn,
   siegeWithdrawDestinations,
   doctrineChoiceOwed,
   removeActionMarker,
@@ -50,7 +52,7 @@ import {
   formatRechargeBudgetHint,
   getCombatRetreatDestinations,
 } from '@galaxy/rules'
-import { advanceScenarioStep, fetchObservation, fetchRoomBootstrap, GameApiError, joinRoom, rejoinRoom, startRoom, closeRoom, addRoomBot, removeRoomBot, submitGameAction, updateCombatPrepAction } from '~/composables/useGameApi'
+import { advanceScenarioStep, fetchObservation, fetchRoomBootstrap, GameApiError, joinRoom, rejoinRoom, startRoom, closeRoom, addRoomBot, removeRoomBot, markCombatResultSeen, submitGameAction, updateCombatPrepAction } from '~/composables/useGameApi'
 import { loadGameSessionForRoom, saveGameSession, persistLocalGalaxySave, clearLocalGalaxySave, loadLocalGalaxySaveRaw, pruneOnlineGalaxySaveCache } from '~/composables/useGameSession'
 import { loadPlayerClaim, savePlayerClaim } from '~/composables/usePlayerClaim'
 import { bootstrapToLobbySlots, defaultSlotForRoom, roomHasFreeSlot } from '~/utils/lobby-slot'
@@ -1090,7 +1092,7 @@ const mustResolveActionMarker = computed(() =>
 const claimSelection = ref<string[]>([])
 const claimCandidateKeys = computed(() => {
   const game = snapshot.value
-  if (!game || game.phase !== 'planning' || claimPicksRemaining(game, playerId.value) <= 0) return [] as string[]
+  if (!game || planningStep.value !== 'claims') return [] as string[]
   return eligibleClaimCells(game, playerId.value).map((cell) => hexKey(cell.coord.q, cell.coord.r))
 })
 watch(claimCandidateKeys, (keys) => {
@@ -1104,6 +1106,57 @@ function toggleClaimOnMap(key: string): boolean {
     claimSelection.value = claimSelection.value.filter((entry) => entry !== key)
   } else if (claimSelection.value.length < need) {
     claimSelection.value = [...claimSelection.value, key]
+  }
+  return true
+}
+
+/**
+ * Выбор фишек перезарядки на карте: клетки с перевёрнутыми фишками обведены, клетки с
+ * выбранными — кольцом. Ключ фишки — «клетка:номер фишки», как в карточке «Нужно решить».
+ */
+const rechargeSelection = ref<string[]>([])
+const rechargeCandidateTokens = computed(() => {
+  const game = snapshot.value
+  if (!game || planningStep.value !== 'recharge') return []
+  const tokens: { key: string; cellKey: string; value: number }[] = []
+  for (const cell of game.cells) {
+    if (cell.controlOwnerId !== playerId.value) continue
+    const cellKey = hexKey(cell.coord.q, cell.coord.r)
+    cell.resourceTokens.forEach((token, index) => {
+      if (token.faceUp === false) tokens.push({ key: `${cellKey}:${index}`, cellKey, value: token.value })
+    })
+  }
+  return tokens
+})
+const rechargeCandidateCellKeys = computed(() => [...new Set(rechargeCandidateTokens.value.map((token) => token.cellKey))])
+const rechargePickedCellKeys = computed(() => [
+  ...new Set(
+    rechargeCandidateTokens.value
+      .filter((token) => rechargeSelection.value.includes(token.key))
+      .map((token) => token.cellKey),
+  ),
+])
+watch(rechargeCandidateTokens, (tokens) => {
+  rechargeSelection.value = rechargeSelection.value.filter((key) => tokens.some((token) => token.key === key))
+})
+
+/**
+ * Щелчок по клетке: взять её самую крупную невыбранную фишку (если лимит выбран — вместо самой
+ * ранней из выбранных), а если брать на клетке нечего — снять с неё выбор.
+ */
+function toggleRechargeOnMap(cellKey: string): boolean {
+  const game = snapshot.value
+  const onCell = rechargeCandidateTokens.value.filter((token) => token.cellKey === cellKey)
+  if (!game || !onCell.length) return false
+  const need = Math.min(rechargePicksRemaining(game, playerId.value), rechargeCandidateTokens.value.length)
+  const free = onCell
+    .filter((token) => !rechargeSelection.value.includes(token.key))
+    .sort((a, b) => b.value - a.value)
+  if (free.length && need > 0) {
+    const kept = rechargeSelection.value.length < need ? rechargeSelection.value : rechargeSelection.value.slice(1)
+    rechargeSelection.value = [...kept, free[0]!.key]
+  } else {
+    rechargeSelection.value = rechargeSelection.value.filter((key) => !onCell.some((token) => token.key === key))
   }
   return true
 }
@@ -1169,6 +1222,21 @@ const playerColorById = computed(() => {
     map[p.id] = p.color
   }
   return map
+})
+
+/** Центры власти, которые сменят хозяина в начале следующего хода: пунктир цвета захватчика и пояснение. */
+const boardCaptureAhead = computed(() => {
+  const game = snapshot.value
+  const out: Record<string, { color: string; note: string }> = {}
+  if (!game || game.gameOver) return out
+  for (const capture of powerCentersCapturedNextTurn(game)) {
+    const name = playerNameById.value[capture.capturerId] ?? capture.capturerId
+    out[hexKey(capture.coord.q, capture.coord.r)] = {
+      color: playerColorById.value[capture.capturerId] ?? '#f87171',
+      note: capture.by === 'siege' ? ui.captureAhead.siege(name) : ui.captureAhead.claim(name),
+    }
+  }
+  return out
 })
 
 function sidePanelPlayerColor(ownerId: string): string {
@@ -1585,12 +1653,14 @@ const boardInteractiveKeys = computed(() => {
   return filterTutorialMarkerKeys(keys)
 })
 
-const boardTokenPickKeys = computed(() =>
-  buildTokenPick.value.active ? buildTokenPick.value.pickKeys : claimCandidateKeys.value,
-)
-const boardTokenPickedKeys = computed(() =>
-  buildTokenPick.value.active ? buildTokenPick.value.pickedKeys : claimSelection.value,
-)
+const boardTokenPickKeys = computed(() => {
+  if (buildTokenPick.value.active) return buildTokenPick.value.pickKeys
+  return planningStep.value === 'recharge' ? rechargeCandidateCellKeys.value : claimCandidateKeys.value
+})
+const boardTokenPickedKeys = computed(() => {
+  if (buildTokenPick.value.active) return buildTokenPick.value.pickedKeys
+  return planningStep.value === 'recharge' ? rechargePickedCellKeys.value : claimSelection.value
+})
 
 const boardReachableKeys = computed(() => {
   if (markerMapPickActive.value) return markerMapPick.reachableKeys.value
@@ -1814,6 +1884,10 @@ function closeBattleModal() {
   }
 
   battleModalOpen.value = false
+  // Итог просмотрен: боты лобби ждали, чтобы новый бой его не подменил.
+  if (resultKey && serverStatus.value === 'online' && !roomId.value.startsWith('local-') && playerId.value) {
+    void markCombatResultSeen(roomId.value, playerId.value).catch(() => {})
+  }
   markerMapPick.afterBattleModalClosed()
   pendingOrderAfterBattle.value = null
   if (combatPhase.value !== 'awaiting-continue') {
@@ -2730,6 +2804,7 @@ async function selectCell(q: number, r: number) {
   }
 
   if (toggleClaimOnMap(hexKey(q, r))) return
+  if (toggleRechargeOnMap(hexKey(q, r))) return
 
   if (markerMapPickActive.value) {
     markerMapPick.handleMapSelect(q, r)
@@ -3079,6 +3154,7 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
         :supply-chain-keys="supplyChainHighlightKeys"
         :token-pick-keys="boardTokenPickKeys"
         :token-picked-keys="boardTokenPickedKeys"
+        :capture-ahead="boardCaptureAhead"
         :players="snapshot?.players ?? []"
         :snapshot="snapshot"
         :map-id="mapDefinition?.id ?? null"
@@ -3302,6 +3378,7 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
       :snapshot="snapshot"
       :player-id="playerId"
       v-model:claim-selected="claimSelection"
+      v-model:recharge-selected="rechargeSelection"
       :busy="doctrineBusy"
       @doctrine="chooseDoctrineAction"
       @claims="submitPlanningDecision('execute-claim-picks', { picks: $event })"

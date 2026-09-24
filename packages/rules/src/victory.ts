@@ -218,12 +218,37 @@ export function checkDefeat(state: GameState): string[] {
   return newlyEliminated
 }
 
+/**
+ * Захваты хода ещё не подсчитаны: кто-то из оставшихся в партии не выбрал клетки.
+ *
+ * Захваты всех игроков в начале хода одновременны. Если проверить победу, пока один уже занял
+ * клетки, а другой ещё выбирает, первый может победить центром, который второй в тот же момент
+ * у него отбирает. Поэтому центры власти считаются только после захватов всех.
+ */
+export function turnClaimsUnsettled(game: GameSnapshot): boolean {
+  const remaining = new Set(
+    game.players
+      .filter((player) => !player.eliminated
+        && (!game.participatingPlayerIds?.length || game.participatingPlayerIds.includes(player.id)))
+      .map((player) => player.id),
+  )
+  // Последний оставшийся побеждает сразу: оспаривать его захват некому.
+  if (remaining.size <= 1) return false
+  return Object.entries(game.claimPicksRemainingByPlayer ?? {})
+    .some(([playerId, picks]) => picks > 0 && remaining.has(playerId))
+}
+
 export function applyVictoryAndDefeatChecks(
   game: GameSnapshot,
   mapId: string,
 ): { eliminated: string[]; gameOver: GameOverState | null } {
   if (game.gameOver) {
     return { eliminated: [], gameOver: game.gameOver }
+  }
+  // Ни победу, ни выбывание до конца захватов хода не проверяем: последний закрывший выбор
+  // клеток вызовет проверку сам (`executeClaimPicks`, `autoResolveClaimPicks`).
+  if (turnClaimsUnsettled(game)) {
+    return { eliminated: [], gameOver: null }
   }
 
   const state = gameStateFromSnapshot(game, mapId)

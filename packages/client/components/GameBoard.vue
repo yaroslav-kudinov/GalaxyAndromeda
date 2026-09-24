@@ -18,6 +18,8 @@ const props = withDefaults(
     supplyChainKeys?: string[]
     tokenPickKeys?: string[]
     tokenPickedKeys?: string[]
+    /** Центры власти, которые перейдут к другому игроку в начале следующего хода: цвет захватчика и пояснение */
+    captureAhead?: Record<string, { color: string; note: string }>
     myTerritoryKeys?: string[]
     hideTerritoryPlayers?: number[]
     movementSourceKey?: string | null
@@ -71,6 +73,7 @@ const props = withDefaults(
     supplyChainKeys: () => [],
     tokenPickKeys: () => [],
     tokenPickedKeys: () => [],
+    captureAhead: () => ({}),
     myTerritoryKeys: () => [],
     hideTerritoryPlayers: () => [],
     movementSourceKey: null,
@@ -120,6 +123,7 @@ const markerKeys = computed(() => boardMarkerKeys(props.cells))
     :supply-chain-keys="supplyChainKeys"
     :token-pick-keys="tokenPickKeys"
     :token-picked-keys="tokenPickedKeys"
+    :capture-ahead="captureAhead"
     :my-territory-keys="myTerritoryKeys"
     :hide-territory-players="hideTerritoryPlayers"
     :movement-source-key="movementSourceKey"

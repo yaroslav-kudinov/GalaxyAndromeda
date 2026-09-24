@@ -257,6 +257,14 @@ export async function startRoom(roomId: string, playerId: string): Promise<{ ok:
   })
 }
 
+/** Игрок закрыл итог своего боя — боты лобби могут ходить дальше. */
+export async function markCombatResultSeen(roomId: string, playerId: string): Promise<{ ok: true }> {
+  return apiFetch(`/rooms/${roomId}/combat-result/seen`, {
+    method: 'POST',
+    body: JSON.stringify({ playerId }),
+  })
+}
+
 /** Хозяин лобби сажает бота на свободное место. */
 export async function addRoomBot(
   roomId: string,

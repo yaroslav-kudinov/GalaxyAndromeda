@@ -12,6 +12,8 @@ const props = defineProps<{
   cell: MapCellDefinition
   regionInfo?: RegionInfo | null
   players?: PlayerState[]
+  /** Центр власти сменит хозяина в начале следующего хода — почему и к кому. */
+  captureNote?: string | null
   x: number
   y: number
 }>()
@@ -51,6 +53,10 @@ const regionOwnerName = computed(() => {
       <li v-if="cell.isPowerCenter" class="token-row token-row--power">
         <span class="token-icon" aria-hidden="true">♛</span>
         <span>Центр власти</span>
+      </li>
+      <li v-if="cell.isPowerCenter && captureNote" class="token-row token-row--capture">
+        <span class="token-icon" aria-hidden="true">⚑</span>
+        <span>{{ captureNote }}</span>
       </li>
       <li
         v-if="token"
@@ -200,6 +206,10 @@ const regionOwnerName = computed(() => {
 }
 .token-row--power {
   color: #fde68a;
+}
+.token-row--capture {
+  color: #fca5a5;
+  font-weight: 600;
 }
 .token-row--credits .token-icon {
   color: #facc15;

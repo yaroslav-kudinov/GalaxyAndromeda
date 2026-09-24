@@ -13,7 +13,7 @@ import {
 // Комнаты теста на диск не пишем.
 process.env.GALAXY_DEV_ROOMS = '0'
 const rooms = await import('./room.js')
-const { stepLobbyBots } = await import('./lobby-bots.js')
+const { COMBAT_RESULT_HOLD_MS, stepLobbyBots } = await import('./lobby-bots.js')
 const { getDebugLogs } = await import('./debug-log.js')
 
 const map = normalizeMapDefinition(
@@ -122,5 +122,41 @@ describe('боты в лобби', () => {
       const ships = room.state.cells.flatMap((cell) => cell.ships ?? []).filter((ship) => ship.ownerId === botId)
       assert.ok(ships.length > 0, `${botId} сохранил флот`)
     }
+  })
+  it('после боя с человеком боты ждут, пока он посмотрит итог', () => {
+    const room = lobbyWithBots()
+    assert.ok(rooms.addLobbyBot(room.id, 'player-1').ok)
+    assert.ok(rooms.addLobbyBot(room.id, 'player-1').ok)
+    assert.ok(rooms.startRoom(room.id, 'player-1').ok)
+    let botActions = 0
+    const apply = (target: typeof room, botId: string, actionId: string, params?: Record<string, unknown>) => {
+      const { errors } = applyGameActionOnSnapshot(target.state, target.map, botId, actionId, params)
+      if (errors.length) throw new Error(errors[0])
+      target.observationRevision += 1
+      botActions += 1
+    }
+    const now = Date.now()
+
+    quietly(() => {
+      // Окно итога открыто — боты стоят.
+      room.combatResultHold = { humans: ['player-1'], since: now }
+      assert.equal(stepLobbyBots(room, apply, now + 1000), 'waiting')
+      assert.equal(botActions, 0)
+      // Закрыл окно — боты пошли.
+      rooms.acknowledgeCombatResult(room, 'player-1')
+      assert.equal(room.combatResultHold, undefined)
+      assert.equal(stepLobbyBots(room, apply, now + 2000), 'acted')
+
+      // Сходил сам — значит, итог видел.
+      room.combatResultHold = { humans: ['player-1'], since: now }
+      rooms.submitAction(room, 'player-1', { actionId: 'choose-doctrine', params: { doctrineId: 'none' } }, false)
+      assert.equal(room.combatResultHold, undefined)
+
+      // Окно так и не закрыли — через минуту боты идут дальше.
+      room.combatResultHold = { humans: ['player-1'], since: now }
+      assert.equal(stepLobbyBots(room, apply, now + 5000), 'waiting')
+      stepLobbyBots(room, apply, now + COMBAT_RESULT_HOLD_MS + 5000)
+      assert.equal(room.combatResultHold, undefined)
+    })
   })
 })

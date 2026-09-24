@@ -217,7 +217,8 @@ export function autoResolveClaimPicks(
   if (taken.length) appendClaimEvent(game, `Объявление контроля автоматически: занято клеток ${taken.length}`)
 
   grantRechargeBudgetFor(game, playerId)
-  if (taken.length) applyVictoryAndDefeatChecks(game, mapId)
+  // Даже без захвата: это мог быть последний незакрытый выбор, и центры власти пора считать.
+  applyVictoryAndDefeatChecks(game, mapId)
   return taken.length
 }
 

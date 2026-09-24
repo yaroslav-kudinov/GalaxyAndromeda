@@ -140,6 +140,12 @@ export interface Room {
    */
   botPlayerIds?: string[]
 
+  /**
+   * Люди, ещё не закрывшие итог боя, в котором участвовали. Боты лобби ждут их, чтобы новый
+   * бой не подменил итог на экране. Не сохраняется: после перезапуска ждать некого.
+   */
+  combatResultHold?: { humans: string[]; since: number }
+
   /** Время создания комнаты (ISO) */
   createdAt?: string
 
@@ -387,10 +393,52 @@ function bumpObservationRevision(room: Room, reason: string): void {
   scheduleRoomPersist(room)
 }
 
+/** Участники текущего боя: стороны и поддерживающие. */
+function combatParticipantIds(game: GameSnapshot): string[] {
+  const pending = game.pendingCombat
+  if (!pending) return []
+  const ids = new Set<string>([pending.attackerId, ...pending.defenderIds])
+  const prep = combatPrepOf(pending)
+  if (prep) {
+    ids.add(prep.defenderId)
+    for (const id of Object.keys(prep.readyBy ?? {})) ids.add(id)
+    for (const id of Object.keys(prep.combatOptions?.supportSides ?? {})) ids.add(id)
+  }
+  if (pending.phase === 'awaiting-continue') {
+    for (const id of Object.keys(pending.supportReady ?? {})) ids.add(id)
+  }
+  for (const id of Object.keys(pending.combatOptions?.supportSides ?? {})) ids.add(id)
+  return [...ids]
+}
+
+/**
+ * Бой закончился раундом с итогом — люди, которые в нём участвовали, должны его увидеть. Пока они
+ * не закрыли окно итога, боты лобби новых действий не начинают (`stepLobbyBots`).
+ */
+function holdBotsForCombatResult(
+  room: Room,
+  participantsBefore: readonly string[],
+  combatResult: import('@galaxy/rules').CombatResolutionResult | undefined,
+): void {
+  if (!combatResult || room.state.pendingCombat || !roomHasLobbyBots(room)) return
+  const bots = roomBotIds(room)
+  const humans = participantsBefore.filter((id) => !bots.includes(id) && room.playerIds.includes(id))
+  if (humans.length) room.combatResultHold = { humans, since: Date.now() }
+}
+
+/** Игрок посмотрел итог боя (закрыл окно или сам сходил дальше). */
+export function acknowledgeCombatResult(room: Room, playerId: string): void {
+  const hold = room.combatResultHold
+  if (!hold) return
+  hold.humans = hold.humans.filter((id) => id !== playerId)
+  if (!hold.humans.length) room.combatResultHold = undefined
+}
+
 function maybeAdvanceCombatPrep(room: Room): {
   combatResult?: import('@galaxy/rules').CombatResolutionResult
   changed: boolean
 } {
+  const participantsBefore = combatParticipantIds(room.state)
   const pendingBefore = room.state.pendingCombat
   const prepBefore = combatPrepOf(pendingBefore)
   const attackerId = pendingBefore?.attackerId
@@ -402,6 +450,7 @@ function maybeAdvanceCombatPrep(room: Room): {
     return { changed: true }
   }
   if (combatResult) room.lastCombatResult = combatResult
+  holdBotsForCombatResult(room, participantsBefore, combatResult)
   const loserId =
     combatResult?.winnerId == null
       ? undefined
@@ -989,6 +1038,8 @@ export function submitAction(
   if (roomBotIds(room).includes(playerId)) {
     throw new Error('За это место играет бот')
   }
+  // Игрок действует — значит, итог прошлого боя он уже видел.
+  acknowledgeCombatResult(room, playerId)
 
   if (room.status !== 'playing') {
     throw new Error('Игра ещё не начата — дождитесь старта в комнате подготовки')
@@ -1028,6 +1079,7 @@ export function submitAction(
   }
   const prepBefore = combatPrepOf(room.state.pendingCombat)
   const pendingPhaseBefore = room.state.pendingCombat?.phase
+  const participantsBefore = combatParticipantIds(room.state)
 
   const { errors, combatResult: actionCombatResult } = applyGameActionOnSnapshot(
     room.state,
@@ -1047,6 +1099,7 @@ export function submitAction(
   }
 
   if (actionCombatResult) room.lastCombatResult = actionCombatResult
+  holdBotsForCombatResult(room, participantsBefore, actionCombatResult)
 
   const advanced = maybeAdvanceCombatPrep(room)
   if (actionCombatResult) room.lastCombatResult = actionCombatResult
@@ -1107,6 +1160,7 @@ function applyBotActionInternal(
   const violations = releaseInvalidPendingCombat(room.state)
   if (violations.length) bumpObservationRevision(room, 'combat:invariant-released')
   const pendingPhaseBefore = room.state.pendingCombat?.phase
+  const participantsBefore = combatParticipantIds(room.state)
   const { errors, combatResult } = applyGameActionOnSnapshot(
     room.state,
     room.map,
@@ -1115,6 +1169,7 @@ function applyBotActionInternal(
     params,
   )
   if (errors.length) throw new Error(errors[0]!)
+  holdBotsForCombatResult(room, participantsBefore, combatResult)
   // Как в submitAction: не стираем итог боя при advance-phase / тиках бота —
   // иначе клиент не успевает показать броски после обстрела.
   if (
@@ -1364,6 +1419,22 @@ export function registerHttpRoutes(app: FastifyInstance): void {
     async (req, reply) => {
       const result = closeRoom(req.params.id, req.body.playerId)
       if (!result.ok) return reply.status(400).send({ error: result.error })
+      return { ok: true }
+    },
+  )
+
+  app.post<{
+    Params: { id: string }
+    Body: { playerId: string }
+  }>(
+    '/rooms/:id/combat-result/seen',
+    async (req, reply) => {
+      const room = getRoom(req.params.id)
+      if (!room) return reply.status(404).send({ error: 'Room not found' })
+      if (!room.playerIds.includes(req.body.playerId)) {
+        return reply.status(403).send({ error: 'Игрок не зарегистрирован в комнате' })
+      }
+      acknowledgeCombatResult(room, req.body.playerId)
       return { ok: true }
     },
   )
