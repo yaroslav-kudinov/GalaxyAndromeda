@@ -288,6 +288,71 @@ describe('осада: действия сторон', () => {
     expect(combatPrepOf(game.pendingCombat)?.assaultFrom).toEqual({ q: 1, r: 0 })
   })
 
+  it('штурм осады: маркер гарнизона не мешает осаждающему поставить свой и начать бой', () => {
+    const { map, game } = establishedSiege(['battleship'])
+    placeMarker(game, 'player-2', 1, 0)
+    placeMarker(game, 'player-1', 1, 0)
+    expect(game.actionMarkers.filter((m) => m.coord.q === 1 && m.coord.r === 0)).toHaveLength(2)
+
+    game.activePlayerId = 'player-1'
+    const start = applyGameActionOnSnapshot(game, map, 'player-1', 'execute-marker-assault', {
+      from: { q: 1, r: 0 },
+    })
+    expect(start.errors).toEqual([])
+    expect(game.pendingCombat?.attackerId).toBe('player-1')
+    expect(combatPrepOf(game.pendingCombat)?.assaultFrom).toEqual({ q: 1, r: 0 })
+  })
+
+  it('исход штурма осады: гарнизон выбит — центр переходит осаждающему, осада снята', () => {
+    const { map, game } = establishedSiege(['destroyer'])
+    placeMarker(game, 'player-1', 1, 0)
+    game.activePlayerId = 'player-1'
+
+    const result = withRandom(0.99, () =>
+      applyGameActionOnSnapshot(game, map, 'player-1', 'execute-marker-assault', {
+        from: { q: 1, r: 0 },
+        combatOptions: {},
+      }),
+    )
+    expect(result.errors).toEqual([])
+    expect(result.combatResult?.destroyedShipIds).toContain('gar-0')
+    expect(cellAt(game, 1, 0).ships.every((s) => s.ownerId === 'player-1')).toBe(true)
+    expect(cellAt(game, 1, 0).controlOwnerId).toBe('player-1')
+    expect(siegeAt(game, { q: 1, r: 0 })).toBeUndefined()
+    expect(game.actionMarkers.filter((m) => m.ownerId === 'player-1')).toEqual([])
+  })
+
+  it('два маркера на осаждённой клетке: игрок снимает только свой, второй не ставит', () => {
+    const { map, game } = establishedSiege(['battleship'])
+    placeMarker(game, 'player-2', 1, 0)
+    placeMarker(game, 'player-1', 1, 0)
+    game.phase = 'planning'
+    game.activePlayerId = 'player-1'
+    expect(addActionMarker(game, 'player-1', { q: 1, r: 0 })).toEqual([
+      'На клетке уже есть ваш маркер действия',
+    ])
+
+    expect(applyGameActionOnSnapshot(game, map, 'player-1', 'toggle-marker', {
+      coord: { q: 1, r: 0 },
+      kind: 'action',
+    }).errors).toEqual([])
+    const left = game.actionMarkers.filter((m) => m.coord.q === 1 && m.coord.r === 0)
+    expect(left.map((m) => m.ownerId)).toEqual(['player-2'])
+    expect(cellAt(game, 1, 0).actionMarkerId).toBe(left[0]!.id)
+  })
+
+  it('на клетке без чужих кораблей второй маркер по-прежнему не ставится', () => {
+    const { game } = siegeBoard()
+    // Пустой центр второго игрока с его маркером; на клетку вошёл крейсер первого.
+    placeMarker(game, 'player-2', 1, 1)
+    addShip(game, 1, 1, 'player-1', 'cruiser', 'p1-cr')
+    game.phase = 'planning'
+    game.activePlayerId = 'player-1'
+    expect(addActionMarker(game, 'player-1', { q: 1, r: 1 })).toEqual([
+      'На клетке уже есть маркер действия',
+    ])
+  })
+
   it('исход вылазки: линкор гарнизона выбивает крейсер, маркер потрачен, бой ждёт решения', () => {
     const { map, game } = establishedSiege(['battleship'])
     game.activePlayerId = 'player-2'

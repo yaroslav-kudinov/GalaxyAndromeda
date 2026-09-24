@@ -7,6 +7,7 @@ import {
 } from './doctrines.js'
 import { refreshActionMarkerCapacity } from './marker-pools.js'
 import {
+  actionMarkerSlotFree,
   syncActionMarkerTurnTracking,
   validateActionMarkerBeforeAdvance,
 } from './markers.js'
@@ -178,7 +179,7 @@ function canPlayerActInPhase(game: GameSnapshot, state: GameState, playerId: str
     if (rechargePicksRemaining(game, playerId) > 0) return true
     const canPlaceAction = game.cells.some(
       (cell) =>
-        !cell.actionMarkerId
+        actionMarkerSlotFree(game, cell, playerId)
         && (
           cell.ships.some((ship) => ship.ownerId === playerId)
           || (!!cell.isPowerCenter && cell.controlOwnerId === playerId)

@@ -364,10 +364,7 @@ function validateMarkerResolutionPreconditions(
   const marker = findActionMarkerForProduction(game, markerId, playerId)
   if (!marker) return ['На этой клетке больше нет вашего маркера действия']
 
-  const cell = cellAt(game, marker.coord)
-  if (!cell?.actionMarkerId || cell.actionMarkerId !== marker.id) {
-    return ['На клетке нет этого маркера действия']
-  }
+  if (!cellAt(game, marker.coord)) return ['На клетке нет этого маркера действия']
   if (siegeAt(game, marker.coord)?.besiegedId === playerId) {
     return [BESIEGED_BUILD_BLOCKED_MSG]
   }

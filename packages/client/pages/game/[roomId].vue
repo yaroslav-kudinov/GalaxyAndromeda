@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { BotDifficulty, GalaxySaveFile, GameSnapshot, HexCoord, LegalAction, MapDefinition, ScenarioHighlight, ScenarioStep, ShipMovePlan, BombardmentPlan, CombatOptions, CombatResolutionResult, TokenSpendRef } from '@galaxy/rules'
 import {
+  actionMarkerOf,
   createEmptyMap,
   GALAXY_SAVE_VERSION,
   executeMarkerBombardment,
@@ -1603,10 +1604,7 @@ const canRemoveActionMarkerOnSelected = computed(() => {
   if (!canRemoveActionMarkerThisTurn(saveFile.value.game, playerId.value)) return false
   const key = selectedKey.value
   const cell = saveFile.value.game.cells.find((c) => hexKey(c.coord.q, c.coord.r) === key)
-  if (!cell?.actionMarkerId) return false
-  return saveFile.value.game.actionMarkers.some(
-    (m) => m.id === cell.actionMarkerId && m.ownerId === playerId.value,
-  )
+  return !!cell && !!actionMarkerOf(saveFile.value.game, cell.coord, playerId.value)
 })
 
 const remainingActionMarkersCount = computed(() => actionMarkers.value.length)
@@ -1656,9 +1654,7 @@ const boardInteractiveKeys = computed(() => {
     const key = hexKey(cell.coord.q, cell.coord.r)
     const hasMyShip = cell.ships.some((ship) => ship.ownerId === playerId.value)
     const hasMyPowerCenter = !!cell.isPowerCenter && cell.controlOwnerId === playerId.value
-    const hasMyMarker =
-      !!cell.actionMarkerId &&
-      game.actionMarkers.some((m) => m.id === cell.actionMarkerId && m.ownerId === playerId.value)
+    const hasMyMarker = !!actionMarkerOf(game, cell.coord, playerId.value)
     if (hasMyShip || hasMyPowerCenter || hasMyMarker) keys.push(key)
   }
   return filterTutorialMarkerKeys(keys)
@@ -1742,10 +1738,7 @@ function hasMyActionMarkerAt(q: number, r: number): boolean {
   if (!snapshot.value) return false
   const key = hexKey(q, r)
   const cell = snapshot.value.cells.find((c) => hexKey(c.coord.q, c.coord.r) === key)
-  if (!cell?.actionMarkerId) return false
-  return snapshot.value.actionMarkers.some(
-    (m) => m.id === cell.actionMarkerId && m.ownerId === playerId.value,
-  )
+  return !!cell && !!actionMarkerOf(snapshot.value, cell.coord, playerId.value)
 }
 
 const canSurrender = computed(() => {
@@ -2268,7 +2261,8 @@ async function confirmMarkerBuild(
   const cell = saveFile.value.game.cells.find(
     (c) => c.coord.q === from.q && c.coord.r === from.r,
   )
-  const markerId = cell?.actionMarkerId
+  // На осаждённой клетке маркеров два — берём свой.
+  const markerId = cell ? actionMarkerOf(saveFile.value.game, cell.coord, playerId.value)?.id : undefined
   if (!markerId) {
     markerActionHint.value = 'На клетке нет маркера действия'
     return
@@ -2920,10 +2914,7 @@ async function toggleMarkerOnCell(q: number, r: number) {
 function wouldRemoveMyActionMarkerAt(game: GameSnapshot, q: number, r: number): boolean {
   const key = hexKey(q, r)
   const cell = game.cells.find((c) => hexKey(c.coord.q, c.coord.r) === key)
-  if (!cell?.actionMarkerId) return false
-  return game.actionMarkers.some(
-    (m) => m.id === cell.actionMarkerId && m.ownerId === playerId.value,
-  )
+  return !!cell && !!actionMarkerOf(game, cell.coord, playerId.value)
 }
 
 function confirmRemoveActionMarker(): boolean {
@@ -2936,12 +2927,13 @@ function removeMarkerAtSourceFromModal() {
   if (!saveFile.value?.game || !markerActionSource.value) return
   const key = hexKey(markerActionSource.value.q, markerActionSource.value.r)
   const cell = saveFile.value.game.cells.find((c) => hexKey(c.coord.q, c.coord.r) === key)
-  if (!cell?.actionMarkerId) return
+  const myMarkerId = cell ? actionMarkerOf(saveFile.value.game, cell.coord, playerId.value)?.id : undefined
+  if (!myMarkerId) return
 
   if (serverStatus.value === 'online' && !roomId.value.startsWith('local-')) {
     bumpObservationEpoch()
     submitGameAction(roomId.value, playerId.value, 'remove-marker', {
-      markerId: cell.actionMarkerId,
+      markerId: myMarkerId,
       kind: 'action',
     })
       .then((obs) => {
@@ -2958,7 +2950,7 @@ function removeMarkerAtSourceFromModal() {
 
   const errors = removeActionMarker(
     saveFile.value.game,
-    cell.actionMarkerId,
+    myMarkerId,
     playerId.value,
   )
   if (errors.length) {
@@ -2978,12 +2970,13 @@ function removeSelectedActionMarker() {
   const cell = saveFile.value.game.cells.find(
     (c) => hexKey(c.coord.q, c.coord.r) === selectedKey.value,
   )
-  if (!cell?.actionMarkerId) return
+  const myMarkerId = cell ? actionMarkerOf(saveFile.value.game, cell.coord, playerId.value)?.id : undefined
+  if (!myMarkerId) return
 
   if (serverStatus.value === 'online' && !roomId.value.startsWith('local-')) {
     bumpObservationEpoch()
     submitGameAction(roomId.value, playerId.value, 'remove-marker', {
-      markerId: cell.actionMarkerId,
+      markerId: myMarkerId,
       kind: 'action',
     })
       .then((obs) => {
@@ -2999,7 +2992,7 @@ function removeSelectedActionMarker() {
 
   const errors = removeActionMarker(
     saveFile.value.game,
-    cell.actionMarkerId,
+    myMarkerId,
     playerId.value,
   )
   if (errors.length) {

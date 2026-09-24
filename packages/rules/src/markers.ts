@@ -211,7 +211,8 @@ export function addActionMarker(
   if (!canPlaceActionMarkerOnCell(cell, ownerId)) {
     return ['Маркер действия ставится на клетку с вашим кораблём или на ваш центр власти']
   }
-  if (cell.actionMarkerId) return ['На клетке уже есть маркер действия']
+  if (actionMarkerOf(game, coord, ownerId)) return ['На клетке уже есть ваш маркер действия']
+  if (cell.actionMarkerId && !isContestedCell(cell, ownerId)) return ['На клетке уже есть маркер действия']
 
   const count = game.actionMarkers.filter((m) => m.ownerId === ownerId).length
   const limit = actionMarkerLimitForPlayer(game, ownerId)
@@ -227,8 +228,49 @@ export function addActionMarker(
     placedInPhase: 'planning',
   }
   game.actionMarkers.push(marker)
-  cell.actionMarkerId = id
+  cell.actionMarkerId ??= id
   return []
+}
+
+/**
+ * На клетке стоят и ваши, и чужие корабли (осада): здесь у каждого свой маркер действия,
+ * чтобы гарнизон мог ответить вылазкой, а осаждающий — штурмовать.
+ */
+export function isContestedCell(cell: { ships: { ownerId: string }[] }, ownerId: string): boolean {
+  return (
+    cell.ships.some((ship) => ship.ownerId === ownerId)
+    && cell.ships.some((ship) => ship.ownerId !== ownerId)
+  )
+}
+
+/** Маркер действия игрока на клетке (на осаждённой клетке их может быть два). */
+export function actionMarkerOf(
+  game: GameSnapshot,
+  coord: HexCoord,
+  ownerId: string,
+): ActionMarker | undefined {
+  return game.actionMarkers.find(
+    (m) => m.ownerId === ownerId && m.coord.q === coord.q && m.coord.r === coord.r,
+  )
+}
+
+/** Можно ли сейчас поставить маркер действия на клетку (без проверки лимита и фазы). */
+export function actionMarkerSlotFree(
+  game: GameSnapshot,
+  cell: { coord: HexCoord; ships: { ownerId: string }[]; actionMarkerId?: string | null },
+  ownerId: string,
+): boolean {
+  if (actionMarkerOf(game, cell.coord, ownerId)) return false
+  return !cell.actionMarkerId || isContestedCell(cell, ownerId)
+}
+
+/** Ссылка клетки указывает на один из её маркеров (любого игрока) или ни на что. */
+export function syncCellActionMarkerRef(game: GameSnapshot, coord: HexCoord): void {
+  const cell = cellAt(game, coord)
+  if (!cell) return
+  if (cell.actionMarkerId && game.actionMarkers.some((m) => m.id === cell.actionMarkerId)) return
+  cell.actionMarkerId =
+    game.actionMarkers.find((m) => m.coord.q === coord.q && m.coord.r === coord.r)?.id ?? null
 }
 
 export function removeActionMarker(game: GameSnapshot, markerId: string, ownerId: string): string[] {
@@ -241,8 +283,7 @@ export function removeActionMarker(game: GameSnapshot, markerId: string, ownerId
   }
 
   game.actionMarkers.splice(idx, 1)
-  const cell = cellAt(game, marker.coord)
-  if (cell?.actionMarkerId === markerId) cell.actionMarkerId = null
+  syncCellActionMarkerRef(game, marker.coord)
   if (game.phase === 'actions' && game.activePlayerId === ownerId) {
     markActionMarkerResolvedThisTurn(game)
   }
@@ -337,7 +378,7 @@ export function clearMarkersOwnedByPlayer(game: GameSnapshot, playerId: string):
   game.actionMarkers = game.actionMarkers.filter((marker) => marker.ownerId !== playerId)
   game.productionMarkers = game.productionMarkers.filter((marker) => marker.ownerId !== playerId)
   for (const cell of game.cells) {
-    if (cell.actionMarkerId && actionIds.has(cell.actionMarkerId)) cell.actionMarkerId = null
+    if (cell.actionMarkerId && actionIds.has(cell.actionMarkerId)) syncCellActionMarkerRef(game, cell.coord)
     if (cell.productionMarkerId && productionIds.has(cell.productionMarkerId)) {
       cell.productionMarkerId = null
     }
@@ -371,11 +412,13 @@ export function toggleMarkerAtCell(
   if (!cell) return ['Такой клетки нет на карте']
 
   if (kind === 'action') {
-    if (cell.actionMarkerId) {
+    const own = actionMarkerOf(game, coord, ownerId)
+    const target = own?.id ?? (isContestedCell(cell, ownerId) ? null : cell.actionMarkerId)
+    if (target) {
       if (game.phase !== 'planning' && game.phase !== 'actions') {
         return ['Маркеры действий снимаются в планировании и фазе действий']
       }
-      return removeActionMarker(game, cell.actionMarkerId, ownerId)
+      return removeActionMarker(game, target, ownerId)
     }
     return addActionMarker(game, ownerId, coord)
   }
@@ -423,12 +466,9 @@ export function togglePhaseMarkerAtCell(
 export function hasUnplacedActionMarkerCapacity(game: GameSnapshot, ownerId: string): boolean {
   const count = game.actionMarkers.filter((m) => m.ownerId === ownerId).length
   if (count >= actionMarkerLimitForPlayer(game, ownerId)) return false
-  return game.cells.some((cell) => {
-    if (!cell.ships.some((s) => s.ownerId === ownerId)) return false
-    if (!cell.actionMarkerId) return true
-    const marker = game.actionMarkers.find((m) => m.id === cell.actionMarkerId)
-    return marker?.ownerId !== ownerId
-  })
+  return game.cells.some(
+    (cell) => cell.ships.some((s) => s.ownerId === ownerId) && actionMarkerSlotFree(game, cell, ownerId),
+  )
 }
 
 export function hasUnplacedProductionMarkerCapacity(
