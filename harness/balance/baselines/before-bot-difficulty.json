@@ -1,0 +1,573 @@
+{
+  "label": "before-bot-difficulty",
+  "seed": 1,
+  "games": 80,
+  "options": {
+    "maxTurns": 60,
+    "victoryPowerCenters": null,
+    "maxSteps": 250000,
+    "maxCombatRounds": 12,
+    "handicapCells": 0,
+    "doctrines": true,
+    "forcedDoctrine": null,
+    "deviantDoctrine": null
+  },
+  "summaries": {
+    "reference-duel": {
+      "games": 80,
+      "errors": 0,
+      "turns": {
+        "mean": 10.9875,
+        "p10": 8,
+        "median": 11,
+        "p90": 15
+      },
+      "hitTurnCapShare": 0,
+      "winRateBySeat": {
+        "player-2": 0.5125,
+        "player-1": 0.4875
+      },
+      "deviantWinRate": null,
+      "winRateByOrderPosition": {
+        "0": 0.5125,
+        "1": 0.4875
+      },
+      "meanLeadChanges": 2.9625,
+      "pointOfNoReturn": {
+        "mean": 9.4875,
+        "meanShareOfGame": 0.8562566946941947
+      },
+      "giniByTurn": {
+        "5": 0.015156035540129943,
+        "10": 0.0320373071115329,
+        "15": 0.02426174640486439
+      },
+      "wasteRatio": 1.3563318777292577,
+      "firstUnlockTurn": {
+        "destroyer": 1,
+        "cruiser": 3,
+        "carrier": 6.961538461538462,
+        "battleship": 8.32857142857143,
+        "hyper": 9.064516129032258
+      },
+      "claimUtilisationAt3Plus": 0.8730329910351605,
+      "meanEliminationTurn": null,
+      "victoryReasons": {
+        "turn_limit": 8,
+        "power_centers": 72
+      },
+      "battles": {
+        "perGame": 3.7125,
+        "bombardmentsPerGame": 0,
+        "outcomes": {
+          "retreat": 0.21548821548821548,
+          "none": 0.030303030303030304,
+          "attacker": 0.622895622895623,
+          "defender": 0.1111111111111111,
+          "mutual": 0.020202020202020204
+        },
+        "meanAttackerLossValue": 2.016835016835017,
+        "meanDefenderLossValue": 2.6262626262626263
+      },
+      "doctrinesByWindow": {
+        "1": {
+          "expansion": 1
+        },
+        "4": {
+          "expansion": 1
+        },
+        "7": {
+          "defense": 0.475,
+          "expansion": 0.48125,
+          "attack": 0.025,
+          "maneuvers": 0.01875
+        },
+        "10": {
+          "defense": 0.9122807017543859,
+          "expansion": 0.08771929824561403
+        },
+        "13": {
+          "defense": 1
+        }
+      },
+      "sieges": {
+        "perGame": 0.3875,
+        "capturedShare": 0.1935483870967742
+      },
+      "handicap": {
+        "winRate": null,
+        "amplification": null
+      }
+    },
+    "reference-cross-4-13": {
+      "games": 80,
+      "errors": 0,
+      "turns": {
+        "mean": 10.6,
+        "p10": 7,
+        "median": 10,
+        "p90": 15
+      },
+      "hitTurnCapShare": 0,
+      "winRateBySeat": {
+        "player-3": 0.2875,
+        "player-4": 0.2625,
+        "player-2": 0.225,
+        "player-1": 0.225
+      },
+      "deviantWinRate": null,
+      "winRateByOrderPosition": {
+        "0": 0.2375,
+        "1": 0.1875,
+        "2": 0.225,
+        "3": 0.35
+      },
+      "meanLeadChanges": 3.0875,
+      "pointOfNoReturn": {
+        "mean": 9.9125,
+        "meanShareOfGame": 0.9229610320235319
+      },
+      "giniByTurn": {
+        "5": 0.07287812000216795,
+        "10": 0.0811329324130924,
+        "15": 0.10355644218832949
+      },
+      "wasteRatio": 1.2400516319380417,
+      "firstUnlockTurn": {
+        "destroyer": 1,
+        "cruiser": 1,
+        "carrier": 5.3875,
+        "battleship": 7.138461538461539,
+        "hyper": 7.672413793103448
+      },
+      "claimUtilisationAt3Plus": 0.7351436039746786,
+      "meanEliminationTurn": 14.5,
+      "victoryReasons": {
+        "power_centers": 65,
+        "turn_limit": 15
+      },
+      "battles": {
+        "perGame": 21.525,
+        "bombardmentsPerGame": 0,
+        "outcomes": {
+          "defender": 0.17479674796747968,
+          "retreat": 0.10511033681765389,
+          "attacker": 0.6579558652729385,
+          "none": 0.03077816492450639,
+          "mutual": 0.0313588850174216
+        },
+        "meanAttackerLossValue": 1.8281068524970965,
+        "meanDefenderLossValue": 3.267711962833914
+      },
+      "doctrinesByWindow": {
+        "1": {
+          "expansion": 1
+        },
+        "4": {
+          "expansion": 1
+        },
+        "7": {
+          "expansion": 0.4965277777777778,
+          "defense": 0.4027777777777778,
+          "maneuvers": 0.10069444444444445
+        },
+        "10": {
+          "maneuvers": 0.25,
+          "expansion": 0.28888888888888886,
+          "defense": 0.46111111111111114
+        },
+        "13": {
+          "expansion": 0.36607142857142855,
+          "maneuvers": 0.16964285714285715,
+          "defense": 0.4642857142857143
+        }
+      },
+      "sieges": {
+        "perGame": 3.9625,
+        "capturedShare": 0.20512820512820512
+      },
+      "handicap": {
+        "winRate": null,
+        "amplification": null
+      }
+    },
+    "reference-cross-4-9": {
+      "games": 80,
+      "errors": 0,
+      "turns": {
+        "mean": 15,
+        "p10": 15,
+        "median": 15,
+        "p90": 15
+      },
+      "hitTurnCapShare": 0,
+      "winRateBySeat": {
+        "player-4": 0.3125,
+        "player-2": 0.25,
+        "player-1": 0.275,
+        "player-3": 0.1625
+      },
+      "deviantWinRate": null,
+      "winRateByOrderPosition": {
+        "0": 0.2625,
+        "1": 0.2125,
+        "2": 0.1625,
+        "3": 0.3625
+      },
+      "meanLeadChanges": 4.1875,
+      "pointOfNoReturn": {
+        "mean": 15.0875,
+        "meanShareOfGame": 1.0058333333333331
+      },
+      "giniByTurn": {
+        "5": 0.06219022947534668,
+        "10": 0.0912695323118578,
+        "15": 0.1068937952329796
+      },
+      "wasteRatio": 1.214606692552681,
+      "firstUnlockTurn": {
+        "destroyer": 1,
+        "cruiser": 1,
+        "carrier": 5.75,
+        "battleship": 7.325,
+        "hyper": 8.05
+      },
+      "claimUtilisationAt3Plus": 0.7228441643398693,
+      "meanEliminationTurn": 13.545454545454545,
+      "victoryReasons": {
+        "turn_limit": 80
+      },
+      "battles": {
+        "perGame": 35.575,
+        "bombardmentsPerGame": 0,
+        "outcomes": {
+          "defender": 0.12262825017568517,
+          "attacker": 0.7659873506676037,
+          "retreat": 0.04848910751932537,
+          "mutual": 0.04146170063246662,
+          "none": 0.021433591004919185
+        },
+        "meanAttackerLossValue": 1.6110330288123682,
+        "meanDefenderLossValue": 4.268798313422347
+      },
+      "doctrinesByWindow": {
+        "1": {
+          "expansion": 1
+        },
+        "4": {
+          "expansion": 1
+        },
+        "7": {
+          "expansion": 0.765625,
+          "maneuvers": 0.13125,
+          "defense": 0.103125
+        },
+        "10": {
+          "expansion": 0.465625,
+          "maneuvers": 0.415625,
+          "defense": 0.11875
+        },
+        "13": {
+          "expansion": 0.4528301886792453,
+          "maneuvers": 0.4716981132075472,
+          "defense": 0.07547169811320754
+        }
+      },
+      "sieges": {
+        "perGame": 3.675,
+        "capturedShare": 0.3561643835616438
+      },
+      "handicap": {
+        "winRate": null,
+        "amplification": null
+      }
+    },
+    "reference-five-11": {
+      "games": 80,
+      "errors": 0,
+      "turns": {
+        "mean": 12.075,
+        "p10": 7,
+        "median": 13,
+        "p90": 15
+      },
+      "hitTurnCapShare": 0,
+      "winRateBySeat": {
+        "player-5": 0.175,
+        "player-4": 0.1625,
+        "player-2": 0.25,
+        "player-3": 0.2,
+        "player-1": 0.2125
+      },
+      "deviantWinRate": null,
+      "winRateByOrderPosition": {
+        "0": 0.225,
+        "1": 0.25,
+        "2": 0.175,
+        "3": 0.2125,
+        "4": 0.1375
+      },
+      "meanLeadChanges": 4.85,
+      "pointOfNoReturn": {
+        "mean": 11.2625,
+        "meanShareOfGame": 0.9174215714840713
+      },
+      "giniByTurn": {
+        "5": 0.11778671178486462,
+        "10": 0.2028214969504134,
+        "15": 0.25297848352811025
+      },
+      "wasteRatio": 1.3303022941033562,
+      "firstUnlockTurn": {
+        "destroyer": 1,
+        "cruiser": 1,
+        "carrier": 5.2405063291139244,
+        "battleship": 7.846153846153846,
+        "hyper": 8.8
+      },
+      "claimUtilisationAt3Plus": 0.7192373579422923,
+      "meanEliminationTurn": 8.479338842975206,
+      "victoryReasons": {
+        "turn_limit": 29,
+        "power_centers": 51
+      },
+      "battles": {
+        "perGame": 32.075,
+        "bombardmentsPerGame": 0,
+        "outcomes": {
+          "attacker": 0.7954014029618083,
+          "defender": 0.09547934528448948,
+          "retreat": 0.05611847233047545,
+          "mutual": 0.024551831644583008,
+          "none": 0.028448947778643804
+        },
+        "meanAttackerLossValue": 1.3413873733437256,
+        "meanDefenderLossValue": 3.886983632112237
+      },
+      "doctrinesByWindow": {
+        "1": {
+          "expansion": 1
+        },
+        "4": {
+          "expansion": 0.9225,
+          "defense": 0.0775
+        },
+        "7": {
+          "maneuvers": 0.11370262390670553,
+          "expansion": 0.7142857142857143,
+          "defense": 0.17201166180758018
+        },
+        "10": {
+          "maneuvers": 0.26229508196721313,
+          "expansion": 0.5204918032786885,
+          "defense": 0.21721311475409835
+        },
+        "13": {
+          "expansion": 0.43820224719101125,
+          "defense": 0.2752808988764045,
+          "maneuvers": 0.28651685393258425
+        }
+      },
+      "sieges": {
+        "perGame": 2.8875,
+        "capturedShare": 0.391304347826087
+      },
+      "handicap": {
+        "winRate": null,
+        "amplification": null
+      }
+    },
+    "reference-six-13": {
+      "games": 80,
+      "errors": 0,
+      "turns": {
+        "mean": 12.65,
+        "p10": 8,
+        "median": 14,
+        "p90": 15
+      },
+      "hitTurnCapShare": 0,
+      "winRateBySeat": {
+        "player-6": 0.1,
+        "player-5": 0.1625,
+        "player-2": 0.275,
+        "player-1": 0.225,
+        "player-4": 0.125,
+        "player-3": 0.1125
+      },
+      "deviantWinRate": null,
+      "winRateByOrderPosition": {
+        "0": 0.125,
+        "1": 0.2125,
+        "2": 0.225,
+        "3": 0.1875,
+        "4": 0.125,
+        "5": 0.125
+      },
+      "meanLeadChanges": 4.3,
+      "pointOfNoReturn": {
+        "mean": 11.9875,
+        "meanShareOfGame": 0.9349476911976915
+      },
+      "giniByTurn": {
+        "5": 0.08239167412387002,
+        "10": 0.14242511591649343,
+        "15": 0.24982318179308025
+      },
+      "wasteRatio": 1.3465454726071624,
+      "firstUnlockTurn": {
+        "destroyer": 1,
+        "cruiser": 1.0125,
+        "carrier": 4.8125,
+        "battleship": 7.342105263157895,
+        "hyper": 8.417910447761194
+      },
+      "claimUtilisationAt3Plus": 0.7047469149985903,
+      "meanEliminationTurn": 10.050420168067227,
+      "victoryReasons": {
+        "turn_limit": 33,
+        "power_centers": 47
+      },
+      "battles": {
+        "perGame": 44.575,
+        "bombardmentsPerGame": 0,
+        "outcomes": {
+          "defender": 0.18452047111609646,
+          "attacker": 0.6957375210319686,
+          "retreat": 0.05300056085249579,
+          "mutual": 0.050476724621424565,
+          "none": 0.016264722378014584
+        },
+        "meanAttackerLossValue": 1.8104318564217612,
+        "meanDefenderLossValue": 3.8297812675266405
+      },
+      "doctrinesByWindow": {
+        "1": {
+          "expansion": 1
+        },
+        "4": {
+          "expansion": 0.9895833333333334,
+          "defense": 0.010416666666666666
+        },
+        "7": {
+          "expansion": 0.7330415754923414,
+          "maneuvers": 0.15536105032822758,
+          "defense": 0.11159737417943107
+        },
+        "10": {
+          "expansion": 0.5337078651685393,
+          "defense": 0.13764044943820225,
+          "maneuvers": 0.32865168539325845
+        },
+        "13": {
+          "defense": 0.31512605042016806,
+          "expansion": 0.42857142857142855,
+          "maneuvers": 0.25630252100840334
+        }
+      },
+      "sieges": {
+        "perGame": 7.575,
+        "capturedShare": 0.2743801652892562
+      },
+      "handicap": {
+        "winRate": null,
+        "amplification": null
+      }
+    },
+    "reference-six-7": {
+      "games": 80,
+      "errors": 0,
+      "turns": {
+        "mean": 15,
+        "p10": 15,
+        "median": 15,
+        "p90": 15
+      },
+      "hitTurnCapShare": 0,
+      "winRateBySeat": {
+        "player-5": 0.175,
+        "player-2": 0.2125,
+        "player-6": 0.125,
+        "player-4": 0.1875,
+        "player-1": 0.175,
+        "player-3": 0.125
+      },
+      "deviantWinRate": null,
+      "winRateByOrderPosition": {
+        "0": 0.175,
+        "1": 0.1875,
+        "2": 0.3,
+        "3": 0.1375,
+        "4": 0.1625,
+        "5": 0.0375
+      },
+      "meanLeadChanges": 4.725,
+      "pointOfNoReturn": {
+        "mean": 14.7125,
+        "meanShareOfGame": 0.9808333333333333
+      },
+      "giniByTurn": {
+        "5": 0.08663093589420894,
+        "10": 0.250678956287271,
+        "15": 0.36768172176540553
+      },
+      "wasteRatio": 1.309220178309446,
+      "firstUnlockTurn": {
+        "destroyer": 1,
+        "cruiser": 1,
+        "carrier": 5.475,
+        "battleship": 7.9,
+        "hyper": 8.85
+      },
+      "claimUtilisationAt3Plus": 0.9215591283581961,
+      "meanEliminationTurn": 8.658878504672897,
+      "victoryReasons": {
+        "turn_limit": 80
+      },
+      "battles": {
+        "perGame": 43.4,
+        "bombardmentsPerGame": 0,
+        "outcomes": {
+          "attacker": 0.7819700460829493,
+          "defender": 0.09821428571428571,
+          "retreat": 0.0538594470046083,
+          "mutual": 0.036290322580645164,
+          "none": 0.02966589861751152
+        },
+        "meanAttackerLossValue": 1.5881336405529953,
+        "meanDefenderLossValue": 4.403225806451613
+      },
+      "doctrinesByWindow": {
+        "1": {
+          "expansion": 1
+        },
+        "4": {
+          "expansion": 1
+        },
+        "7": {
+          "expansion": 0.8671497584541062,
+          "maneuvers": 0.12077294685990338,
+          "defense": 0.012077294685990338
+        },
+        "10": {
+          "maneuvers": 0.41690962099125367,
+          "expansion": 0.5626822157434402,
+          "defense": 0.02040816326530612
+        },
+        "13": {
+          "expansion": 0.51,
+          "maneuvers": 0.4766666666666667,
+          "defense": 0.013333333333333334
+        }
+      },
+      "sieges": {
+        "perGame": 3.2,
+        "capturedShare": 0.2784313725490196
+      },
+      "handicap": {
+        "winRate": null,
+        "amplification": null
+      }
+    }
+  }
+}

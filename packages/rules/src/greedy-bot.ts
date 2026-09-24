@@ -1,7 +1,12 @@
 /**
  * Жадный бот: соперник в партиях с людьми (боты в лобби) и в замерах баланса.
  *
- * Не претендует на сильную игру — он должен быть последовательным и никогда не вставать.
+ * Три уровня сложности. «Лёгкий» — исходный жадный бот: последовательный, никогда не встаёт,
+ * но играет прямолинейно. «Средний» и «высокий» решают по взвешенной оценке ситуации
+ * (`bot-strategy.ts`, `bot-tactics.ts`, `bot-decisions.ts`): средний выбирает стратегический
+ * режим и в основном наступает, высокий вдобавок видит угрозы своим центрам, мешает лидеру и
+ * расчётливо ведёт бой. Уровень задаётся для каждого бота отдельно; по умолчанию — лёгкий.
+ *
  * Боевые решения движок принимает вне очереди хода, поэтому бот отвечает за всех участников
  * боя, а не только за активного игрока.
  *
@@ -18,7 +23,6 @@ import {
   getCombatRetreatDestinations,
   type CombatPreview,
 } from './combat.js'
-import { hitProbability, SHIP_DICE, SHIP_HIT_THRESHOLD, SHIP_HULL } from './combat-hits.js'
 import { actionMarkerLimitForPlayer, countControlledPowerCenters } from './marker-pools.js'
 import { canPlaceActionMarkerOnCell } from './markers.js'
 import { getBuildableShipsForMarker } from './production.js'
@@ -30,6 +34,55 @@ import { doctrineChoiceOwed, type DoctrineId } from './doctrines.js'
 import type { GameSnapshot, RuntimeCellState } from './save-file.js'
 import type { ShipMovePlan } from './movement.js'
 import { hexKey, type HexCoord, type MapDefinition, type ShipType, type ShipUnit } from './types.js'
+import { combatStrength } from './bot-combat-math.js'
+import { BOT_PROFILES, type SmartDifficulty } from './bot-strategy.js'
+import {
+  chooseClaimPicks,
+  chooseMarkerCell,
+  chooseRechargePicks,
+  createTacticalContext,
+  planMarker,
+  reserveValueOf,
+  type MarkerPlan,
+} from './bot-tactics.js'
+import {
+  hardKeepFighting,
+  hardPrepDecision,
+  hardRetreatDestination,
+  hardSupportSide,
+  pickSmartDoctrine,
+} from './bot-decisions.js'
+
+export { combatStrength }
+
+/** Уровень сложности бота. */
+export type BotDifficulty = 'easy' | 'medium' | 'hard'
+
+export const BOT_DIFFICULTIES: readonly BotDifficulty[] = ['easy', 'medium', 'hard']
+
+export interface GreedyBotOptions {
+  /** Сложность каждого бота; не указан — 'easy'. */
+  difficultyByPlayer?: Readonly<Record<string, BotDifficulty>>
+}
+
+export function isBotDifficulty(value: unknown): value is BotDifficulty {
+  return value === 'easy' || value === 'medium' || value === 'hard'
+}
+
+/** Сложность бота `playerId`; всё непонятное — лёгкий уровень, как было до уровней. */
+export function botDifficultyOf(options: GreedyBotOptions | undefined, playerId: string): BotDifficulty {
+  const value = options?.difficultyByPlayer?.[playerId]
+  return isBotDifficulty(value) ? value : 'easy'
+}
+
+/** Боевые развилки по расчёту шансов, а не по простому правилу. */
+function smartCombatOf(difficulty: BotDifficulty): boolean {
+  return difficulty !== 'easy' && BOT_PROFILES[difficulty].smartCombat
+}
+
+function smartLevel(difficulty: BotDifficulty): SmartDifficulty {
+  return difficulty === 'medium' ? 'medium' : 'hard'
+}
 
 /** Сколько раундов бот готов драться, прежде чем выйти из боя. */
 export const GREEDY_BOT_MAX_COMBAT_ROUNDS = 12
@@ -47,6 +100,48 @@ export function setGreedyBotActionSink(sink: ActionSink | null): void {
 }
 
 const act: ActionSink = (...args) => actionSink(...args)
+
+type BotErrorListener = (error: unknown, where: string) => void
+
+let botErrorListener: BotErrorListener | null = null
+
+/**
+ * Замер и тесты слушают сбои оценки среднего и высокого уровня: в живой партии сбой молча
+ * заменяется решением простого бота, и без слушателя ошибку в расчёте не заметить.
+ */
+export function setBotErrorListener(listener: BotErrorListener | null): void {
+  botErrorListener = listener
+}
+
+type BotTraceListener = (playerId: string, text: string) => void
+
+let botTraceListener: BotTraceListener | null = null
+
+/**
+ * Объяснение решений среднего и высокого уровня: режим, выбранный маркер, слагаемые оценки.
+ * Для отладки и разбора партий; в живой партии слушателя нет и строки не собираются.
+ */
+export function setBotTraceListener(listener: BotTraceListener | null): void {
+  botTraceListener = listener
+}
+
+function trace(playerId: string, text: () => string): void {
+  if (botTraceListener) botTraceListener(playerId, text())
+}
+
+/**
+ * Оценка бота не должна ронять партию: при ошибке в расчёте берётся запасное решение.
+ * Сигнал о спланированном действии (`planGreedyBotAction`) пропускается дальше.
+ */
+function safeEval<T>(where: string, evaluate: () => T, fallback: () => T): T {
+  try {
+    return evaluate()
+  } catch (error) {
+    if (error instanceof PlannedSignal) throw error
+    botErrorListener?.(error, where)
+    return fallback()
+  }
+}
 
 export function parseKey(key: string): HexCoord {
   const [q, r] = key.split(',').map(Number)
@@ -75,12 +170,24 @@ function enemyShipsOn(cell: RuntimeCellState, playerId: string): ShipUnit[] {
 }
 
 /**
- * Выбор доктрины. Правила — дуга из плана: рано расширяться, поздно держаться. Центр в осаде —
- * «Оборона» (перебросы гарнизона и −1 к вражеским попаданиям); флот сильнее вражеского и
- * центров мало — «Атака»; четыре центра и больше — «Оборона», пока не сорвали; иначе
+ * Выбор доктрины. Лёгкий уровень — дуга из плана: рано расширяться, поздно держаться. Центр в
+ * осаде — «Оборона» (перебросы гарнизона и −1 к вражеским попаданиям); флот сильнее вражеского
+ * и центров мало — «Атака»; четыре центра и больше — «Оборона», пока не сорвали; иначе
  * «Экспансия». Ничьи между равноценными — случайно, как везде у бота.
+ *
+ * Средний уровень берёт доктрину своего главного режима, высокий — по взвешенной оценке
+ * выгоды каждой доктрины за окно (`bot-decisions.ts`).
  */
-export function pickDoctrine(game: GameSnapshot, playerId: string): DoctrineId {
+export function pickDoctrine(game: GameSnapshot, playerId: string, difficulty: BotDifficulty = 'easy'): DoctrineId {
+  if (difficulty !== 'easy') {
+    const doctrineId = safeEval(
+      'doctrine',
+      () => pickSmartDoctrine(game, playerId, difficulty),
+      () => pickDoctrine(game, playerId, 'easy'),
+    )
+    trace(playerId, () => `ход ${game.turnNumber}: доктрина ${doctrineId}`)
+    return doctrineId
+  }
   const powerCenters = countControlledPowerCenters(game, playerId)
   const myFleet: ShipType[] = []
   const enemyFleet: ShipType[] = []
@@ -97,21 +204,6 @@ export function pickDoctrine(game: GameSnapshot, playerId: string): DoctrineId {
     none: 0,
   }
   return pickAmongBest(Object.keys(scores) as DoctrineId[], (id) => scores[id]) ?? 'none'
-}
-
-/**
- * Боевая сила группы: ожидаемые попадания за раунд, умноженные на суммарную прочность.
- * Грубая оценка по Ланчестеру — сколько группа успеет нанести, прежде чем её выбьют.
- * Бонус авианосца и поддержку не учитывает: бот осторожнее, чем мог бы быть.
- */
-export function combatStrength(types: readonly ShipType[]): number {
-  let hits = 0
-  let hull = 0
-  for (const type of types) {
-    hits += (SHIP_DICE[type] ?? 0) * hitProbability(SHIP_HIT_THRESHOLD[type] ?? null)
-    hull += SHIP_HULL[type] ?? 1
-  }
-  return hits * hull
 }
 
 /** Нападать стоит с заметным перевесом: бой идёт до конца, а урон копится у обеих сторон. */
@@ -176,7 +268,23 @@ export function pickAmongBest<T>(items: readonly T[], score: (item: T) => number
   return best[Math.floor(Math.random() * best.length)]!
 }
 
-export function tryPlaceMarker(game: GameSnapshot, map: MapDefinition, playerId: string): boolean {
+export function tryPlaceMarker(
+  game: GameSnapshot,
+  map: MapDefinition,
+  playerId: string,
+  difficulty: BotDifficulty = 'easy',
+): boolean {
+  if (difficulty !== 'easy') {
+    const coord = safeEval(
+      'marker',
+      () => chooseMarkerCell(createTacticalContext(game, map, playerId, difficulty)),
+      () => null,
+    )
+    if (coord) {
+      const { errors } = act(game, map, playerId, 'toggle-marker', { coord, kind: 'action' })
+      if (errors.length === 0) return true
+    }
+  }
   const limit = actionMarkerLimitForPlayer(game, playerId)
   const owned = game.actionMarkers.filter((marker) => marker.ownerId === playerId).length
   if (owned >= limit) return false
@@ -324,8 +432,20 @@ export function stepActions(
   playerId: string,
   tally: SpendTally,
   attempts: MarkerAttempts,
+  difficulty: BotDifficulty = 'easy',
 ): boolean {
   if (game.actionMarkerResolvedThisTurn) return false
+  if (difficulty !== 'easy') return stepActionsSmart(game, map, playerId, tally, attempts, difficulty)
+  return stepActionsEasy(game, map, playerId, tally, attempts)
+}
+
+function stepActionsEasy(
+  game: GameSnapshot,
+  map: MapDefinition,
+  playerId: string,
+  tally: SpendTally,
+  attempts: MarkerAttempts,
+): boolean {
   const markers = game.actionMarkers.filter((marker) => marker.ownerId === playerId)
   if (markers.length === 0) return false
 
@@ -355,6 +475,114 @@ export function stepActions(
   return dropMarker(game, map, playerId, (stuck ?? markers[0]!).coord) && consumed()
 }
 
+/** Веса режимов одной строкой — для объяснения решения. */
+function describeModes(modes: Record<string, number>): string {
+  return Object.entries(modes)
+    .filter(([, weight]) => weight >= 0.05)
+    .sort((a, b) => b[1] - a[1])
+    .map(([mode, weight]) => `${mode} ${weight.toFixed(2)}`)
+    .join(', ')
+}
+
+/** Исполнить план маркера; постройку записать в замер трат. Отказ движка — в слушатель сбоев. */
+function executeMarkerPlan(
+  game: GameSnapshot,
+  map: MapDefinition,
+  playerId: string,
+  marker: { id: string; coord: HexCoord },
+  plan: MarkerPlan,
+  tally: SpendTally,
+): boolean {
+  let errors: string[]
+  if (plan.kind === 'build') {
+    const before = faceUpValueFor(game, playerId)
+    const ships = Array.from({ length: plan.count }, () => ({ type: plan.type, coord: { ...marker.coord } }))
+    errors = act(game, map, playerId, 'execute-production', { markerId: marker.id, ships }).errors
+    if (!errors.length) {
+      const cost = getShipProductionCost(plan.type)
+      tally.tokenFaceValue += Math.max(0, before - faceUpValueFor(game, playerId))
+      tally.shipCost += (cost.credits + cost.production) * plan.count
+    }
+  } else if (plan.kind === 'assault') {
+    errors = act(game, map, playerId, 'execute-marker-assault', { from: { ...marker.coord } }).errors
+  } else {
+    errors = act(game, map, playerId, 'execute-marker-movement', { from: { ...marker.coord }, moves: plan.moves }).errors
+  }
+  // Отказ за человека в живой партии — не расхождение оценки с правилами.
+  if (errors.length && errors[0] !== NOT_A_BOT) botErrorListener?.(new Error(errors.join('; ')), `plan-${plan.kind}`)
+  return errors.length === 0
+}
+
+/**
+ * Ход маркером для среднего и высокого уровня: оценить дело каждого маркера и исполнить
+ * лучший. Маркер, который держит ответ на угрозу своему центру, придерживается до поздних
+ * кругов. Если оценка разошлась с правилами и движок отказал — запасной путь простого бота,
+ * а в крайнем случае маркер снимается: фаза действий обязана закрыться.
+ */
+function stepActionsSmart(
+  game: GameSnapshot,
+  map: MapDefinition,
+  playerId: string,
+  tally: SpendTally,
+  attempts: MarkerAttempts,
+  difficulty: Exclude<BotDifficulty, 'easy'>,
+): boolean {
+  const markers = game.actionMarkers.filter((marker) => marker.ownerId === playerId)
+  if (markers.length === 0) return false
+  const countMarkers = () => game.actionMarkers.filter((m) => m.ownerId === playerId).length
+  const before = countMarkers()
+  const consumed = () =>
+    game.pendingCombat != null || game.actionMarkerResolvedThisTurn || countMarkers() < before
+
+  // Пока у соперников есть маркеры, запас на ответ ещё может понадобиться.
+  const rivalsStillAct = game.actionMarkers.some((marker) => marker.ownerId !== playerId)
+  let modeNote = ''
+  const evaluated = safeEval('actions', () => {
+    const ctx = createTacticalContext(game, map, playerId, difficulty)
+    if (botTraceListener) modeNote = describeModes(ctx.situation.modes)
+    return markers.map((marker) => {
+      const key = hexKey(marker.coord.q, marker.coord.r)
+      const tried = attempts.get(`${game.turnNumber}:${marker.id}`) ?? 0
+      const plan = tried >= MAX_MARKER_ATTEMPTS ? null : planMarker(ctx, key, false)
+      const reserve = reserveValueOf(ctx, key)
+      const value = plan?.value ?? -Infinity
+      return { marker, plan, reserve, tried, score: value - (rivalsStillAct ? reserve : 0) }
+    })
+  }, () => null)
+  if (!evaluated) return stepActionsEasy(game, map, playerId, tally, attempts)
+  const candidates = evaluated
+
+  const tryPlan = (candidate: (typeof candidates)[number]): boolean => {
+    if (!candidate.plan) return false
+    const { plan, marker } = candidate
+    trace(playerId, () =>
+      `ход ${game.turnNumber}, маркер ${marker.coord.q},${marker.coord.r}: ${plan.kind} — ${plan.reason} `
+        + `(оценка ${plan.value.toFixed(1)}; ${modeNote})`)
+    attempts.set(`${game.turnNumber}:${candidate.marker.id}`, candidate.tried + 1)
+    if (executeMarkerPlan(game, map, playerId, candidate.marker, candidate.plan, tally) && consumed()) return true
+    // Движок отказал: оценка разошлась с правилами. Запасной путь — как у простого бота.
+    if (tryBuild(game, map, playerId, candidate.marker.id, candidate.marker.coord, tally) && consumed()) return true
+    return tryMove(game, map, playerId, candidate.marker.coord) && consumed()
+  }
+
+  const ranked = candidates
+    .filter((candidate) => candidate.plan && candidate.plan.value > 0)
+    .sort((a, b) => b.score - a.score)
+  const top = ranked[0]
+  if (top && top.score > 0) {
+    for (const candidate of ranked) if (tryPlan(candidate)) return true
+  }
+
+  // Полезного дела сейчас нет. Сначала снимаем маркер, который ни на что не годен и не держит
+  // запас; иначе исполняем придержанный план; иначе снимаем наименее нужный маркер.
+  const idle = candidates
+    .filter((candidate) => !(candidate.plan && candidate.plan.value > 0) && candidate.reserve <= 0)
+  if (idle.length > 0) return dropMarker(game, map, playerId, idle[0]!.marker.coord) && consumed()
+  for (const candidate of ranked) if (tryPlan(candidate)) return true
+  const leastNeeded = [...candidates].sort((a, b) => a.reserve - b.reserve)[0]!
+  return dropMarker(game, map, playerId, leastNeeded.marker.coord) && consumed()
+}
+
 /**
  * Стоит ли стороне продолжать бой: оставшаяся сила (ожидаемые попадания на оставшуюся
  * прочность) не меньше вражеской. Отступление — чтобы не терять флот в заведомо проигранном бою.
@@ -380,11 +608,17 @@ function sideHoldsOut(preview: CombatPreview, side: 'attacker' | 'defender'): bo
  * Один шаг боевого конечного автомата. Возвращает false, если продвинуться не удалось —
  * тогда вызывающий аварийно снимает бой, чтобы партия не зависла.
  */
+/** Кто из участников боя какого уровня: по умолчанию все лёгкие, как было до уровней. */
+export type BotDifficultyResolver = (playerId: string) => BotDifficulty
+
+const ALL_EASY: BotDifficultyResolver = () => 'easy'
+
 export function stepCombat(
   game: GameSnapshot,
   map: MapDefinition,
   options: { maxCombatRounds: number } = { maxCombatRounds: GREEDY_BOT_MAX_COMBAT_ROUNDS },
   hooks: { onSiegeEstablished?: () => void } = {},
+  difficultyOf: BotDifficultyResolver = ALL_EASY,
 ): boolean {
   const pending = game.pendingCombat
   if (!pending) return true
@@ -403,7 +637,22 @@ export function stepCombat(
     // Отвечает каждый, кто ещё не ответил. Отказ одного (в живой партии — человек, за которого
     // бот не ходит) не мешает ответить остальным.
     let progressed = false
-    if (!prep.readyBy[attackerId]) {
+    if (!prep.readyBy[attackerId] && smartCombatOf(difficultyOf(attackerId))) {
+      // Высокий уровень считает шансы: штурм, осада или отказ от ответа на осаду.
+      const decision = safeEval('combat-prep', () => hardPrepDecision(game, map, attackerId, smartLevel(difficultyOf(attackerId))), () => 'ready' as const)
+      if (decision === 'siege') {
+        const siege = act(game, map, attackerId, 'establish-siege')
+        if (!siege.errors.length) {
+          hooks.onSiegeEstablished?.()
+          return true
+        }
+      }
+      if (decision === 'decline' && prep.siegeResponse) {
+        const decline = act(game, map, attackerId, 'cancel-combat-prep')
+        if (!decline.errors.length) return true
+      }
+      progressed = act(game, map, attackerId, 'update-combat-prep', { ready: true }).errors.length === 0
+    } else if (!prep.readyBy[attackerId]) {
       if (prep.siegeAvailable && preview && !overwhelms(preview)) {
         // Штурм без подавляющего перевеса стоит флота; осада берёт центр бесплатно, но дольше.
         const siege = act(game, map, attackerId, 'establish-siege')
@@ -426,12 +675,20 @@ export function stepCombat(
       // Третьи игроки: без их ответа бой не начнётся.
       for (const candidate of preview?.supportCandidates ?? []) {
         if (prep.readyBy[candidate.playerId]) continue
+        const smart = smartCombatOf(difficultyOf(candidate.playerId))
         const ready = act(game, map, candidate.playerId, 'update-combat-prep', {
           ready: true,
-          // Гарнизон встаёт против своего осаждающего; прочие — против лидера.
+          // Гарнизон встаёт против своего осаждающего; прочие — против лидера (лёгкий и
+          // средний) или против того, кто опаснее самому боту (высокий).
           supportSide: candidate.garrisonShipIds?.length
             ? 'attacker'
-            : supportSideFor(game, candidate.playerId, attackerId, prep.defenderId),
+            : smart
+              ? safeEval(
+                'support',
+                () => hardSupportSide(game, candidate.playerId, attackerId, prep.defenderId, smartLevel(difficultyOf(candidate.playerId))),
+                () => supportSideFor(game, candidate.playerId, attackerId, prep.defenderId),
+              )
+              : supportSideFor(game, candidate.playerId, attackerId, prep.defenderId),
         })
         progressed ||= ready.errors.length === 0
       }
@@ -462,16 +719,29 @@ export function stepCombat(
     if (!playerId) return false
 
     const retreats = getCombatRetreatDestinations(game, playerId)
-    const preview = buildCombatPreviewFromPending(game)
-    const keepFighting =
-      pending.roundNumber < options.maxCombatRounds
-      && (!preview || !retreats.length || sideHoldsOut(preview, side))
+    const smart = smartCombatOf(difficultyOf(playerId))
+    let keepFighting: boolean
+    if (smart) {
+      keepFighting = !retreats.length
+        || safeEval(
+          'continue',
+          () => hardKeepFighting(game, playerId, side, pending.roundNumber, options.maxCombatRounds),
+          () => pending.roundNumber < options.maxCombatRounds,
+        )
+    } else {
+      const preview = buildCombatPreviewFromPending(game)
+      keepFighting =
+        pending.roundNumber < options.maxCombatRounds
+        && (!preview || !retreats.length || sideHoldsOut(preview, side))
+    }
     if (keepFighting) {
       const { errors } = act(game, map, playerId, 'continue-combat')
       return errors.length === 0
     }
 
-    const retreatTo = retreats[0]
+    const retreatTo = smart
+      ? safeEval('retreat', () => hardRetreatDestination(game, playerId), () => retreats[0])
+      : retreats[0]
     const { errors } = act(
       game,
       map,
@@ -506,6 +776,38 @@ export function supportSideFor(
 }
 
 /**
+ * Выбор клеток захвата. Лёгкий уровень отдаёт выбор движку (центры власти, затем дорогие
+ * фишки); средний и высокий выбирают сами — с учётом связности регионов и помехи лидеру.
+ * Если выбор бота движок отклонил, решает движок: партия не должна стоять.
+ */
+export function settleClaimPicks(
+  game: GameSnapshot,
+  map: MapDefinition,
+  playerId: string,
+  difficulty: BotDifficulty = 'easy',
+): boolean {
+  if (difficulty !== 'easy') {
+    const picks = safeEval('claims', () => chooseClaimPicks(game, playerId, difficulty), () => undefined)
+    if (picks?.length && act(game, map, playerId, 'execute-claim-picks', { picks }).errors.length === 0) return true
+  }
+  return act(game, map, playerId, 'execute-claim-picks').errors.length === 0
+}
+
+/** Выбор фишек перезарядки: высокий уровень поднимает их там и того вида, где будет строить. */
+export function settleRechargePicks(
+  game: GameSnapshot,
+  map: MapDefinition,
+  playerId: string,
+  difficulty: BotDifficulty = 'easy',
+): boolean {
+  if (difficulty !== 'easy' && BOT_PROFILES[difficulty].smartRecharge) {
+    const picks = safeEval('recharge', () => chooseRechargePicks(game, playerId), () => undefined)
+    if (picks?.length && act(game, map, playerId, 'execute-recharge-picks', { picks }).errors.length === 0) return true
+  }
+  return act(game, map, playerId, 'execute-recharge-picks').errors.length === 0
+}
+
+/**
  * Один шаг ботов на живой партии: бой, выбор доктрин, долги планирования, маркеры, действия.
  * Ходит только за `botIds`; ход человека не трогает.
  */
@@ -514,15 +816,17 @@ export function greedyBotStep(
   map: MapDefinition,
   botIds: ReadonlySet<string>,
   attempts: MarkerAttempts,
+  options?: GreedyBotOptions,
 ): void {
   if (game.gameOver) return
+  const difficultyOf: BotDifficultyResolver = (playerId) => botDifficultyOf(options, playerId)
   if (game.siegeContinuationChoice) {
     const { playerId } = game.siegeContinuationChoice
     if (botIds.has(playerId)) act(game, map, playerId, 'resolve-siege-continuation', { continue: true })
     return
   }
   if (game.pendingCombat) {
-    stepCombat(game, map)
+    stepCombat(game, map, undefined, undefined, difficultyOf)
     return
   }
   if (game.phase === 'planning') {
@@ -531,33 +835,38 @@ export function greedyBotStep(
     for (const playerId of botIds) {
       if (siegeLossesOwedBy(game, playerId).length > 0) act(game, map, playerId, 'execute-siege-losses')
       if (doctrineChoiceOwed(game, playerId)) {
-        act(game, map, playerId, 'choose-doctrine', { doctrineId: pickDoctrine(game, playerId) })
+        act(game, map, playerId, 'choose-doctrine', {
+          doctrineId: pickDoctrine(game, playerId, difficultyOf(playerId)),
+        })
       }
     }
     // Захват и перезарядка — тоже сразу, не дожидаясь очереди: пока бот не выбрал клетки,
     // центры власти хода не подсчитаны и победа ни у кого не проверяется.
     for (const playerId of botIds) {
-      if (claimPicksRemaining(game, playerId) > 0) act(game, map, playerId, 'execute-claim-picks')
-      if (rechargePicksRemaining(game, playerId) > 0) act(game, map, playerId, 'execute-recharge-picks')
+      if (claimPicksRemaining(game, playerId) > 0) settleClaimPicks(game, map, playerId, difficultyOf(playerId))
+      if (rechargePicksRemaining(game, playerId) > 0) settleRechargePicks(game, map, playerId, difficultyOf(playerId))
     }
   }
   // Вскрытие доктрин сразу считает захват — он может принести победу.
   if (game.gameOver) return
   const active = game.activePlayerId
   if (!active || !botIds.has(active)) return
+  const difficulty = difficultyOf(active)
   let progressed = false
   if (game.phase === 'planning' && siegeLossesOwedBy(game, active).length > 0) {
     progressed = act(game, map, active, 'execute-siege-losses').errors.length === 0
   }
   if (!progressed && game.phase === 'planning' && claimPicksRemaining(game, active) > 0) {
-    progressed = act(game, map, active, 'execute-claim-picks').errors.length === 0
+    progressed = settleClaimPicks(game, map, active, difficulty)
   }
   if (!progressed && game.phase === 'planning' && rechargePicksRemaining(game, active) > 0) {
-    progressed = act(game, map, active, 'execute-recharge-picks').errors.length === 0
+    progressed = settleRechargePicks(game, map, active, difficulty)
   }
   const tally: SpendTally = { tokenFaceValue: 0, shipCost: 0 }
-  if (!progressed && game.phase === 'planning') progressed = tryPlaceMarker(game, map, active)
-  else if (!progressed && game.phase === 'actions') progressed = stepActions(game, map, active, tally, attempts)
+  if (!progressed && game.phase === 'planning') progressed = tryPlaceMarker(game, map, active, difficulty)
+  else if (!progressed && game.phase === 'actions') {
+    progressed = stepActions(game, map, active, tally, attempts, difficulty)
+  }
   if (!progressed && !game.pendingCombat) act(game, map, active, 'advance-phase')
 }
 
@@ -588,6 +897,7 @@ export function planGreedyBotAction(
   map: MapDefinition,
   botIds: ReadonlySet<string>,
   attempts: MarkerAttempts,
+  options?: GreedyBotOptions,
 ): PlannedBotAction | null {
   const copy = structuredClone(game)
   setGreedyBotActionSink((g, m, playerId, actionId, params) => {
@@ -597,7 +907,7 @@ export function planGreedyBotAction(
     return result
   })
   try {
-    greedyBotStep(copy, map, botIds, attempts)
+    greedyBotStep(copy, map, botIds, attempts, options)
     return null
   } catch (e) {
     if (e instanceof PlannedSignal) return e.action

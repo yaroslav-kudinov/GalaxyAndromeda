@@ -39,9 +39,13 @@ import {
   indexCells,
   parseKey,
   pickDoctrine,
+  setBotErrorListener,
+  settleClaimPicks,
+  settleRechargePicks,
   stepActions,
   stepCombat,
   tryPlaceMarker,
+  type BotDifficulty,
   type MarkerAttempts,
   type SpendTally,
 } from '../../packages/rules/src/index.js'
@@ -81,6 +85,12 @@ export interface RunOptions {
    * иначе: выдаём фору и смотрим, растёт она или тает.
    */
   handicapCells: number
+  /**
+   * Сложность бота на каждом месте этой партии (`player-1` → `hard`). Не указано — лёгкий
+   * уровень, прежний жадный бот. Замер «лоб в лоб» задаёт места по-разному от партии к партии,
+   * чтобы преимущество места взаимно гасилось.
+   */
+  seatDifficulty?: Readonly<Record<string, BotDifficulty>>
 }
 
 export const DEFAULT_RUN_OPTIONS: RunOptions = {
@@ -162,6 +172,18 @@ function applyHandicap(game: GameSnapshot, playerId: string, cells: number): voi
       granted += 1
     }
   }
+}
+
+/** Места карты, на которых есть стартовая позиция, — по порядку игроков в карте. */
+export function seatIdsOf(map: MapDefinition): string[] {
+  const game = gameSnapshotFromMap(map)
+  return game.players
+    .filter((player) =>
+      game.cells.some(
+        (cell) => cell.controlOwnerId === player.id || cell.ships.some((ship) => ship.ownerId === player.id),
+      ),
+    )
+    .map((player) => player.id)
 }
 
 function controlledCells(game: GameSnapshot, playerId: string): number {
@@ -281,6 +303,28 @@ function finishBattle(game: GameSnapshot, watch: BattleWatch): BattleRecord {
 }
 
 export function runGame(map: MapDefinition, seed: number, options: RunOptions): GameRecord {
+  const botIssues = { errors: 0, rejects: 0, samples: [] as string[] }
+  // Сбой оценки бот заменяет решением простого бота — партия идёт дальше, но замер это видит.
+  setBotErrorListener((error, where) => {
+    if (where.startsWith('plan-')) botIssues.rejects += 1
+    else botIssues.errors += 1
+    if (botIssues.samples.length < 3) {
+      botIssues.samples.push(`${where}: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  })
+  try {
+    const record = runGameSeeded(map, seed, options)
+    record.botErrors = botIssues.errors
+    record.botPlanRejects = botIssues.rejects
+    if (botIssues.samples.length) record.botIssueSamples = botIssues.samples
+    return record
+  } finally {
+    setBotErrorListener(null)
+  }
+}
+
+function runGameSeeded(map: MapDefinition, seed: number, options: RunOptions): GameRecord {
+  const difficultyOf = (playerId: string): BotDifficulty => options.seatDifficulty?.[playerId] ?? 'easy'
   return withSeededRandom(seed, () => {
     const game = gameSnapshotFromMap(map)
     const playerIds = game.players
@@ -310,6 +354,7 @@ export function runGame(map: MapDefinition, seed: number, options: RunOptions): 
       battles: [],
       sieges: { established: 0, captured: 0, lifted: 0 },
       doctrines: {},
+      seatDifficulty: Object.fromEntries(playerIds.map((id) => [id, difficultyOf(id)])),
     }
 
     if (playerIds.length < 2) {
@@ -411,7 +456,13 @@ export function runGame(map: MapDefinition, seed: number, options: RunOptions): 
       if (game.pendingCombat) {
         battle ??= watchBattle(game)
         combatGuard += 1
-        const progressed = stepCombat(game, map, options, { onSiegeEstablished: () => { record.sieges.established += 1 } })
+        const progressed = stepCombat(
+          game,
+          map,
+          options,
+          { onSiegeEstablished: () => { record.sieges.established += 1 } },
+          difficultyOf,
+        )
         if (!progressed || combatGuard > 200) {
           const attackerId = game.pendingCombat?.attackerId
           if (attackerId) applyGameActionOnSnapshot(game, map, attackerId, 'abort-combat')
@@ -454,7 +505,7 @@ export function runGame(map: MapDefinition, seed: number, options: RunOptions): 
           if (!doctrineChoiceOwed(game, playerId)) continue
           const doctrineId = playerId === record.deviantPlayerId && options.deviantDoctrine
             ? options.deviantDoctrine
-            : options.forcedDoctrine ?? pickDoctrine(game, playerId)
+            : options.forcedDoctrine ?? pickDoctrine(game, playerId, difficultyOf(playerId))
           const window = String(game.doctrineChoice?.windowStart ?? game.turnNumber)
           if (!applyGameActionOnSnapshot(game, map, playerId, 'choose-doctrine', { doctrineId }).errors.length) {
             record.doctrines[window] ??= {}
@@ -466,10 +517,10 @@ export function runGame(map: MapDefinition, seed: number, options: RunOptions): 
       if (game.phase === 'planning') {
         for (const playerId of playerIds) {
           if (claimPicksRemaining(game, playerId) > 0) {
-            applyGameActionOnSnapshot(game, map, playerId, 'execute-claim-picks')
+            settleClaimPicks(game, map, playerId, difficultyOf(playerId))
           }
           if (rechargePicksRemaining(game, playerId) > 0) {
-            applyGameActionOnSnapshot(game, map, playerId, 'execute-recharge-picks')
+            settleRechargePicks(game, map, playerId, difficultyOf(playerId))
           }
         }
       }
@@ -483,17 +534,15 @@ export function runGame(map: MapDefinition, seed: number, options: RunOptions): 
         ).errors.length === 0
       }
       if (!progressed && game.phase === 'planning' && claimPicksRemaining(game, active) > 0) {
-        progressed = applyGameActionOnSnapshot(
-          game, map, active, 'execute-claim-picks',
-        ).errors.length === 0
+        progressed = settleClaimPicks(game, map, active, difficultyOf(active))
       }
       if (!progressed && game.phase === 'planning' && rechargePicksRemaining(game, active) > 0) {
-        progressed = applyGameActionOnSnapshot(
-          game, map, active, 'execute-recharge-picks',
-        ).errors.length === 0
+        progressed = settleRechargePicks(game, map, active, difficultyOf(active))
       }
-      if (!progressed && game.phase === 'planning') progressed = tryPlaceMarker(game, map, active)
-      else if (game.phase === 'actions') progressed = stepActions(game, map, active, tally, attempts)
+      if (!progressed && game.phase === 'planning') progressed = tryPlaceMarker(game, map, active, difficultyOf(active))
+      else if (game.phase === 'actions') {
+        progressed = stepActions(game, map, active, tally, attempts, difficultyOf(active))
+      }
 
       note(
         `t${game.turnNumber} ${game.phase} ${active} `

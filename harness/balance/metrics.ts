@@ -57,7 +57,25 @@ export interface GameRecord {
   handicappedPlayerId?: string
   /** Игрок с особой доктриной в замере силы доктрины: остальные играют как обычно. */
   deviantPlayerId?: string
+  /** Уровень бота на каждом месте. */
+  seatDifficulty?: Record<string, string>
+  /** Сбои оценки среднего и высокого уровня (заменены решением простого бота). */
+  botErrors?: number
+  /** Планы бота, которые движок отклонил: оценка разошлась с правилами. */
+  botPlanRejects?: number
+  botIssueSamples?: string[]
   error?: string
+}
+
+/** Итог уровня сложности в замере: сколько мест он занимал и сколько партий выиграл. */
+export interface DifficultyResult {
+  /** Мест этого уровня за все партии. */
+  seats: number
+  wins: number
+  /** Доля побед среди партий с победителем. */
+  winRate: number
+  /** Справедливая доля: сколько побед пришлось бы на эти места при равной силе. */
+  fairShare: number
 }
 
 function leaderOf(sample: TurnSample): string | null {
@@ -215,6 +233,30 @@ export interface Summary {
     winRate: number | null
     amplification: number | null
   }
+  /** Победы по уровням сложности ботов. */
+  winRateByDifficulty: Record<string, DifficultyResult>
+  bot: { errors: number; planRejects: number; samples: string[] }
+}
+
+function summarizeDifficulties(records: readonly GameRecord[]): Record<string, DifficultyResult> {
+  const out: Record<string, DifficultyResult> = {}
+  const decided = records.filter((record) => record.winnerId)
+  for (const record of decided) {
+    const seats = record.seatDifficulty ?? {}
+    const total = record.playerIds.length || 1
+    for (const playerId of record.playerIds) {
+      const level = seats[playerId] ?? 'easy'
+      const entry = (out[level] ??= { seats: 0, wins: 0, winRate: 0, fairShare: 0 })
+      entry.seats += 1
+      entry.fairShare += 1 / total
+      if (record.winnerId === playerId) entry.wins += 1
+    }
+  }
+  for (const entry of Object.values(out)) {
+    entry.winRate = decided.length ? entry.wins / decided.length : 0
+    entry.fairShare = decided.length ? entry.fairShare / decided.length : 0
+  }
+  return out
 }
 
 const TRACKED_SHIP_TYPES = ['destroyer', 'cruiser', 'carrier', 'battleship', 'hyper']
@@ -368,6 +410,12 @@ export function summarize(records: readonly GameRecord[]): Summary {
     handicap: {
       winRate: handicapped.length ? handicapWins / handicapped.length : null,
       amplification: amplifications.length ? mean(amplifications) : null,
+    },
+    winRateByDifficulty: summarizeDifficulties(ok),
+    bot: {
+      errors: records.reduce((sum, record) => sum + (record.botErrors ?? 0), 0),
+      planRejects: records.reduce((sum, record) => sum + (record.botPlanRejects ?? 0), 0),
+      samples: [...new Set(records.flatMap((record) => record.botIssueSamples ?? []))].slice(0, 5),
     },
   }
 }
