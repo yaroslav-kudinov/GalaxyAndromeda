@@ -30,8 +30,7 @@ import {
   canBesiegeCell,
   claimPicksRemaining,
   eligibleClaimCells,
-  rechargePicksRemaining,
-  siegeLossesOwedBy,
+  planningStepFor,
   siegeWithdrawDestinations,
   doctrineChoiceOwed,
   removeActionMarker,
@@ -1060,11 +1059,20 @@ const boardActionsFrozen = computed(
   () => !!snapshot.value?.pendingCombat || !!snapshot.value?.siegeContinuationChoice,
 )
 
+/**
+ * Шаг решений начала хода: потери в осаде, доктрина, клетки захвата, фишки перезарядки —
+ * строго по порядку, и только потом маркеры действия.
+ */
+const planningStep = computed(() =>
+  snapshot.value ? planningStepFor(snapshot.value, playerId.value) : 'markers',
+)
+
 const canPlaceMarkers = computed(
   () =>
     isMyTurn.value
     && !boardActionsFrozen.value
     && snapshot.value?.phase === 'planning'
+    && planningStep.value === 'markers'
     && (tutorialAllowsAction('toggle-marker') || tutorialAllowsAction('remove-marker')),
 )
 
@@ -1077,17 +1085,6 @@ const mustResolveActionMarker = computed(() =>
     ? mustResolveActionMarkerBeforeAdvance(saveFile.value.game, playerId.value)
     : false,
 )
-
-/** Обязательные решения планирования, без которых ход не передаётся. */
-const planningDecisionsOwed = computed(() => {
-  const game = snapshot.value
-  if (!game || game.phase !== 'planning' || game.gameOver) return false
-  const me = playerId.value
-  return doctrineChoiceOwed(game, me)
-    || claimPicksRemaining(game, me) > 0
-    || rechargePicksRemaining(game, me) > 0
-    || siegeLossesOwedBy(game, me).length > 0
-})
 
 /** Выбор клеток захвата: подходящие обведены на карте, выбранные — кольцом. */
 const claimSelection = ref<string[]>([])
@@ -1148,7 +1145,7 @@ const phaseAdvanceBlockedReason = computed(() => {
   if (siegeContinuationMine.value) return ui.siegeContinuation.blocked
   if (siegeContinuationForeign.value) return siegeContinuationForeign.value
   if (snapshot.value?.pendingCombat) return ui.planningDecisions.combatFirst
-  if (planningDecisionsOwed.value) return ui.planningDecisions.blocked
+  if (planningStep.value !== 'markers') return ui.planningDecisions.stepBlocked[planningStep.value]
   return actionMarkerAdvanceBlockMessage(saveFile.value.game, playerId.value)
 })
 

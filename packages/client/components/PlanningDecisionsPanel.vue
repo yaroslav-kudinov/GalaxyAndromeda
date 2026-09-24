@@ -1,17 +1,19 @@
 <script setup lang="ts">
 /**
- * Обязательные решения планирования в одной карточке над картой: доктрина, клетки захвата,
- * фишки перезарядки, потери гарнизона в осаде. Пока решение не принято, ход не передаётся.
+ * Обязательные решения планирования в карточке над картой — строго по одному, в порядке
+ * правил (`planningStepFor`): потери гарнизона в осаде, доктрина, клетки захвата, фишки
+ * перезарядки. Пока решения не приняты, маркеры не ставятся и ход не передаётся.
  */
 import type { DoctrineId, GameSnapshot, HexCoord, ResourceTokenRef, ShipUnit } from '@galaxy/rules'
 import {
   claimPicksRemaining,
-  doctrineChoiceOwed,
   DOCTRINES,
   eligibleClaimCells,
+  planningStepFor,
   rechargePicksRemaining,
   SHIP_LABELS,
   siegeLossesOwedBy,
+  type PlanningStep,
 } from '@galaxy/rules'
 import { useUiStrings } from '~/i18n/ui-strings'
 
@@ -33,7 +35,21 @@ const t = useUiStrings().planningDecisions
 
 const keyOf = (coord: HexCoord) => `${coord.q},${coord.r}`
 
-const doctrineOwed = computed(() => doctrineChoiceOwed(props.snapshot, props.playerId))
+const step = computed(() => planningStepFor(props.snapshot, props.playerId))
+
+/** Шаги по порядку; осада показывается, только когда она есть. */
+const steps = computed(() => {
+  const order: PlanningStep[] = ['doctrine', 'claims', 'recharge', 'markers']
+  return step.value === 'siege-losses' ? (['siege-losses', ...order] as PlanningStep[]) : order
+})
+const stepIndex = computed(() => steps.value.indexOf(step.value === 'doctrine-wait' ? 'doctrine' : step.value))
+
+/** Сколько игроков уже выбрали доктрину — пока ждём остальных. */
+const doctrinePickedCount = computed(() => props.snapshot.doctrineChoice?.pickedBy?.length ?? 0)
+const doctrineParticipants = computed(
+  () => props.snapshot.participatingPlayerIds?.length
+    || props.snapshot.players.filter((player) => !player.eliminated).length,
+)
 
 const claimsOwed = computed(() => claimPicksRemaining(props.snapshot, props.playerId))
 const claimCandidates = computed(() => eligibleClaimCells(props.snapshot, props.playerId))
@@ -73,12 +89,7 @@ watch(() => `${props.snapshot.turnNumber}:${claimsOwed.value}`, () => { claimSel
 watch(() => `${props.snapshot.turnNumber}:${rechargeOwed.value}`, () => { rechargeSelected.value = [] })
 watch(() => `${props.snapshot.turnNumber}:${siegeCells.value.join('|')}`, () => { siegeChoice.value = {} })
 
-const visible = computed(
-  () =>
-    props.snapshot.phase === 'planning'
-    && !props.snapshot.gameOver
-    && (doctrineOwed.value || claimsOwed.value > 0 || rechargeOwed.value > 0 || siegeCells.value.length > 0),
-)
+const visible = computed(() => step.value !== 'markers')
 
 function toggle(list: string[], key: string, limit: number): string[] {
   if (list.includes(key)) return list.filter((entry) => entry !== key)
@@ -126,10 +137,25 @@ function cellTokens(coord: HexCoord): string {
     <header class="pd-head">
       <strong>{{ t.heading }}</strong>
       <span class="pd-sub">{{ t.sub }}</span>
+      <ol class="pd-steps" :aria-label="t.stepsLabel">
+        <li
+          v-for="(entry, index) in steps"
+          :key="entry"
+          :class="{ 'pd-step--done': index < stepIndex, 'pd-step--now': index === stepIndex }"
+          :aria-current="index === stepIndex ? 'step' : undefined"
+        >
+          {{ t.stepNames[entry] }}
+        </li>
+      </ol>
     </header>
 
+    <!-- Ждём доктрины соперников -->
+    <div v-if="step === 'doctrine-wait'" class="pd-block">
+      <p class="pd-title">{{ t.doctrineWait(doctrinePickedCount, doctrineParticipants) }}</p>
+    </div>
+
     <!-- Доктрина -->
-    <div v-if="doctrineOwed" class="pd-block">
+    <div v-if="step === 'doctrine'" class="pd-block">
       <p class="pd-title">{{ t.doctrineTitle }}</p>
       <div class="pd-doctrines">
         <button
@@ -148,7 +174,7 @@ function cellTokens(coord: HexCoord): string {
     </div>
 
     <!-- Захват -->
-    <div v-if="claimsOwed > 0" class="pd-block">
+    <div v-if="step === 'claims'" class="pd-block">
       <p class="pd-title">{{ t.claimsTitle(claimNeed, claimCandidates.length) }}</p>
       <ul class="pd-list">
         <li v-for="cell in claimCandidates" :key="keyOf(cell.coord)">
@@ -176,7 +202,7 @@ function cellTokens(coord: HexCoord): string {
     </div>
 
     <!-- Перезарядка -->
-    <div v-if="rechargeOwed > 0 && claimsOwed === 0" class="pd-block">
+    <div v-if="step === 'recharge'" class="pd-block">
       <p class="pd-title">{{ t.rechargeTitle(rechargeNeed, faceDownTokens.length) }}</p>
       <ul class="pd-list">
         <li v-for="token in faceDownTokens" :key="token.key">
@@ -203,7 +229,7 @@ function cellTokens(coord: HexCoord): string {
     </div>
 
     <!-- Осада -->
-    <div v-if="siegeCells.length" class="pd-block">
+    <div v-if="step === 'siege-losses'" class="pd-block">
       <p class="pd-title">{{ t.siegeTitle }}</p>
       <div v-for="key in siegeCells" :key="key" class="pd-siege">
         <span class="pd-coord">({{ key }})</span>
@@ -262,6 +288,30 @@ function cellTokens(coord: HexCoord): string {
 .pd-sub {
   font-size: 0.75rem;
   color: #94a3b8;
+}
+.pd-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.2rem 0.9rem;
+  margin: 0.3rem 0 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: pd-step;
+  font-size: 0.72rem;
+  color: #64748b;
+}
+.pd-steps li {
+  counter-increment: pd-step;
+}
+.pd-steps li::before {
+  content: counter(pd-step) '. ';
+}
+.pd-step--done {
+  color: #86efac;
+}
+.pd-step--now {
+  color: #fcd34d;
+  font-weight: 700;
 }
 .pd-block {
   display: flex;

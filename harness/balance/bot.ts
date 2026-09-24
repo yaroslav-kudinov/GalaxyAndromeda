@@ -445,8 +445,12 @@ export function runGame(map: MapDefinition, seed: number, options: RunOptions): 
         orderIndex += 1
       }
 
-      if (game.phase === 'planning' && game.doctrineChoice) {
+      if (game.phase === 'planning') {
         for (const playerId of playerIds) {
+          // До своих потерь в осаде доктрину не выбирают, а доктрины ждут всех.
+          if (siegeLossesOwedBy(game, playerId).length > 0) {
+            applyGameActionOnSnapshot(game, map, playerId, 'execute-siege-losses')
+          }
           if (!doctrineChoiceOwed(game, playerId)) continue
           const doctrineId = playerId === record.deviantPlayerId && options.deviantDoctrine
             ? options.deviantDoctrine
@@ -458,6 +462,8 @@ export function runGame(map: MapDefinition, seed: number, options: RunOptions): 
           }
         }
       }
+      // Вскрытие доктрин сразу считает захват — он может принести победу.
+      if (game.gameOver) continue
 
       let progressed = false
       if (game.phase === 'planning' && siegeLossesOwedBy(game, active).length > 0) {
