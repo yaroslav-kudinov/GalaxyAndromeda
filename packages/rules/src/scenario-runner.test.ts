@@ -42,6 +42,19 @@ describe('scenario runner', () => {
     ])).toEqual([{ id: 'hint', type: 'info', description: 'Подсказка' }])
   })
 
+  it('обязательные решения партии обучение не ограничивает — иначе шаг стал бы тупиком', () => {
+    const markerStep: ScenarioStep = { ...manualStep, id: 'marker', allowedActions: ['toggle-marker'] }
+    for (const actionId of ['execute-recharge-picks', 'execute-claim-picks', 'execute-siege-losses', 'choose-doctrine']) {
+      expect(canPerformScenarioAction(markerStep, actionId)).toBe(true)
+      expect(canPerformScenarioAction(manualStep, actionId)).toBe(true)
+    }
+    expect(canPerformScenarioAction(markerStep, 'advance-phase')).toBe(false)
+    expect(filterScenarioLegalActions(manualStep, [
+      { id: 'execute-recharge-picks', type: 'rechargePicks', description: 'Фишки' },
+      { id: 'advance-phase', type: 'phase', description: 'Далее' },
+    ]).map((action) => action.id)).toEqual(['execute-recharge-picks'])
+  })
+
   it('сверяет только важную часть вложенных параметров действия', () => {
     const step: ScenarioStep = {
       ...manualStep,

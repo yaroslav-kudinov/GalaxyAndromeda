@@ -1052,9 +1052,18 @@ watch(
 
 const supplyChainHighlightKeys = computed((): string[] => [])
 
+/**
+ * Партия ждёт решения, не связанного с маркерами: идёт бой или победитель решает судьбу
+ * осады. Сервер в это время маркеры и передачу хода не принимает — не предлагаем их и мы.
+ */
+const boardActionsFrozen = computed(
+  () => !!snapshot.value?.pendingCombat || !!snapshot.value?.siegeContinuationChoice,
+)
+
 const canPlaceMarkers = computed(
   () =>
     isMyTurn.value
+    && !boardActionsFrozen.value
     && snapshot.value?.phase === 'planning'
     && (tutorialAllowsAction('toggle-marker') || tutorialAllowsAction('remove-marker')),
 )
@@ -1127,9 +1136,18 @@ const siegeWithdrawOptions = computed(() => {
   return siegeWithdrawDestinations(snapshot.value, playerId.value, choice.cellKey)
 })
 
+/** Судьбу осады решает другой игрок — партия ждёт его. */
+const siegeContinuationForeign = computed(() => {
+  const choice = snapshot.value?.siegeContinuationChoice
+  if (!choice || choice.playerId === playerId.value) return null
+  return ui.siegeContinuation.waiting(playerNameById.value[choice.playerId] ?? choice.playerId)
+})
+
 const phaseAdvanceBlockedReason = computed(() => {
   if (!saveFile.value?.game) return null
   if (siegeContinuationMine.value) return ui.siegeContinuation.blocked
+  if (siegeContinuationForeign.value) return siegeContinuationForeign.value
+  if (snapshot.value?.pendingCombat) return ui.planningDecisions.combatFirst
   if (planningDecisionsOwed.value) return ui.planningDecisions.blocked
   return actionMarkerAdvanceBlockMessage(saveFile.value.game, playerId.value)
 })
@@ -1140,7 +1158,7 @@ const canAdvancePhase = computed(
 
 /** Хук для модалки перемещения: открывать только если маркер ещё не исполнен */
 const canOpenMovementModal = computed(() => {
-  if (!snapshot.value || !isMyTurn.value) return false
+  if (!snapshot.value || !isMyTurn.value || boardActionsFrozen.value) return false
   return canExecuteActionMarkerThisTurn(snapshot.value, playerId.value)
 })
 
@@ -3131,12 +3149,15 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
     </div>
 
     <div
-      v-if="showForeignCombatBanner"
+      v-if="showForeignCombatBanner && snapshot?.pendingCombat?.phase !== 'awaiting-rerolls'"
       class="map-pick-banner map-pick-banner--combat"
       role="status"
     >
       <p class="map-pick-text">{{ foreignCombatBannerText }}</p>
-      <div v-if="canReopenBattleResults || combatParticipantRole" class="map-pick-actions">
+      <div
+        v-if="canReopenBattleResults || combatParticipantRole === 'attacker' || combatParticipantRole === 'defender'"
+        class="map-pick-actions"
+      >
         <button
           v-if="canReopenBattleResults"
           type="button"
@@ -3146,7 +3167,7 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
           Показать итог
         </button>
         <button
-          v-if="combatParticipantRole"
+          v-if="combatParticipantRole === 'attacker' || combatParticipantRole === 'defender'"
           type="button"
           class="map-pick-secondary"
           @click="abortPendingCombatAction"
@@ -3256,6 +3277,10 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
           {{ ui.siegeContinuation.withdraw(coord.q, coord.r) }}
         </button>
       </div>
+    </div>
+
+    <div v-if="siegeContinuationForeign" class="map-pick-banner" role="status">
+      <p class="map-pick-text">{{ siegeContinuationForeign }}</p>
     </div>
 
     <PlanningDecisionsPanel

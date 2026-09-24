@@ -1026,6 +1026,13 @@ export function settleSieges(game: GameSnapshot, mapId: string): void {
   if (JSON.stringify(game.sieges ?? null) !== before) applyVictoryAndDefeatChecks(game, mapId)
 }
 
+/** Решения планирования, которые игрок принимает вне очереди (как выбор доктрины). */
+export const PLANNING_DEBT_ACTIONS: ReadonlySet<string> = new Set([
+  'execute-claim-picks',
+  'execute-recharge-picks',
+  'execute-siege-losses',
+])
+
 export function applyGameActionOnSnapshot(
   game: GameSnapshot,
   map: MapDefinition,
@@ -1136,7 +1143,10 @@ function dispatchGameAction(
     actionId === 'continue-combat'
     || actionId === 'stop-combat'
     || actionId === 'abort-combat'
-  if (!isPrepAction && !isCombatDecisionAction && game.activePlayerId !== playerId) {
+  // Долги планирования — выбор клеток захвата, фишек перезарядки, потерь в осаде — касаются только
+  // самого игрока и чужих решений не ждут: их закрывают в любой момент планирования.
+  const isPlanningDebtAction = PLANNING_DEBT_ACTIONS.has(actionId)
+  if (!isPrepAction && !isCombatDecisionAction && !isPlanningDebtAction && game.activePlayerId !== playerId) {
     return { errors: ['Сейчас ход другого игрока'] }
   }
   if (

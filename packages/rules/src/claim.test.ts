@@ -11,6 +11,7 @@ import {
 import { createEmptyMap } from './map.js'
 import { gameSnapshotFromMap } from './save-file.js'
 import { advanceGameSnapshot } from './turn.js'
+import { applyGameActionOnSnapshot } from './movement.js'
 import type { ShipType } from './types.js'
 
 function claimMap() {
@@ -189,5 +190,33 @@ describe('production hex claims', () => {
     game.phase = 'events'
     maybeApplyTurnEndClaims(game, 'actions', map.id)
     expect(game.eventLog.some((e) => e.type === 'claim')).toBe(false)
+  })
+})
+
+describe('решения планирования вне очереди', () => {
+  it('выбор клеток захвата и фишек перезарядки принимается и не в свой ход', () => {
+    const map = createEmptyMap('debts', 'Debts')
+    map.cells.push({ q: 1, r: 0 }, { q: 2, r: 0 }, { q: 3, r: 0 })
+    const game = gameSnapshotFromMap(map)
+    game.phase = 'planning'
+    game.activePlayerId = 'player-1'
+    game.participatingPlayerIds = ['player-1', 'player-2']
+    const cell = (q: number) => game.cells.find((c) => c.coord.q === q && c.coord.r === 0)!
+    for (const [q, owner] of [[0, 'player-1'], [1, 'player-2']] as const) {
+      cell(q).isPowerCenter = true
+      cell(q).controlOwnerId = owner
+    }
+    cell(2).ships.push({ id: 'p2-a', type: 'destroyer', ownerId: 'player-2' })
+    cell(3).ships.push({ id: 'p2-b', type: 'destroyer', ownerId: 'player-2' })
+    game.claimPicksRemainingByPlayer = { 'player-2': 1 }
+
+    const result = applyGameActionOnSnapshot(game, map, 'player-2', 'execute-claim-picks', {
+      picks: [{ q: 3, r: 0 }],
+    })
+    expect(result.errors).toEqual([])
+    expect(cell(3).controlOwnerId).toBe('player-2')
+    expect(cell(2).controlOwnerId).not.toBe('player-2')
+    // Прочие действия — по-прежнему в свой ход.
+    expect(applyGameActionOnSnapshot(game, map, 'player-2', 'advance-phase').errors[0]).toMatch(/другого игрока/)
   })
 })

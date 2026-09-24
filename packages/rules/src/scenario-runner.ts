@@ -18,12 +18,25 @@ export function getCurrentStep(
   return script.steps[progress.stepIndex] ?? null
 }
 
+/**
+ * Решения, которые обучение не ограничивает: это обязательные долги самой партии — выбор
+ * клеток захвата, фишек перезарядки, потерь в осаде, доктрины. Без них ход не передаётся,
+ * поэтому запрет превратил бы учебный шаг в тупик.
+ */
+export const SCENARIO_ALWAYS_ALLOWED_ACTIONS: ReadonlySet<string> = new Set([
+  'execute-claim-picks',
+  'execute-recharge-picks',
+  'execute-siege-losses',
+  'choose-doctrine',
+])
+
 export function canPerformScenarioAction(
   step: ScenarioStep | null,
   actionId: string,
   params?: Record<string, unknown>,
 ): boolean {
   if (!step || step.allowedActions === undefined) return true
+  if (SCENARIO_ALWAYS_ALLOWED_ACTIONS.has(actionId)) return true
   return step.allowedActions.some((allowed) => {
     if (typeof allowed === 'string') return allowed === actionId
     return allowed.actionId === actionId && matchesScenarioParams(params, allowed.params)
@@ -40,7 +53,9 @@ export function filterScenarioLegalActions(
       typeof allowed === 'string' ? allowed : allowed.actionId,
     ),
   )
-  return actions.filter((action) => action.type === 'info' || ids.has(action.id))
+  return actions.filter(
+    (action) => action.type === 'info' || ids.has(action.id) || SCENARIO_ALWAYS_ALLOWED_ACTIONS.has(action.id),
+  )
 }
 
 function matchesPartialValue(actual: unknown, expected: unknown): boolean {
