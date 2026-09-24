@@ -9,6 +9,8 @@ export interface LobbyPlayerSlot {
   joined: boolean
   active?: boolean
   isYou?: boolean
+  /** За место ходит сервер. */
+  bot?: boolean
 }
 
 const props = defineProps<{
@@ -39,6 +41,7 @@ const props = defineProps<{
       </span>
       <span class="status">
         <template v-if="slot.isYou">{{ t.you }}</template>
+        <template v-else-if="slot.joined && slot.bot">{{ t.bot }}</template>
         <template v-else-if="slot.joined && slot.active">{{ t.inGame }}</template>
         <template v-else-if="slot.joined">{{ t.inRoom }}</template>
         <template v-else>{{ t.awaited }}</template>

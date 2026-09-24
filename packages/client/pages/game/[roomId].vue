@@ -51,7 +51,7 @@ import {
   formatRechargeBudgetHint,
   getCombatRetreatDestinations,
 } from '@galaxy/rules'
-import { advanceScenarioStep, fetchObservation, fetchRoomBootstrap, GameApiError, joinRoom, rejoinRoom, startRoom, closeRoom, submitGameAction, updateCombatPrepAction } from '~/composables/useGameApi'
+import { advanceScenarioStep, fetchObservation, fetchRoomBootstrap, GameApiError, joinRoom, rejoinRoom, startRoom, closeRoom, addRoomBot, removeRoomBot, submitGameAction, updateCombatPrepAction } from '~/composables/useGameApi'
 import { loadGameSessionForRoom, saveGameSession, persistLocalGalaxySave, clearLocalGalaxySave, loadLocalGalaxySaveRaw, pruneOnlineGalaxySaveCache } from '~/composables/useGameSession'
 import { loadPlayerClaim, savePlayerClaim } from '~/composables/usePlayerClaim'
 import { bootstrapToLobbySlots, defaultSlotForRoom, roomHasFreeSlot } from '~/utils/lobby-slot'
@@ -2525,6 +2525,21 @@ async function startLobbyGame() {
   }
 }
 
+async function changeLobbyBot(slotId: string, change: 'add' | 'remove') {
+  if (!isLobbyHost.value || joinBusy.value) return
+  joinBusy.value = true
+  joinError.value = null
+  try {
+    if (change === 'add') await addRoomBot(roomId.value, playerId.value, slotId)
+    else await removeRoomBot(roomId.value, playerId.value, slotId)
+    await refreshJoinLobby()
+  } catch (e) {
+    joinError.value = e instanceof Error ? e.message : 'Не удалось изменить ботов'
+  } finally {
+    joinBusy.value = false
+  }
+}
+
 async function closeLobbyRoom() {
   if (!isLobbyHost.value || joinBusy.value) return
   joinBusy.value = true
@@ -3024,6 +3039,8 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
           @close="closeLobbyRoom"
           @copy-invite="copyInviteLink"
           @slot-pick="onLobbySlotPicked"
+          @add-bot="changeLobbyBot($event, 'add')"
+          @remove-bot="changeLobbyBot($event, 'remove')"
         />
       </div>
     </div>
@@ -3297,7 +3314,7 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
     />
 
     <TurnEventAnnounceModal
-      v-if="rechargeIntroVisible && resourceRechargeBanner"
+      v-if="rechargeIntroVisible && resourceRechargeBanner && !showLobbyOverlay"
       :turn-number="turnNumber"
       :recharge-banner="resourceRechargeBanner"
       @close="dismissRechargeIntro"

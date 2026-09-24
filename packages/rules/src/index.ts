@@ -44,3 +44,4 @@ export {
   syncActionMarkerLimits,
 } from './marker-pools.js'
 export * from './combat-targets.js'
+export * from './greedy-bot.js'

@@ -66,7 +66,7 @@ function selectSlot(id: string) {
         </span>
       </span>
       <span class="slot-badge">
-        {{ slot.joined ? (slot.id === currentPlayerId ? t.you : t.taken) : modelValue === slot.id ? t.chosen : t.available }}
+        {{ slot.joined ? (slot.id === currentPlayerId ? t.you : slot.bot ? t.bot : t.taken) : modelValue === slot.id ? t.chosen : t.available }}
       </span>
     </button>
   </div>

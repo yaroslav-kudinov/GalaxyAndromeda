@@ -17,12 +17,11 @@ import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import {
-  applyGameActionOnSnapshot,
   gameSnapshotFromObservation,
   normalizeMapDefinition,
+  planGreedyBotAction,
+  type MarkerAttempts,
 } from '../../packages/rules/src/index.js'
-import type { GameSnapshot, MapDefinition } from '../../packages/rules/src/index.js'
-import { botStepLive, setActionSink, type MarkerAttempts } from '../balance/bot.js'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const API = (process.env.GAME_SERVER_URL ?? 'http://127.0.0.1:3001').replace(/\/$/, '') + '/api'
@@ -58,44 +57,6 @@ function loadMapRaw(name: string): Record<string, unknown> {
     }
   }
   throw new Error(`Карта не найдена: ${name}`)
-}
-
-interface PlannedAction {
-  playerId: string
-  actionId: string
-  params?: Record<string, unknown>
-}
-
-class Planned extends Error {
-  constructor(readonly action: PlannedAction) {
-    super('planned')
-  }
-}
-
-/**
- * Какое действие бот сделал бы сейчас. Бот ходит по копии состояния; действия за человека
- * (бот в бою решает за обе стороны) применяются только к копии и не отправляются.
- */
-function planNextBotAction(
-  game: GameSnapshot,
-  map: MapDefinition,
-  botIds: ReadonlySet<string>,
-  attempts: MarkerAttempts,
-): PlannedAction | null {
-  setActionSink((g, m, playerId, actionId, params) => {
-    const result = applyGameActionOnSnapshot(g, m, playerId, actionId, params)
-    if (!result.errors.length && botIds.has(playerId)) throw new Planned({ playerId, actionId, params })
-    return result
-  })
-  try {
-    botStepLive(game, map, botIds, attempts)
-    return null
-  } catch (e) {
-    if (e instanceof Planned) return e.action
-    throw e
-  } finally {
-    setActionSink(null)
-  }
 }
 
 async function main(): Promise<void> {
@@ -158,7 +119,7 @@ async function main(): Promise<void> {
       undefined,
       map,
     )
-    const planned = planNextBotAction(game, map, bots, attempts)
+    const planned = planGreedyBotAction(game, map, bots, attempts)
     if (!planned) {
       await sleep(700)
       continue

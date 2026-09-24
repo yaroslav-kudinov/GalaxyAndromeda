@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { LobbyPlayerSlot } from '~/components/LobbyPlayerList.vue'
 import type { RoomBootstrap } from '~/composables/useGameApi'
+import { PLAYER_LABELS, slotFromPlayerId } from '@galaxy/rules'
 import { joinAsLabel } from '~/utils/lobby-slot'
 import { useUiStrings } from '~/i18n/ui-strings'
 
@@ -26,6 +27,8 @@ const emit = defineEmits<{
   close: []
   copyInvite: []
   slotPick: [value: string | null]
+  addBot: [slotId: string]
+  removeBot: [slotId: string]
 }>()
 
 const t = useUiStrings().lobby
@@ -40,6 +43,16 @@ const playersLine = computed(() => {
   }
   return line
 })
+
+/** Места, которыми хозяин распоряжается: свободные и занятые ботами. */
+const botSeats = computed(() =>
+  props.slots.filter((slot) => slot.id !== props.currentPlayerId && (!slot.joined || slot.bot)),
+)
+
+function seatColor(id: string): string {
+  const n = slotFromPlayerId(id)
+  return (n != null ? PLAYER_LABELS[n] : null) ?? id
+}
 
 function onSlotUpdate(value: string | null) {
   emit('update:selectedSlot', value)
@@ -108,6 +121,38 @@ function onSlotUpdate(value: string | null) {
           :disabled="busy"
           @update:model-value="onSlotUpdate"
         />
+      </div>
+
+      <div v-if="isHost && botSeats.length" class="lobby-section">
+        <h3 class="lobby-section-title">{{ t.botsTitle }}</h3>
+        <p class="lobby-bots-hint">{{ t.botsHint }}</p>
+        <ul class="bot-seats">
+          <li v-for="slot in botSeats" :key="slot.id" class="bot-seat" :class="{ taken: slot.joined }">
+            <span class="bot-dot" :style="{ background: slot.color }" aria-hidden="true" />
+            <span class="bot-seat-label">
+              <strong>{{ seatColor(slot.id) }}</strong>
+              · {{ slot.joined ? slot.name : t.freeSeat }}
+            </span>
+            <button
+              v-if="slot.joined"
+              type="button"
+              class="bot-seat-btn"
+              :disabled="busy"
+              @click="emit('removeBot', slot.id)"
+            >
+              {{ t.removeBot }}
+            </button>
+            <button
+              v-else
+              type="button"
+              class="bot-seat-btn bot-seat-btn--add"
+              :disabled="busy"
+              @click="emit('addBot', slot.id)"
+            >
+              {{ t.addBot }}
+            </button>
+          </li>
+        </ul>
       </div>
 
       <p v-if="error" class="lobby-error">{{ error }}</p>
@@ -189,6 +234,66 @@ function onSlotUpdate(value: string | null) {
   font-size: 0.82rem;
   font-weight: 600;
   color: #cbd5e1;
+}
+.lobby-bots-hint {
+  margin: 0 0 0.45rem;
+  color: #94a3b8;
+  font-size: 0.8rem;
+  line-height: 1.4;
+}
+.bot-seats {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+.bot-seat {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0.5rem;
+  border-radius: 8px;
+  border: 1px dashed #334155;
+  background: #0f172a;
+  font-size: 0.85rem;
+  color: #cbd5e1;
+}
+.bot-seat.taken {
+  border-style: solid;
+  border-color: #475569;
+}
+.bot-dot {
+  width: 0.8rem;
+  height: 0.8rem;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.9);
+}
+.bot-seat-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bot-seat-btn {
+  padding: 0.3rem 0.6rem;
+  border-radius: 6px;
+  border: 1px solid #64748b;
+  background: #334155;
+  color: #f8fafc;
+  font-size: 0.8rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.bot-seat-btn--add {
+  border-color: #2563eb;
+  background: #1e3a8a;
+}
+.bot-seat-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 .lobby-as {
   margin: 0;

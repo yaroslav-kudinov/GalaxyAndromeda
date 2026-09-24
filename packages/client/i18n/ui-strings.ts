@@ -37,6 +37,11 @@ export const uiStringsRu = {
     leaveHome: '← Выйти',
     joinSubmit: 'Войти',
     joining: 'Вход…',
+    botsTitle: 'Боты',
+    botsHint: 'Бот займёт свободное место и будет ходить сам. До начала игры бота можно убрать, чтобы место занял человек.',
+    addBot: 'Посадить бота',
+    removeBot: 'Убрать бота',
+    freeSeat: 'свободно',
   },
   chat: {
     title: 'Чат',
@@ -77,6 +82,7 @@ export const uiStringsRu = {
     inGame: 'на странице партии',
     inRoom: 'в комнате',
     awaited: 'ждём игрока',
+    bot: 'бот',
   },
   coach: {
     badge: 'Обучение',
@@ -202,6 +208,7 @@ export const uiStringsRu = {
     taken: 'занят',
     chosen: 'выбран',
     available: 'свободен',
+    bot: 'бот',
   },
   turnOrder: {
     heading: 'Очередь хода',
