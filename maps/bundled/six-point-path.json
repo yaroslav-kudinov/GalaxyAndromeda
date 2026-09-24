@@ -67,7 +67,7 @@
       "startPlayer": null,
       "resourceToken": {
         "type": "credits",
-        "value": 6,
+        "value": 3,
         "faceUp": true
       }
     },
@@ -130,7 +130,12 @@
     },
     {
       "q": 3,
-      "r": -7
+      "r": -7,
+      "resourceToken": {
+        "type": "credits",
+        "value": 3,
+        "faceUp": true
+      }
     },
     {
       "q": 4,
@@ -159,7 +164,12 @@
           "type": "destroyer",
           "player": 6
         }
-      ]
+      ],
+      "resourceToken": {
+        "type": "credits",
+        "value": 3,
+        "faceUp": true
+      }
     },
     {
       "q": 7,
@@ -200,7 +210,12 @@
           "type": "destroyer",
           "player": 5
         }
-      ]
+      ],
+      "resourceToken": {
+        "type": "credits",
+        "value": 3,
+        "faceUp": true
+      }
     },
     {
       "q": 0,
@@ -224,7 +239,7 @@
       "startPlayer": 6,
       "resourceToken": {
         "type": "credits",
-        "value": 7,
+        "value": 4,
         "faceUp": true
       },
       "startingShips": [
@@ -281,7 +296,7 @@
       "startPlayer": 5,
       "resourceToken": {
         "type": "credits",
-        "value": 7,
+        "value": 4,
         "faceUp": true
       },
       "startingShips": [
@@ -294,7 +309,6 @@
     {
       "q": 0,
       "r": -5,
-      "isPowerCenter": true,
       "startPlayer": 5,
       "startingShips": [
         {
@@ -315,7 +329,6 @@
     {
       "q": 5,
       "r": -5,
-      "isPowerCenter": true,
       "startPlayer": 6,
       "startingShips": [
         {
@@ -338,7 +351,7 @@
       "startPlayer": null,
       "resourceToken": {
         "type": "credits",
-        "value": 6,
+        "value": 3,
         "faceUp": true
       }
     },
@@ -384,7 +397,12 @@
     },
     {
       "q": 7,
-      "r": -4
+      "r": -4,
+      "resourceToken": {
+        "type": "credits",
+        "value": 3,
+        "faceUp": true
+      }
     },
     {
       "q": 8,
@@ -406,13 +424,18 @@
       "startPlayer": null,
       "resourceToken": {
         "type": "credits",
-        "value": 6,
+        "value": 3,
         "faceUp": true
       }
     },
     {
       "q": -4,
-      "r": -3
+      "r": -3,
+      "resourceToken": {
+        "type": "credits",
+        "value": 3,
+        "faceUp": true
+      }
     },
     {
       "q": -1,
@@ -569,7 +592,7 @@
       "startPlayer": 1,
       "resourceToken": {
         "type": "credits",
-        "value": 7,
+        "value": 4,
         "faceUp": true
       },
       "startingShips": [
@@ -593,7 +616,12 @@
           "type": "destroyer",
           "player": 1
         }
-      ]
+      ],
+      "resourceToken": {
+        "type": "credits",
+        "value": 3,
+        "faceUp": true
+      }
     },
     {
       "q": 8,
@@ -645,7 +673,6 @@
     {
       "q": -5,
       "r": 0,
-      "isPowerCenter": true,
       "startPlayer": 4,
       "startingShips": [
         {
@@ -725,7 +752,6 @@
     {
       "q": 5,
       "r": 0,
-      "isPowerCenter": true,
       "startPlayer": 1,
       "startingShips": [
         {
@@ -799,7 +825,12 @@
           "type": "destroyer",
           "player": 4
         }
-      ]
+      ],
+      "resourceToken": {
+        "type": "credits",
+        "value": 3,
+        "faceUp": true
+      }
     },
     {
       "q": -6,
@@ -807,7 +838,7 @@
       "startPlayer": 4,
       "resourceToken": {
         "type": "credits",
-        "value": 7,
+        "value": 4,
         "faceUp": true
       },
       "startingShips": [
@@ -968,7 +999,12 @@
     },
     {
       "q": 4,
-      "r": 3
+      "r": 3,
+      "resourceToken": {
+        "type": "credits",
+        "value": 3,
+        "faceUp": true
+      }
     },
     {
       "q": 5,
@@ -976,7 +1012,7 @@
       "startPlayer": null,
       "resourceToken": {
         "type": "credits",
-        "value": 6,
+        "value": 3,
         "faceUp": true
       }
     },
@@ -996,7 +1032,12 @@
     },
     {
       "q": -7,
-      "r": 4
+      "r": 4,
+      "resourceToken": {
+        "type": "credits",
+        "value": 3,
+        "faceUp": true
+      }
     },
     {
       "q": -4,
@@ -1043,7 +1084,7 @@
       "r": 5,
       "resourceToken": {
         "type": "credits",
-        "value": 6,
+        "value": 3,
         "faceUp": true
       },
       "startPlayer": null
@@ -1055,7 +1096,6 @@
     {
       "q": -5,
       "r": 5,
-      "isPowerCenter": true,
       "startPlayer": 3,
       "startingShips": [
         {
@@ -1076,7 +1116,6 @@
     {
       "q": 0,
       "r": 5,
-      "isPowerCenter": true,
       "startPlayer": 2,
       "startingShips": [
         {
@@ -1095,7 +1134,7 @@
       "startPlayer": 2,
       "resourceToken": {
         "type": "credits",
-        "value": 7,
+        "value": 4,
         "faceUp": true
       },
       "startingShips": [
@@ -1152,7 +1191,7 @@
       "startPlayer": 3,
       "resourceToken": {
         "type": "credits",
-        "value": 7,
+        "value": 4,
         "faceUp": true
       },
       "startingShips": [
@@ -1192,7 +1231,12 @@
           "type": "destroyer",
           "player": 2
         }
-      ]
+      ],
+      "resourceToken": {
+        "type": "credits",
+        "value": 3,
+        "faceUp": true
+      }
     },
     {
       "q": 2,
@@ -1233,7 +1277,12 @@
           "type": "destroyer",
           "player": 3
         }
-      ]
+      ],
+      "resourceToken": {
+        "type": "credits",
+        "value": 3,
+        "faceUp": true
+      }
     },
     {
       "q": -5,
@@ -1250,7 +1299,12 @@
     },
     {
       "q": -3,
-      "r": 7
+      "r": 7,
+      "resourceToken": {
+        "type": "credits",
+        "value": 3,
+        "faceUp": true
+      }
     },
     {
       "q": -2,
@@ -1315,7 +1369,7 @@
       "startPlayer": null,
       "resourceToken": {
         "type": "credits",
-        "value": 6,
+        "value": 3,
         "faceUp": true
       }
     },
@@ -1497,5 +1551,6 @@
       "q": -2,
       "r": 3
     }
-  ]
+  ],
+  "victoryPowerCenters": 6
 }

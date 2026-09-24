@@ -14,8 +14,7 @@
           "type": "credits",
           "value": 5,
           "faceUp": true
-        },
-        "isPowerCenter": true
+        }
       },
       {
         "q": 1,
@@ -42,10 +41,9 @@
         "r": 0,
         "resourceToken": {
           "type": "production",
-          "value": 9,
+          "value": 5,
           "faceUp": true
         },
-        "isPowerCenter": true,
         "startPlayer": null
       },
       {
@@ -54,7 +52,12 @@
       },
       {
         "q": -1,
-        "r": 0
+        "r": 0,
+        "resourceToken": {
+          "type": "production",
+          "value": 3,
+          "faceUp": true
+        }
       },
       {
         "q": -1,
@@ -66,7 +69,7 @@
         "startPlayer": null,
         "resourceToken": {
           "type": "production",
-          "value": 6,
+          "value": 3,
           "faceUp": true
         }
       },
@@ -77,7 +80,7 @@
         "startPlayer": null,
         "resourceToken": {
           "type": "credits",
-          "value": 7,
+          "value": 5,
           "faceUp": true
         }
       },
@@ -162,7 +165,7 @@
         "r": 0,
         "resourceToken": {
           "type": "production",
-          "value": 6,
+          "value": 3,
           "faceUp": true
         },
         "startPlayer": null,
@@ -170,7 +173,12 @@
       },
       {
         "q": -7,
-        "r": 0
+        "r": 0,
+        "resourceToken": {
+          "type": "production",
+          "value": 3,
+          "faceUp": true
+        }
       },
       {
         "q": -1,
@@ -236,8 +244,7 @@
           "value": 4,
           "faceUp": true
         },
-        "startPlayer": null,
-        "isPowerCenter": true
+        "startPlayer": null
       },
       {
         "q": -7,
@@ -247,8 +254,7 @@
           "type": "credits",
           "value": 4,
           "faceUp": true
-        },
-        "isPowerCenter": true
+        }
       },
       {
         "q": -2,
@@ -375,7 +381,7 @@
         "r": 8,
         "resourceToken": {
           "type": "production",
-          "value": 1,
+          "value": 2,
           "faceUp": true
         },
         "startPlayer": null
@@ -386,7 +392,7 @@
         "startPlayer": null,
         "resourceToken": {
           "type": "production",
-          "value": 1,
+          "value": 2,
           "faceUp": true
         }
       },
@@ -396,7 +402,7 @@
         "startPlayer": null,
         "resourceToken": {
           "type": "credits",
-          "value": 1,
+          "value": 2,
           "faceUp": true
         }
       },
@@ -406,7 +412,7 @@
         "startPlayer": null,
         "resourceToken": {
           "type": "credits",
-          "value": 1,
+          "value": 2,
           "faceUp": true
         }
       },
@@ -416,7 +422,7 @@
         "startPlayer": null,
         "resourceToken": {
           "type": "credits",
-          "value": 1,
+          "value": 2,
           "faceUp": true
         }
       },
@@ -426,7 +432,7 @@
         "startPlayer": null,
         "resourceToken": {
           "type": "credits",
-          "value": 1,
+          "value": 2,
           "faceUp": true
         }
       },
@@ -444,7 +450,12 @@
             "type": "cruiser",
             "player": 1
           }
-        ]
+        ],
+        "resourceToken": {
+          "type": "credits",
+          "value": 3,
+          "faceUp": true
+        }
       },
       {
         "q": 3,
@@ -460,7 +471,12 @@
             "type": "cruiser",
             "player": 2
           }
-        ]
+        ],
+        "resourceToken": {
+          "type": "credits",
+          "value": 3,
+          "faceUp": true
+        }
       },
       {
         "q": -4,
@@ -507,7 +523,7 @@
         "r": 6,
         "resourceToken": {
           "type": "credits",
-          "value": 7,
+          "value": 4,
           "faceUp": true
         },
         "startPlayer": 1,
@@ -528,7 +544,7 @@
         "startPlayer": 2,
         "resourceToken": {
           "type": "credits",
-          "value": 7,
+          "value": 4,
           "faceUp": true
         },
         "startingShips": [
@@ -616,11 +632,21 @@
       },
       {
         "q": 0,
-        "r": 4
+        "r": 4,
+        "resourceToken": {
+          "type": "production",
+          "value": 2,
+          "faceUp": true
+        }
       },
       {
         "q": 4,
-        "r": -4
+        "r": -4,
+        "resourceToken": {
+          "type": "production",
+          "value": 2,
+          "faceUp": true
+        }
       },
       {
         "q": 1,
@@ -781,7 +807,7 @@
         "r": 5,
         "resourceToken": {
           "type": "production",
-          "value": 6,
+          "value": 3,
           "faceUp": true
         },
         "startPlayer": null
@@ -792,24 +818,34 @@
         "startPlayer": null,
         "resourceToken": {
           "type": "production",
-          "value": 6,
+          "value": 3,
           "faceUp": true
         }
       },
       {
         "q": 4,
-        "r": 4
+        "r": 4,
+        "resourceToken": {
+          "type": "production",
+          "value": 3,
+          "faceUp": true
+        }
       },
       {
         "q": 8,
-        "r": -4
+        "r": -4,
+        "resourceToken": {
+          "type": "production",
+          "value": 3,
+          "faceUp": true
+        }
       },
       {
         "q": 5,
         "r": 3,
         "resourceToken": {
           "type": "credits",
-          "value": 7,
+          "value": 4,
           "faceUp": true
         },
         "startPlayer": null
@@ -820,7 +856,7 @@
         "startPlayer": null,
         "resourceToken": {
           "type": "credits",
-          "value": 7,
+          "value": 4,
           "faceUp": true
         }
       },
@@ -853,7 +889,7 @@
         "r": 3,
         "resourceToken": {
           "type": "production",
-          "value": 5,
+          "value": 3,
           "faceUp": true
         },
         "startPlayer": null
@@ -864,7 +900,7 @@
         "startPlayer": null,
         "resourceToken": {
           "type": "production",
-          "value": 5,
+          "value": 3,
           "faceUp": true
         }
       },
@@ -902,7 +938,12 @@
       },
       {
         "q": 4,
-        "r": 0
+        "r": 0,
+        "resourceToken": {
+          "type": "credits",
+          "value": 4,
+          "faceUp": true
+        }
       },
       {
         "q": 5,
@@ -929,7 +970,7 @@
         "r": 0,
         "resourceToken": {
           "type": "credits",
-          "value": 9,
+          "value": 5,
           "faceUp": true
         },
         "startPlayer": null,
@@ -940,7 +981,7 @@
         "r": 0,
         "resourceToken": {
           "type": "credits",
-          "value": 7,
+          "value": 5,
           "faceUp": true
         },
         "startPlayer": null
@@ -955,11 +996,21 @@
       },
       {
         "q": 7,
-        "r": -2
+        "r": -2,
+        "resourceToken": {
+          "type": "credits",
+          "value": 3,
+          "faceUp": true
+        }
       },
       {
         "q": 5,
-        "r": 2
+        "r": 2,
+        "resourceToken": {
+          "type": "credits",
+          "value": 3,
+          "faceUp": true
+        }
       },
       {
         "q": 4,
@@ -1018,6 +1069,7 @@
         "r": -1
       }
     ],
-    "playerCount": 2
+    "playerCount": 2,
+    "victoryPowerCenters": 6
   }
 }

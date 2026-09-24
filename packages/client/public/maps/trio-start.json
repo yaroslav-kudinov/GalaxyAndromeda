@@ -7,7 +7,7 @@
       "r": 0,
       "resourceToken": {
         "type": "credits",
-        "value": 6,
+        "value": 5,
         "faceUp": true
       },
       "startPlayer": null
@@ -28,7 +28,7 @@
       "startPlayer": null,
       "resourceToken": {
         "type": "credits",
-        "value": 6,
+        "value": 5,
         "faceUp": true
       }
     },
@@ -58,7 +58,7 @@
       "startPlayer": null,
       "resourceToken": {
         "type": "credits",
-        "value": 6,
+        "value": 5,
         "faceUp": true
       }
     },
@@ -122,7 +122,7 @@
       "startPlayer": null,
       "resourceToken": {
         "type": "credits",
-        "value": 7,
+        "value": 5,
         "faceUp": true
       }
     },
@@ -131,7 +131,7 @@
       "r": 3,
       "resourceToken": {
         "type": "credits",
-        "value": 7,
+        "value": 5,
         "faceUp": true
       },
       "startPlayer": null
@@ -142,7 +142,7 @@
       "startPlayer": null,
       "resourceToken": {
         "type": "credits",
-        "value": 7,
+        "value": 5,
         "faceUp": true
       }
     },
@@ -349,7 +349,7 @@
       "r": 0,
       "resourceToken": {
         "type": "production",
-        "value": 9,
+        "value": 5,
         "faceUp": true
       },
       "startPlayer": null
@@ -491,7 +491,7 @@
       "r": 6,
       "resourceToken": {
         "type": "production",
-        "value": 1,
+        "value": 2,
         "faceUp": true
       },
       "startPlayer": null
@@ -502,7 +502,7 @@
       "startPlayer": null,
       "resourceToken": {
         "type": "production",
-        "value": 1,
+        "value": 2,
         "faceUp": true
       }
     },
@@ -512,7 +512,7 @@
       "startPlayer": null,
       "resourceToken": {
         "type": "production",
-        "value": 1,
+        "value": 2,
         "faceUp": true
       }
     },
@@ -521,7 +521,7 @@
       "r": 7,
       "resourceToken": {
         "type": "credits",
-        "value": 1,
+        "value": 2,
         "faceUp": true
       },
       "startPlayer": null
@@ -532,7 +532,7 @@
       "startPlayer": null,
       "resourceToken": {
         "type": "credits",
-        "value": 1,
+        "value": 2,
         "faceUp": true
       }
     },
@@ -542,7 +542,7 @@
       "startPlayer": null,
       "resourceToken": {
         "type": "credits",
-        "value": 1,
+        "value": 2,
         "faceUp": true
       }
     },
@@ -551,7 +551,7 @@
       "r": 8,
       "resourceToken": {
         "type": "credits",
-        "value": 1,
+        "value": 2,
         "faceUp": true
       },
       "startPlayer": null
@@ -562,7 +562,7 @@
       "startPlayer": null,
       "resourceToken": {
         "type": "credits",
-        "value": 1,
+        "value": 2,
         "faceUp": true
       }
     },
@@ -572,7 +572,7 @@
       "startPlayer": null,
       "resourceToken": {
         "type": "credits",
-        "value": 1,
+        "value": 2,
         "faceUp": true
       }
     },
@@ -582,7 +582,7 @@
       "startPlayer": 3,
       "resourceToken": {
         "type": "credits",
-        "value": 7,
+        "value": 4,
         "faceUp": true
       },
       "startingShips": [
@@ -602,7 +602,7 @@
       "startPlayer": 1,
       "resourceToken": {
         "type": "credits",
-        "value": 7,
+        "value": 4,
         "faceUp": true
       },
       "startingShips": [
@@ -622,7 +622,7 @@
       "startPlayer": 2,
       "resourceToken": {
         "type": "credits",
-        "value": 7,
+        "value": 4,
         "faceUp": true
       },
       "startingShips": [
@@ -710,7 +710,12 @@
           "type": "cruiser",
           "player": 3
         }
-      ]
+      ],
+      "resourceToken": {
+        "type": "credits",
+        "value": 3,
+        "faceUp": true
+      }
     },
     {
       "q": 0,
@@ -726,7 +731,12 @@
           "type": "cruiser",
           "player": 1
         }
-      ]
+      ],
+      "resourceToken": {
+        "type": "credits",
+        "value": 3,
+        "faceUp": true
+      }
     },
     {
       "q": 8,
@@ -742,7 +752,12 @@
           "type": "cruiser",
           "player": 2
         }
-      ]
+      ],
+      "resourceToken": {
+        "type": "credits",
+        "value": 3,
+        "faceUp": true
+      }
     },
     {
       "q": -6,
@@ -1024,5 +1039,6 @@
       "r": 6
     }
   ],
+  "victoryPowerCenters": 6,
   "playerCount": 3
 }
