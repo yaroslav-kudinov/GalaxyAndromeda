@@ -2,11 +2,15 @@
  * Стратегический слой ботов средней и высокой сложности.
  *
  * Раз на вызов бот смотрит на партию целиком: сколько у кого центров власти и сколько их
- * будет после захватов следующего хода, чей флот сильнее, кто близок к победе, каким центрам
+ * будет после захватов следующего хода, чей флот сильнее, кто вот-вот победит, каким центрам
  * самого бота грозит удар. Из этого складываются веса режимов — расширение, атака,
- * накопление, оборона, осада, добивание, помеха лидеру. Режимы не переключают бота рывком:
- * они задают веса, с которыми тактический слой ценит клетки, постройки и бои. Поэтому любое
+ * накопление, оборона, осада, добивание, помеха. Режимы не переключают бота рывком: они
+ * задают веса, с которыми тактический слой ценит клетки, постройки и бои. Поэтому любое
  * решение бота можно разложить на слагаемые и объяснить.
+ *
+ * Оба уровня прежде всего бегут к порогу сами. Высокий отличается тем, что замечает соперника,
+ * который вот-вот победит (`NearWinner`), и тогда бросает силы на то, чтобы его остановить;
+ * пока такого соперника нет, свою оборону он держит минимальной — она съедает темп.
  */
 
 import { combatStrength } from './bot-combat-math.js'
@@ -34,16 +38,21 @@ export type BotMode = 'expand' | 'attack' | 'buildup' | 'defend' | 'siege' | 'fi
 export const BOT_MODES: readonly BotMode[] = ['expand', 'attack', 'buildup', 'defend', 'siege', 'finish', 'deny']
 
 /**
- * Чем уровни различаются — числами, а не разными алгоритмами: так проще объяснить разницу
- * игроку и проверить её замером.
+ * Чем уровни различаются — числами и флагами, а не разными алгоритмами: так проще объяснить
+ * разницу игроку и проверить её замером.
  */
 export interface BotProfile {
   difficulty: SmartDifficulty
-  /** Доля внимания к обороне своих центров: высокий — полная, средний — малая. */
-  defenseShare: number
+  /** Доля внимания к обычной обороне своих центров. */
+  routineDefense: number
+  /**
+   * Доля внимания к обороне, от которой зависит партия: последний центр (выбывание), удар того,
+   * кто вот-вот победит, или центр, без которого сорвётся своя победа.
+   */
+  criticalDefense: number
   /** Видит ли бот, кто из врагов долетит до его центров в этот ход. */
   threatAware: boolean
-  /** Вес помехи лидеру, близкому к победе. */
+  /** Вес помехи сопернику, который вот-вот победит. 0 — бот в чужую победу не вмешивается. */
   denyShare: number
   /** Шансы боя, выбор штурма или осады, отступление и поддержка — по расчёту, а не по правилу. */
   smartCombat: boolean
@@ -55,23 +64,58 @@ export interface BotProfile {
   smartRecharge: boolean
   /** Придерживает маркер рядом с угрожаемым центром до поздних кругов — на ответный удар. */
   reserveMarkers: boolean
+  /** Шансы боя по превью движка (поддержка, авианосцы, доктрины), а не по голой силе кораблей. */
+  previewCombat: boolean
+  /** Во сколько раз бот ценит постройку относительно перелёта. */
+  buildScale: number
+  /** Лишние деньги дешевле: скопившиеся фишки ничего не приносят, пока не потрачены. */
+  richDiscount: boolean
+  /** Оставлять на угрожаемом центре хотя бы один корабль, даже если удержать его нечем. */
+  pickets: boolean
+  /** Ценит взятый центр по шансу его удержать: враг рядом может отбить его в тот же ход. */
+  holdAware: boolean
+  /** Вес своих потерь в бою: больше единицы — бот бережёт флот. */
+  lossAversion: number
+  /** Множитель ценности штурма, когда центр можно взять осадой: меньше единицы — осада охотнее. */
+  assaultBias: number
+  /** Вес прироста своего огня от «Атаки» при выборе доктрины. */
+  attackDoctrineBonus: number
+  /** Вес ослабления вражеского огня от «Обороны» при выборе доктрины. */
+  defenseDoctrineBonus: number
+  /** Тревога, когда соперник в двух центрах от порога: 0 — ждать, пока останется один. */
+  denyEarly: number
+  /** Множитель тревоги к концу партии, когда по лимиту ходов победил бы соперник. */
+  denyAtLimit: number
 }
 
 export const BOT_PROFILES: Record<SmartDifficulty, BotProfile> = {
   medium: {
     difficulty: 'medium',
-    defenseShare: 0.15,
+    routineDefense: 0.15,
+    criticalDefense: 0.15,
     threatAware: false,
-    denyShare: 0.25,
+    denyShare: 0,
     smartCombat: false,
     smartProduction: false,
     smartDoctrine: false,
     smartRecharge: false,
     reserveMarkers: false,
+    previewCombat: false,
+    buildScale: 1.5,
+    richDiscount: false,
+    pickets: true,
+    holdAware: false,
+    lossAversion: 1,
+    assaultBias: 1,
+    attackDoctrineBonus: 0,
+    defenseDoctrineBonus: 0,
+    denyEarly: 0,
+    denyAtLimit: 0,
   },
   hard: {
     difficulty: 'hard',
-    defenseShare: 1,
+    routineDefense: 0,
+    criticalDefense: 1,
     threatAware: true,
     denyShare: 1,
     smartCombat: true,
@@ -79,6 +123,17 @@ export const BOT_PROFILES: Record<SmartDifficulty, BotProfile> = {
     smartDoctrine: true,
     smartRecharge: true,
     reserveMarkers: true,
+    previewCombat: true,
+    buildScale: 3,
+    richDiscount: true,
+    pickets: false,
+    holdAware: true,
+    lossAversion: 1,
+    assaultBias: 1,
+    attackDoctrineBonus: 4,
+    defenseDoctrineBonus: 6,
+    denyEarly: 0.5,
+    denyAtLimit: 1,
   },
 }
 
@@ -93,12 +148,32 @@ export interface PlayerView {
   powerCenters: number
   /** Центры власти после тика осад и захватов в начале следующего хода. */
   projected: number
+  /**
+   * Сколько центров у игрока может оказаться в начале следующего хода: `projected` плюс пустые
+   * центры, до которых его корабли долетают в этот ход (в пределах лимита захвата).
+   */
+  potential: number
   cells: number
   ships: ShipAt[]
   strength: number
   claimLimit: number
   doctrine: DoctrineId
   largestRegion: number
+}
+
+/**
+ * Соперник, который вот-вот победит. Высокий уровень, заметив его, бросает силы на помеху:
+ * штурмует и осаждает его центры, оспаривает нейтральные центры у него на пути, снимает его
+ * осады, в чужих боях поддерживает его противника, занимает клетки ему назло.
+ */
+export interface NearWinner {
+  id: string
+  /** 0…1: насколько срочно его останавливать. */
+  urgency: number
+  /** Словами — почему бот считает его близким к победе. */
+  reason: string
+  /** Пустые центры, до которых он долетает в этот ход. */
+  reachablePowerCenters: Set<string>
 }
 
 /** Угроза своему центру власти: какая вражеская сила до него долетает. */
@@ -116,6 +191,8 @@ export interface PowerCenterThreat {
   occupied: boolean
   /** Это последний центр игрока: потеря — выбывание. */
   last: boolean
+  /** До центра долетает тот, кто вот-вот победит: потеря центра может отдать ему партию. */
+  byNearWinner: boolean
 }
 
 export interface BotSituation {
@@ -128,10 +205,10 @@ export interface BotSituation {
   views: Map<string, PlayerView>
   me: PlayerView
   rivals: PlayerView[]
-  /** Соперник, ближе всех к победе. */
+  /** Соперник с наибольшим числом центров (с учётом захватов следующего хода). */
   leader: PlayerView | null
-  /** Насколько лидер близок к победе: 0 — далеко, 1 — побеждает в начале следующего хода. */
-  leaderUrgency: number
+  /** Соперник, который вот-вот победит; `null` — такого нет, бот просто бежит к порогу. */
+  nearWinner: NearWinner | null
   /** Сила своего флота к сильнейшему сопернику. */
   fleetRatio: number
   modes: Record<BotMode, number>
@@ -161,6 +238,7 @@ function buildViews(game: GameSnapshot, board: BoardIndex): Map<string, PlayerVi
       id,
       powerCenters: 0,
       projected: 0,
+      potential: 0,
       cells: 0,
       ships: [],
       strength: 0,
@@ -213,11 +291,85 @@ export function rivalMovableCells(game: GameSnapshot, rivalId: string): ((key: s
   return (key) => cells.has(key)
 }
 
+/** Пустые центры (нейтральные и чужие), до которых игрок долетает в этот ход. */
+function reachableEmptyPowerCenters(game: GameSnapshot, board: BoardIndex, view: PlayerView): Set<string> {
+  const movable = rivalMovableCells(game, view.id)
+  const out = new Set<string>()
+  for (const ship of view.ships) {
+    if (!movable(ship.key)) continue
+    for (const key of reachForShip(board, ship.key, view.id, ship.type).keys()) {
+      const cell = board.cells.get(key)
+      if (!cell?.isPowerCenter || cell.controlOwnerId === view.id || cell.ships.length > 0) continue
+      out.add(key)
+    }
+  }
+  return out
+}
+
+/**
+ * Кто из соперников вот-вот победит. Порог срабатывания — три ясных признака:
+ *
+ * 1. захваты следующего хода плюс пустые центры в пределах его полёта дают ему порог;
+ * 2. у него уже на один центр меньше порога (или на два — тогда тревога слабее);
+ * 3. последние ходы партии, и по лимиту ходов победил бы он.
+ *
+ * Если сам бот ближе к своей победе, помеха уступает добиванию.
+ */
+function findNearWinner(
+  game: GameSnapshot,
+  board: BoardIndex,
+  me: PlayerView,
+  rivals: readonly PlayerView[],
+  threshold: number,
+  turnsLeft: number,
+  profile: BotProfile,
+): NearWinner | null {
+  let best: NearWinner | null = null
+  const bestOthers = (except: string) => Math.max(0, ...[me, ...rivals].filter((view) => view.id !== except).map((view) => view.projected))
+  for (const rival of rivals) {
+    const reachable = reachableEmptyPowerCenters(game, board, rival)
+    rival.potential = rival.projected + Math.min(reachable.size, Math.max(1, rival.claimLimit))
+    let urgency = 0
+    let reason = ''
+    if (rival.potential >= threshold) {
+      urgency = 1
+      reason = `захватами следующего хода доберёт порог (${rival.potential} из ${threshold})`
+    } else if (rival.projected >= threshold - 1) {
+      urgency = 0.85
+      reason = `до порога один центр (${rival.projected} из ${threshold})`
+    } else if (rival.projected >= threshold - 2) {
+      urgency = profile.denyEarly
+      reason = `до порога два центра (${rival.projected} из ${threshold})`
+    }
+    // К концу партии побеждает больший счёт: ведущего по центрам тоже надо остановить.
+    if (turnsLeft <= 2 && rival.projected > bestOthers(rival.id)) {
+      const limitUrgency = (turnsLeft <= 1 ? 0.85 : 0.6) * profile.denyAtLimit
+      if (limitUrgency > urgency) {
+        urgency = limitUrgency
+        reason = `ведёт по центрам к лимиту ходов (${rival.projected})`
+      }
+    }
+    if (urgency <= 0) continue
+    if (!best || urgency > best.urgency
+      || (urgency === best.urgency && rival.potential > (rivals.find((view) => view.id === best!.id)?.potential ?? 0))) {
+      best = { id: rival.id, urgency, reason, reachablePowerCenters: reachable }
+    }
+  }
+  if (best) {
+    // Сам ближе к победе — сначала добить своё, помеха вполсилы.
+    me.potential = me.projected + Math.min(reachableEmptyPowerCenters(game, board, me).size, Math.max(1, me.claimLimit))
+    const rival = rivals.find((view) => view.id === best!.id)!
+    if (me.potential >= threshold && me.potential >= rival.potential) best.urgency *= 0.4
+  }
+  return best
+}
+
 function computeThreats(
   game: GameSnapshot,
   board: BoardIndex,
   me: PlayerView,
   rivals: readonly PlayerView[],
+  nearWinner: NearWinner | null,
 ): Map<string, PowerCenterThreat> {
   const threats = new Map<string, PowerCenterThreat>()
   const movable = new Map(rivals.map((rival) => [rival.id, rivalMovableCells(game, rival.id)]))
@@ -227,6 +379,7 @@ function computeThreats(
     let next = 0
     let attackerId: string | null = null
     let occupied = false
+    let byNearWinner = false
     for (const rival of rivals) {
       const onCell = cell.ships.filter((ship) => ship.ownerId === rival.id).map((ship) => ship.type)
       if (onCell.length) occupied = true
@@ -236,6 +389,7 @@ function computeThreats(
         now = reachNow
         attackerId = rival.id
       }
+      if (nearWinner?.id === rival.id && (reachNow > 0 || onCell.length > 0)) byNearWinner = true
       next = Math.max(next, reachNext)
     }
     const garrison = combatStrength(cell.ships.filter((ship) => ship.ownerId === me.id).map((ship) => ship.type))
@@ -247,6 +401,7 @@ function computeThreats(
       attackerId: attackerId ?? null,
       occupied,
       last: me.powerCenters <= 1,
+      byNearWinner,
     })
   }
   return threats
@@ -290,13 +445,31 @@ export function shipCost(type: ShipType): number {
 }
 
 /**
+ * Оборона от этой угрозы важна для партии: потеря последнего центра — выбывание, центр в руках
+ * того, кто вот-вот победит, может стать его победным, а свой центр перед собственной победой
+ * держать надо до захватов следующего хода.
+ */
+export function isCriticalThreat(situation: Pick<BotSituation, 'me' | 'threshold'>, threat: PowerCenterThreat): boolean {
+  return threat.last || threat.byNearWinner || situation.me.projected >= situation.threshold
+}
+
+/** Доля внимания к обороне этого центра: полная для важной обороны, иначе — обычная. */
+export function defenseShareFor(
+  situation: Pick<BotSituation, 'me' | 'threshold' | 'profile'>,
+  threat: PowerCenterThreat,
+): number {
+  return isCriticalThreat(situation, threat) ? situation.profile.criticalDefense : situation.profile.routineDefense
+}
+
+/**
  * Веса режимов. Каждое слагаемое — отдельная причина, которую можно назвать словами:
- * «нейтральных центров ещё много», «флот вдвое сильнее соседа», «до победы один центр».
+ * «нейтральных центров ещё много», «флот вдвое сильнее соседа», «до победы один центр»,
+ * «соперник доберёт порог захватами следующего хода».
  */
 function computeModes(
   situation: Omit<BotSituation, 'modes' | 'mode'>,
 ): Record<BotMode, number> {
-  const { me, threshold, turnsLeft, profile, leaderUrgency, fleetRatio, neutralPowerCenters, threats, turn } = situation
+  const { me, threshold, turnsLeft, profile, nearWinner, fleetRatio, neutralPowerCenters, threats, turn } = situation
   const neutralShare = neutralPowerCenters.length / Math.max(1, threshold)
 
   // Расширение: пока есть нейтральные центры и клетки, а партия молода.
@@ -318,13 +491,14 @@ function computeModes(
       + (unlock && unlock.missing <= 3 && unlock.type !== 'cruiser' ? 0.3 : 0),
   )
 
-  // Оборона: враг у своих центров. Средний уровень смотрит на это вполглаза.
+  // Оборона: враг у своих центров. Обычную оборону высокий уровень почти не держит — она съедает
+  // темп; важную (последний центр, удар почти победителя) — держит в полную силу.
   let danger = 0
   for (const threat of threats.values()) {
     const pressure = threat.occupied ? 1 : clamp01(threat.now / Math.max(1, threat.garrison * 1.5 + 0.5))
-    danger = Math.max(danger, pressure * (threat.last ? 1 : 0.7))
+    danger = Math.max(danger, pressure * defenseShareFor(situation, threat))
   }
-  const defend = clamp01(danger) * profile.defenseShare
+  const defend = clamp01(danger)
 
   // Осада: центры соседей под гарнизоном, а перевеса для штурма нет — давим временем.
   const siege = clamp01(attack * 0.6 + (turnsLeft >= 3 ? 0.2 : 0))
@@ -333,8 +507,8 @@ function computeModes(
   const gap = threshold - me.projected
   const finish = gap <= 1 ? 1 : gap === 2 ? 0.55 : gap === 3 && turnsLeft <= 3 ? 0.35 : 0
 
-  // Помеха лидеру: соперник близок к порогу или ведёт к концу партии.
-  const deny = clamp01(leaderUrgency) * profile.denyShare
+  // Помеха: только если есть соперник, который вот-вот победит, и уровень на это способен.
+  const deny = clamp01((nearWinner?.urgency ?? 0) * profile.denyShare)
 
   return { expand, attack, buildup, defend, siege, finish, deny }
 }
@@ -357,6 +531,7 @@ export function analyzeSituation(
     id: playerId,
     powerCenters: 0,
     projected: 0,
+    potential: 0,
     cells: 0,
     ships: [],
     strength: 0,
@@ -375,6 +550,7 @@ export function analyzeSituation(
       if (owner) owner.projected -= 1
     }
   }
+  for (const view of views.values()) view.potential = view.projected
   const rivals = [...views.values()].filter((view) => view.id !== playerId)
   const threshold = victoryThresholdForSnapshot(game)
   const turnLimit = game.turnLimit ?? null
@@ -387,16 +563,10 @@ export function analyzeSituation(
       leader = rival
     }
   }
-  let leaderUrgency = 0
-  if (leader) {
-    const gap = threshold - leader.projected
-    // Мешать лидеру дорого — это ходы не на себя. Оправдано, только когда он вот-вот победит.
-    leaderUrgency = gap <= 0 ? 1 : gap === 1 ? 0.7 : gap === 2 ? 0.25 : 0
-    // К концу партии побеждает больший счёт, а не порог: мешать надо и ведущему по центрам.
-    if (turnsLeft <= 2 && leader.projected > me.projected) leaderUrgency = Math.max(leaderUrgency, 0.5)
-    // Сам бот впереди и лидер не у порога — пусть соперники мешают друг другу.
-    if (me.projected > leader.projected && gap >= 2) leaderUrgency = 0
-  }
+  // Искать почти победителя имеет смысл только тому, кто станет ему мешать или от него защищаться.
+  const nearWinner = profile.denyShare > 0 || profile.threatAware
+    ? findNearWinner(game, board, me, rivals, threshold, turnsLeft, profile)
+    : null
   const strongestRival = Math.max(0.5, ...rivals.map((rival) => rival.strength))
   const fleetRatio = me.strength / strongestRival
 
@@ -405,9 +575,7 @@ export function analyzeSituation(
     if (cell.isPowerCenter && cell.controlOwnerId == null) neutralPowerCenters.push(key)
   }
 
-  const threats = profile.threatAware || profile.defenseShare > 0
-    ? computeThreats(game, board, me, rivals)
-    : new Map<string, PowerCenterThreat>()
+  const threats = computeThreats(game, board, me, rivals, nearWinner)
   const regionsInfo = regionsOf(board, playerId)
 
   const base = {
@@ -421,7 +589,7 @@ export function analyzeSituation(
     me,
     rivals,
     leader,
-    leaderUrgency,
+    nearWinner,
     fleetRatio,
     threats,
     neutralPowerCenters,
@@ -436,6 +604,11 @@ export function analyzeSituation(
 /** Базовая ценность одного центра власти в очках оценки; всё остальное меряется от неё. */
 export const POWER_CENTER_VALUE = 100
 
+/** Игрок — тот, кто вот-вот победит, и бот сейчас ему мешает. */
+export function isDenyTarget(situation: BotSituation, playerId: string | null | undefined): boolean {
+  return !!playerId && situation.nearWinner?.id === playerId && situation.modes.deny > 0
+}
+
 /**
  * Ценность клетки как цели: что даст бот, если в конце хода его корабль будет стоять здесь.
  * Бой сюда не входит — его цена считается отдельно, по шансам.
@@ -449,16 +622,23 @@ export function cellGoalValue(situation: BotSituation, key: string): number {
 
   if (cell.isPowerCenter) {
     if (owner === playerId) return 0
+    // Центр, который почти победитель заберёт в начале следующего хода (его корабль стоит на
+    // пустом центре или его осада падает), — самое срочное, что можно у него отнять.
+    const snatch = isDenyTarget(situation, situation.capturesAhead.get(key))
+      ? POWER_CENTER_VALUE * 1.2 * modes.deny
+      : 0
     if (owner == null) {
       let value = POWER_CENTER_VALUE * (0.75 + modes.expand * 0.35 + modes.finish * 0.8)
-      value += denyBonusNear(situation, key)
+      value += Math.max(snatch, denyContestBonus(situation, key))
       return value + tokenValue
     }
     const ownerView = situation.views.get(owner)
     let value = POWER_CENTER_VALUE * (0.8 + modes.attack * 0.3 + modes.finish * 0.8)
     // Чужой центр — двойной размен: у себя плюс один, у соперника минус один.
     value += POWER_CENTER_VALUE * 0.3
-    if (ownerView && situation.leader?.id === owner) value += POWER_CENTER_VALUE * situation.modes.deny * 0.9
+    // Центр того, кто вот-вот победит: взять его — значит отодвинуть его победу.
+    if (isDenyTarget(situation, owner)) value += POWER_CENTER_VALUE * 1.2 * modes.deny
+    value += snatch
     // Последний центр соперника: его взятие выбивает игрока из партии.
     if (ownerView && ownerView.powerCenters <= 1) value += POWER_CENTER_VALUE * 0.4
     return value + tokenValue
@@ -470,7 +650,7 @@ export function cellGoalValue(situation: BotSituation, key: string): number {
     return (6 + tokenValue * 2.2) * (0.5 + modes.expand * 0.6) + regionBonus
   }
   // Чужая клетка без кораблей переходит сразу при входе: это набег на экономику соперника.
-  const raid = 5 + tokenValue * 1.6 + (situation.leader?.id === owner ? 6 * modes.deny : 0)
+  const raid = 5 + tokenValue * 1.6 + (isDenyTarget(situation, owner) ? 8 * modes.deny : 0)
   return raid * (0.5 + modes.attack * 0.6) + regionBonus
 }
 
@@ -481,15 +661,20 @@ function touchesOwnRegion(situation: BotSituation, key: string): boolean {
   return false
 }
 
-/** Помеха лидеру: нейтральный центр, к которому он ближе всех, стоит дороже. */
-function denyBonusNear(situation: BotSituation, key: string): number {
-  const leader = situation.leader
-  if (!leader || situation.modes.deny <= 0) return 0
+/**
+ * Нейтральный центр, до которого почти победитель долетает в этот ход (или стоит рядом):
+ * свой корабль на нём превращает его захват в бой.
+ */
+function denyContestBonus(situation: BotSituation, key: string): number {
+  const target = situation.nearWinner
+  if (!target || situation.modes.deny <= 0) return 0
+  if (target.reachablePowerCenters.has(key)) return POWER_CENTER_VALUE * 0.9 * situation.modes.deny
+  const view = situation.views.get(target.id)
+  if (!view) return 0
   const dist = distancesFrom(situation.board, key)
   let nearest = Infinity
-  for (const ship of leader.ships) nearest = Math.min(nearest, dist.get(ship.key) ?? Infinity)
-  if (nearest > 4) return 0
-  return POWER_CENTER_VALUE * 0.6 * situation.modes.deny * (nearest <= 3 ? 1 : 0.5)
+  for (const ship of view.ships) nearest = Math.min(nearest, dist.get(ship.key) ?? Infinity)
+  return nearest <= 4 ? POWER_CENTER_VALUE * 0.4 * situation.modes.deny : 0
 }
 
 /** Сила одного эсминца: «пикет», без которого пустой центр берут простым захватом. */
@@ -519,5 +704,5 @@ export function defenseValue(situation: BotSituation, key: string): number {
   const base = POWER_CENTER_VALUE * (threat.last ? 2.2 : 1.1)
   const nearWin = situation.modes.finish > 0.5 ? 0.4 : 0
   const likelihood = threat.occupied ? 1 : threat.now > 0 ? 0.6 : 0.25
-  return base * (1 + nearWin) * likelihood * situation.profile.defenseShare
+  return base * (1 + nearWin) * likelihood * defenseShareFor(situation, threat)
 }

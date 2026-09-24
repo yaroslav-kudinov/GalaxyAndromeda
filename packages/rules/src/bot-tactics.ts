@@ -28,16 +28,20 @@ import {
   analyzeSituation,
   BOT_PROFILES,
   cellGoalValue,
+  defenseShareFor,
   defenseValue,
   garrisonNeed,
+  isDenyTarget,
   PICKET_STRENGTH,
   POWER_CENTER_VALUE,
+  rivalMovableCells,
   shipCost,
   type BotSituation,
   type SmartDifficulty,
 } from './bot-strategy.js'
 import { claimPicksRemaining, eligibleClaimCells } from './claim.js'
-import { buildCombatPreview, isBattleUnresolvable } from './combat.js'
+import { buildCombatPreview, combatShotModifier, isBattleUnresolvable } from './combat.js'
+import { shipHitThreshold } from './combat-hits.js'
 import { MAX_FLEET_SIZE_PER_PLAYER, MAX_SHIPS_PER_CELL, MAX_SHIPS_PER_CELL_PER_PLAYER } from './constants.js'
 import { effectiveMoveRange } from './doctrines.js'
 import { actionMarkerLimitForPlayer } from './marker-pools.js'
@@ -122,37 +126,44 @@ function ownShipsAt(board: BoardIndex, key: string, playerId: string): ShipUnit[
   return board.cells.get(key)?.ships.filter((ship) => ship.ownerId === playerId) ?? []
 }
 
-/** Сила врагов, способных дойти до клетки в этот ход (для удержания нейтрального центра). */
-function enemyReachStrength(ctx: TacticalContext, key: string): number {
-  const cached = ctx.threatCache.get(key)
+/**
+ * Сила врагов, способных дойти до клетки в этот ход (для удержания центра). Корабли на самой
+ * клетке — по желанию: в бою за неё они и есть противник, а после победы их уже нет.
+ */
+function enemyReachStrength(ctx: TacticalContext, key: string, includeOnCell = true): number {
+  const cacheKey = includeOnCell ? key : `${key}|без клетки`
+  const cached = ctx.threatCache.get(cacheKey)
   if (cached != null) return cached
   let worst = 0
-  const markerCells = ctx.game.phase === 'actions'
-    ? new Set(ctx.game.actionMarkers.map((marker) => `${marker.ownerId}|${marker.coord.q},${marker.coord.r}`))
-    : null
   for (const rival of ctx.situation.rivals) {
+    const movable = rivalMovableCells(ctx.game, rival.id)
     const types: ShipType[] = []
     for (const ship of rival.ships) {
       if (ship.key === key) {
-        types.push(ship.type)
+        if (includeOnCell) types.push(ship.type)
         continue
       }
-      if (markerCells && !markerCells.has(`${rival.id}|${ship.key}`)) continue
+      if (!movable(ship.key)) continue
       if (reachForShip(ctx.board, ship.key, rival.id, ship.type).has(key)) types.push(ship.type)
     }
     worst = Math.max(worst, combatStrength(types))
   }
-  ctx.threatCache.set(key, worst)
+  ctx.threatCache.set(cacheKey, worst)
   return worst
 }
 
-/** Нужный гарнизон своего центра с поправкой на уровень: средний держит только последний центр. */
+/**
+ * Нужный гарнизон своего центра с поправкой на уровень. Средний держит только последний
+ * центр; высокий — центры, оборона которых важна для партии (последний, под ударом почти
+ * победителя, перед своей победой), а обычную оборону оставляет, чтобы не терять темп.
+ */
 function garrisonNeedFor(ctx: TacticalContext, key: string): number {
   const need = garrisonNeed(ctx.situation, key)
   if (need <= 0) return 0
-  if (ctx.situation.profile.threatAware) return need
   const threat = ctx.situation.threats.get(key)
-  return threat?.last ? need : 0
+  if (!threat) return 0
+  if (ctx.situation.profile.threatAware) return defenseShareFor(ctx.situation, threat) >= 0.5 ? need : 0
+  return threat.last ? need : 0
 }
 
 function approachGoals(ctx: TacticalContext): ApproachGoal[] {
@@ -242,19 +253,38 @@ function defendersAt(ctx: TacticalContext, key: string): ShipUnit[] {
   return enemies.filter((ship) => ship.ownerId === owner)
 }
 
+/**
+ * Шанс удержать центр, на который бот ставит корабли силой `arriving`: враг, способный долететь
+ * до клетки в этот ход, может его отбить. 1 — никто не долетает. Средний уровень об этом не
+ * думает и берёт всё, до чего дотянется.
+ */
+function holdSafety(ctx: TacticalContext, key: string, arriving: number): number {
+  if (!ctx.situation.profile.holdAware) return 1
+  const danger = enemyReachStrength(ctx, key, false)
+  if (danger <= 0) return 1
+  const held = combatStrength(ownShipsAt(ctx.board, key, ctx.playerId).map((ship) => ship.type)) + arriving
+  const risk = danger / (danger + 1.5 * held + 0.05)
+  return 1 - 0.6 * risk
+}
+
 /** Во что обойдётся бою ставка: ценность клетки для бота, если он её выиграет. */
-function combatStake(ctx: TacticalContext, key: string): number {
+function combatStake(ctx: TacticalContext, key: string, arriving: number): number {
   const cell = ctx.board.cells.get(key)
   if (!cell) return 0
   const siege = ctx.game.sieges?.[key]
   if (cell.isPowerCenter) {
     if (cell.controlOwnerId === ctx.playerId) {
-      // Враг на своём центре: без ответа центр уйдёт захватом или осадой.
-      return defenseValue(ctx.situation, key) * 1.25 + (ctx.situation.profile.threatAware ? 0 : 25)
+      // Враг на своём центре: без ответа центр уйдёт захватом или осадой. Высокий уровень
+      // выбивает его как отбирает чужой центр — это тот же размен; средний — вполсилы.
+      const recapture = ctx.situation.profile.threatAware ? POWER_CENTER_VALUE * 1.1 : 25
+      return Math.max(recapture, defenseValue(ctx.situation, key) * 1.25)
     }
     if (siege && siege.besiegerId !== ctx.playerId && siege.besiegedId !== ctx.playerId) {
-      return cellGoalValue(ctx.situation, key) * 0.25
+      // Снять осаду того, кто вот-вот победит, — отнять у него центр, который он почти взял.
+      const deny = isDenyTarget(ctx.situation, siege.besiegerId) ? POWER_CENTER_VALUE * 1.1 * ctx.situation.modes.deny : 0
+      return cellGoalValue(ctx.situation, key) * 0.25 + deny
     }
+    return cellGoalValue(ctx.situation, key) * holdSafety(ctx, key, arriving)
   }
   return cellGoalValue(ctx.situation, key)
 }
@@ -262,10 +292,11 @@ function combatStake(ctx: TacticalContext, key: string): number {
 function killWeight(ctx: TacticalContext, ownerId: string | undefined): number {
   if (!ownerId) return 1
   let weight = 1
-  if (ctx.situation.leader?.id === ownerId) weight += 0.5 * ctx.situation.modes.deny
+  // Флот того, кто вот-вот победит, — то, чем он возьмёт последние центры.
+  if (isDenyTarget(ctx.situation, ownerId)) weight += 0.6 * ctx.situation.modes.deny
   for (const threat of ctx.situation.threats.values()) {
     if (threat.attackerId === ownerId && (threat.now > 0 || threat.occupied)) {
-      weight += 0.3 * ctx.situation.profile.defenseShare
+      weight += 0.3 * defenseShareFor(ctx.situation, threat)
       break
     }
   }
@@ -299,29 +330,40 @@ export function evaluateCombatTarget(
       fleetValue(attackerTypes),
       fleetValue(defenderTypes),
     )
-    assaultPossible = combatStrength(attackerTypes) > 0 || combatStrength(defenderTypes) > 0
+    // Штурм, в котором сами атакующие не стреляют (авианосцы, гиперорудие в упор, эсминец
+    // против «Обороны»), держится на поддержке соседей, а соседи того же маркера к бою улетят.
+    // Такой бой бот не начинает: это уже не оценка, а правило.
+    const modifier = combatShotModifier(ctx.game, playerId, defenders[0]?.ownerId ?? null, cell.coord)
+    assaultPossible = attackerTypes.some((type) => shipHitThreshold(type, 0, modifier) != null)
   } else {
     const preview = buildCombatPreview(ctx.game, cell.coord, playerId, attackers)
     if (!preview) return null
-    assaultPossible = !isBattleUnresolvable(preview)
+    // То же с поправками доктрин: эсминцу против «Обороны» на её клетке нужна семёрка.
+    const attackersShoot = preview.attacker.ships.some((ship) => ship.dice > 0 && ship.threshold != null)
+    assaultPossible = attackersShoot && !isBattleUnresolvable(preview)
     estimate = estimatePreview(preview)
   }
 
-  const stake = combatStake(ctx, key)
+  // После боя на клетке останется примерно половина силы атакующих — ею и держать.
+  const stake = combatStake(ctx, key, combatStrength(attackerTypes) * 0.6)
   const kill = killWeight(ctx, defenders[0]?.ownerId)
   const finishing = situation.modes.finish >= 0.99 || situation.modes.deny >= 0.8
-  const lossWeight = finishing ? 0.65 : 1
+  const lossWeight = (finishing ? 0.65 : 1) * situation.profile.lossAversion
   // Ставка высока (добивание, помеха лидеру, свой центр) — бот рискует охотнее.
   const bigStake = stake >= POWER_CENTER_VALUE * 1.4
   const minWin = bigStake ? 0.35 : situation.profile.smartCombat ? 0.55 : 0.5
+  const besiegeable = canBesiegeCell(ctx.game, playerId, cell.coord)
 
   let best: CombatOption | null = null
   if (assaultPossible && estimate && estimate.winChance >= minWin) {
-    const value = estimate.winChance * stake + estimate.defenderLoss * kill - estimate.attackerLoss * lossWeight
+    let value = estimate.winChance * stake + estimate.defenderLoss * kill - estimate.attackerLoss * lossWeight
+    // Штурм стоит флота, осада — только времени. Когда время не поджимает, бот высокого уровня
+    // штурмует лишь то, что не взять осадой.
+    if (besiegeable && !finishing) value *= situation.profile.assaultBias
     best = { key, attackers, value, siege: false, estimate, reason: 'штурм' }
   }
 
-  if (canBesiegeCell(ctx.game, playerId, cell.coord)) {
+  if (besiegeable) {
     const siege = siegeOption(ctx, key, attackers, defenders, stake, estimate)
     if (siege && (!best || siege.value > best.value)) best = siege
   }
@@ -398,7 +440,7 @@ export function planMoves(ctx: TacticalContext, markerKey: string, quick: boolea
           kept.add(ship.id)
           keptTypes.push(ship.type)
         }
-      } else {
+      } else if (situation.profile.pickets) {
         // Удержать нечем: весь флот на клетке погиб бы в штурме. Оставляем пикет — самый
         // дешёвый корабль, чтобы центр не ушёл захватом без боя.
         const picket = [...mine].sort((a, b) => shipCost(a.type) - shipCost(b.type))[0]!
@@ -464,6 +506,7 @@ export function planMoves(ctx: TacticalContext, markerKey: string, quick: boolea
             let goal = cellGoalValue(situation, key)
             const needsClaim = dest.controlOwnerId == null || dest.isPowerCenter
             if (needsClaim && !dest.isPowerCenter && claimSlots <= 0) goal *= OVER_LIMIT_CLAIM_SHARE
+            if (dest.isPowerCenter) goal *= holdSafety(ctx, key, combatStrength([ship.type]))
             gain += goal
             note = dest.isPowerCenter ? 'центр' : dest.controlOwnerId ? 'набег' : 'захват'
           } else if (dest.isPowerCenter && situation.profile.threatAware) {
@@ -479,7 +522,7 @@ export function planMoves(ctx: TacticalContext, markerKey: string, quick: boolea
             const empty = ownAt(key) + extra === 0
             const deficit = need - held
             const add = combatStrength([ship.type]) || PICKET_STRENGTH
-            if (empty) {
+            if (empty && situation.profile.pickets) {
               // Пустой центр под угрозой: первый корабль превращает захват в бой.
               gain += defenseValue(situation, key) * 0.7
               note = 'пикет'
@@ -598,12 +641,18 @@ export function planBuild(ctx: TacticalContext, markerKey: string): BuildPlan | 
     if (count < 1) continue
     const worth = shipWorth(ctx, type)
     let moneyCost = MONEY_COST
+    if (situation.profile.richDiscount) {
+      // Скопившиеся деньги ничего не приносят: чем толще кошелёк региона, тем дешевле трата.
+      const wallet = region.credits + region.production
+      if (wallet >= 36) moneyCost *= 0.45
+      else if (wallet >= 22) moneyCost *= 0.7
+    }
     if (savingFor && shipCost(type) < shipCost(savingFor) && deficit <= 0) moneyCost = 1.25
-    let value = count * (worth - shipCost(type) * moneyCost)
+    let value = count * (worth * situation.profile.buildScale - shipCost(type) * moneyCost)
     let reason = `постройка ${type}×${count}`
     if (deficit > 0) {
       const added = combatStrength(Array.from({ length: count }, () => type))
-      if (held <= 0) {
+      if (held <= 0 && situation.profile.pickets) {
         // Пустой центр под угрозой: построенные корабли сразу становятся гарнизоном.
         value += defenseValue(situation, markerKey) * (0.7 + 0.2 * Math.min(1, added / deficit))
         reason += ' в пикет'
@@ -640,8 +689,9 @@ export function planSharedCell(ctx: TacticalContext, markerKey: string): Assault
   if (!preview || isBattleUnresolvable(preview)) return null
   const estimate = estimatePreview(preview)
   if (siege?.besiegedId === playerId) {
-    // Вылазка: снять осаду, пока гарнизон не растаял.
-    const stake = defenseValue(situation, markerKey) + (situation.profile.threatAware ? 0 : 20)
+    // Вылазка: снять осаду, пока гарнизон не растаял. Это тот же отбитый центр, что и штурм.
+    const recapture = situation.profile.threatAware ? POWER_CENTER_VALUE * 1.1 : 20
+    const stake = Math.max(recapture, defenseValue(situation, markerKey))
     const value = estimate.winChance * stake + estimate.defenderLoss - estimate.attackerLoss
     if (estimate.winChance < 0.5 || value <= 0) return null
     return { value, reason: 'вылазка из осады' }
@@ -744,7 +794,10 @@ export function chooseMarkerCell(ctx: TacticalContext): HexCoord | null {
 // Захват и перезарядка
 // ---------------------------------------------------------------------------
 
-/** Какие клетки занять, если подходящих больше лимита: центры, помеха лидеру, связность, фишки. */
+/**
+ * Какие клетки занять, если подходящих больше лимита: центры, помеха почти победителю,
+ * связность регионов, фишки.
+ */
 export function chooseClaimPicks(game: GameSnapshot, playerId: string, difficulty: SmartDifficulty): HexCoord[] | undefined {
   const remaining = claimPicksRemaining(game, playerId)
   if (remaining <= 0) return undefined
@@ -762,11 +815,14 @@ export function chooseClaimPicks(game: GameSnapshot, playerId: string, difficult
       if (region != null) touching.add(region)
     }
     score += touching.size >= 2 ? 12 : touching.size === 1 ? 4 : 0
-    if (difficulty === 'hard' && situation.leader && situation.modes.deny > 0) {
-      // Помеха лидеру: клетка у его границы — это клетка, которую он не возьмёт.
-      const leaderNear = (situation.board.neighbors.get(key) ?? [])
-        .some((next) => situation.board.cells.get(next)?.controlOwnerId === situation.leader!.id)
-      if (leaderNear) score += 10 * situation.modes.deny
+    const target = situation.nearWinner
+    if (target && situation.modes.deny > 0) {
+      // Помеха почти победителю: клетка у его границы — клетка, которую он не возьмёт, а
+      // центр, до которого он долетает, — центр, который не станет его победным.
+      if (cell.isPowerCenter && target.reachablePowerCenters.has(key)) score += 200 * situation.modes.deny
+      const touchesTarget = (situation.board.neighbors.get(key) ?? [])
+        .some((next) => situation.board.cells.get(next)?.controlOwnerId === target.id)
+      if (touchesTarget) score += 10 * situation.modes.deny
     }
     return { cell, score }
   })

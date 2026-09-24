@@ -266,8 +266,19 @@ function report(mapId: string, summary: Summary, records: readonly GameRecord[])
       .sort((a, b) => BOT_DIFFICULTIES.indexOf(a[0] as BotDifficulty) - BOT_DIFFICULTIES.indexOf(b[0] as BotDifficulty))
       .map(([level, result]) =>
         `${level} ${percent(result.winRate)} (${result.wins} из ${summary.games - summary.errors}, `
-          + `при равной силе ${percent(result.fairShare)})`)
+          + `при равной силе ${percent(result.fairShare)}; на место ${percent(result.winsPerSeat)}, `
+          + `к справедливой ×${num(result.perSeatVsFair)})`)
       .join(', '))
+  }
+  const near = summary.nearWins
+  if (near.all.episodes > 0) {
+    const part = (item: { episodes: number; stopped: number; share: number }) =>
+      `${percent(item.share)} (${item.stopped} из ${item.episodes})`
+    lines.push(
+      `Почти победителя остановили: ${part(near.all)}; `
+        + Object.entries(near.byLevel).map(([level, item]) => `он ${level} — ${part(item)}`).join(', ')
+        + `; в партии есть другой высокий — ${part(near.withOtherHard)}, нет — ${part(near.withoutOtherHard)}`,
+    )
   }
   if (summary.bot.errors || summary.bot.planRejects) {
     lines.push(

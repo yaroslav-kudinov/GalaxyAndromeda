@@ -8,6 +8,7 @@ import { estimatePreview } from './bot-combat-math.js'
 import {
   analyzeSituation,
   BOT_PROFILES,
+  isDenyTarget,
   type BotMode,
   type BotSituation,
   type SmartDifficulty,
@@ -23,7 +24,8 @@ import { type DoctrineId } from './doctrines.js'
 import { countControlledPowerCenters } from './marker-pools.js'
 import type { GameSnapshot } from './save-file.js'
 import { besiegedCellKeysOf } from './siege.js'
-import { hexKey, type HexCoord, type MapDefinition, type ShipUnit } from './types.js'
+import { hexKey, type HexCoord, type MapDefinition, type ShipType, type ShipUnit } from './types.js'
+import { hitProbability, shipDice, shipHitThreshold } from './combat-hits.js'
 
 // ---------------------------------------------------------------------------
 // Доктрина
@@ -63,23 +65,40 @@ export interface DoctrineScore {
  * Оценки доктрин высокого уровня: каждое слагаемое — выгода доктрины за окно в три хода в
  * грубых «клетках захвата» или «фишках», минус её цена.
  */
+/** Ожидаемые попадания кораблей за раунд при поправке к нужному значению `modifier`. */
+function hitsWith(types: readonly ShipType[], modifier: number): number {
+  let hits = 0
+  for (const type of types) hits += shipDice(type) * hitProbability(shipHitThreshold(type, 0, modifier))
+  return hits
+}
+
 export function scoreDoctrines(game: GameSnapshot, playerId: string): DoctrineScore[] {
   const situation = analyzeSituation(game, playerId, BOT_PROFILES.hard)
-  const { modes, me } = situation
+  const { modes, me, profile } = situation
   const besieged = besiegedCellKeysOf(game, playerId).length > 0
   const heavy = me.ships.filter((ship) => ship.type === 'battleship' || ship.type === 'carrier').length
   const claimable = claimableNearby(situation)
   const headroom = rechargeHeadroom(game, playerId)
   // Лишняя клетка захвата за ход ценна, пока есть что занимать.
   const claimGain = Math.min(3, claimable / 3)
+  // Во сколько раз «Атака» усилит свой огонь и насколько «Оборона» ослабит вражеский: эсминцу
+  // «Атака» удваивает попадания, а против «Обороны» на чужой клетке он не стреляет вовсе.
+  const myTypes = me.ships.map((ship) => ship.type)
+  const myHits = hitsWith(myTypes, 0)
+  const attackGain = myHits > 0 ? hitsWith(myTypes, -1) / myHits - 1 : 0
+  const enemyTypes = situation.rivals.flatMap((rival) => rival.ships.map((ship) => ship.type))
+  const enemyHits = hitsWith(enemyTypes, 0)
+  const defenseGain = enemyHits > 0 ? 1 - hitsWith(enemyTypes, 1) / enemyHits : 0
+  const fighting = Math.max(modes.attack, modes.deny, modes.finish * 0.8)
   const scores: Record<DoctrineId, number> = {
     expansion: 1 + claimGain * (0.6 + modes.expand) + modes.finish * 1.2 - 0.6,
     production: 0.8 + Math.min(2, Math.max(0, headroom)) * (0.6 + modes.buildup),
     attack: besieged
       ? -10
-      : 5 * Math.max(modes.attack * 0.8, modes.deny * 0.9, modes.finish * 0.7) * Math.min(1.2, situation.fleetRatio)
-        - 1.6 - claimGain * 0.4,
-    defense: (besieged ? 6 : 0) + 5 * modes.defend + (modes.finish >= 0.99 ? 1.5 : 0) - claimGain * 0.4,
+      : 5 * fighting * Math.min(1.2, situation.fleetRatio) - 1.6 - claimGain * 0.4
+        + profile.attackDoctrineBonus * attackGain * fighting,
+    defense: (besieged ? 6 : 0) + 5 * modes.defend + (modes.finish >= 0.99 ? 1.5 : 0) - claimGain * 0.4
+      + profile.defenseDoctrineBonus * defenseGain * Math.max(modes.defend, 0.3),
     maneuvers: heavy >= 2 ? 0.5 + heavy * 0.45 * Math.max(modes.attack, modes.deny) - 1.2 : -10,
     none: 0,
   }
@@ -190,8 +209,9 @@ export function hardRetreatDestination(game: GameSnapshot, playerId: string): He
 
 /**
  * Кого поддержать третьему игроку. Поддержка ничего не стоит — по кораблям поддержки не
- * стреляют, — поэтому бот всегда помогает против того, кто опаснее ему самому: лидера,
- * близкого к победе, или соседа, который грозит его центрам.
+ * стреляют, — поэтому бот помогает против того, кто опаснее ему самому: соседа, который грозит
+ * его центрам, или сильнейшего по центрам. Высокий уровень, кроме того, всегда встаёт против
+ * того, кто вот-вот победит; средний в чужую победу не вмешивается.
  */
 export function hardSupportSide(
   game: GameSnapshot,
@@ -205,7 +225,7 @@ export function hardSupportSide(
     const view = situation.views.get(id)
     if (!view) return 0
     let score = view.projected * 10 + view.strength * 0.05
-    if (situation.leader?.id === id) score += 25 * situation.leaderUrgency
+    if (isDenyTarget(situation, id)) score += 60 * situation.modes.deny
     for (const threat of situation.threats.values()) {
       if (threat.attackerId === id) score += threat.occupied ? 30 : threat.now > 0 ? 12 : 4
     }

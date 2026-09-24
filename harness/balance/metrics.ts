@@ -59,12 +59,34 @@ export interface GameRecord {
   deviantPlayerId?: string
   /** Уровень бота на каждом месте. */
   seatDifficulty?: Record<string, string>
+  /**
+   * Эпизоды «почти победы»: в начале фазы действий у игрока на один центр меньше порога.
+   * `stopped` — он не победил в ближайшие два хода.
+   */
+  nearWins?: NearWinEpisode[]
   /** Сбои оценки среднего и высокого уровня (заменены решением простого бота). */
   botErrors?: number
   /** Планы бота, которые движок отклонил: оценка разошлась с правилами. */
   botPlanRejects?: number
   botIssueSamples?: string[]
   error?: string
+}
+
+export interface NearWinEpisode {
+  playerId: string
+  turn: number
+  /** Уровень бота, подошедшего к порогу. */
+  level: string
+  /** Сколько других мест в партии занимал высокий уровень — те, кто может помешать нарочно. */
+  otherHardSeats: number
+  stopped: boolean
+}
+
+/** Сводка эпизодов «почти победы»: сколько их было и сколько раз почти победителя остановили. */
+export interface NearWinSummary {
+  episodes: number
+  stopped: number
+  share: number
 }
 
 /** Итог уровня сложности в замере: сколько мест он занимал и сколько партий выиграл. */
@@ -76,6 +98,10 @@ export interface DifficultyResult {
   winRate: number
   /** Справедливая доля: сколько побед пришлось бы на эти места при равной силе. */
   fairShare: number
+  /** Побед на одно место: сравнимо между уровнями при любой раскладке мест. */
+  winsPerSeat: number
+  /** Побед на место к справедливой доле `1 / число игроков`: больше единицы — сильнее среднего. */
+  perSeatVsFair: number
 }
 
 function leaderOf(sample: TurnSample): string | null {
@@ -235,28 +261,64 @@ export interface Summary {
   }
   /** Победы по уровням сложности ботов. */
   winRateByDifficulty: Record<string, DifficultyResult>
+  /** Как часто почти победителя останавливали. */
+  nearWins: ReturnType<typeof summarizeNearWins>
   bot: { errors: number; planRejects: number; samples: string[] }
 }
 
 function summarizeDifficulties(records: readonly GameRecord[]): Record<string, DifficultyResult> {
   const out: Record<string, DifficultyResult> = {}
   const decided = records.filter((record) => record.winnerId)
+  // Справедливая доля одного места: в среднем 1 / число игроков.
+  let fairPerSeat = 0
   for (const record of decided) {
     const seats = record.seatDifficulty ?? {}
     const total = record.playerIds.length || 1
+    fairPerSeat += 1 / total
     for (const playerId of record.playerIds) {
       const level = seats[playerId] ?? 'easy'
-      const entry = (out[level] ??= { seats: 0, wins: 0, winRate: 0, fairShare: 0 })
+      const entry = (out[level] ??= { seats: 0, wins: 0, winRate: 0, fairShare: 0, winsPerSeat: 0, perSeatVsFair: 0 })
       entry.seats += 1
       entry.fairShare += 1 / total
       if (record.winnerId === playerId) entry.wins += 1
     }
   }
+  fairPerSeat = decided.length ? fairPerSeat / decided.length : 0
   for (const entry of Object.values(out)) {
     entry.winRate = decided.length ? entry.wins / decided.length : 0
     entry.fairShare = decided.length ? entry.fairShare / decided.length : 0
+    entry.winsPerSeat = entry.seats ? entry.wins / entry.seats : 0
+    entry.perSeatVsFair = fairPerSeat ? entry.winsPerSeat / fairPerSeat : 0
   }
   return out
+}
+
+function nearWinSummary(episodes: readonly NearWinEpisode[]): NearWinSummary {
+  const stopped = episodes.filter((episode) => episode.stopped).length
+  return { episodes: episodes.length, stopped, share: episodes.length ? stopped / episodes.length : 0 }
+}
+
+/**
+ * Эпизоды «почти победы» по уровню почти победителя и по тому, были ли в партии другие места
+ * высокого уровня: высокий уровень должен останавливать почти победителей заметно чаще.
+ */
+function summarizeNearWins(records: readonly GameRecord[]): {
+  all: NearWinSummary
+  byLevel: Record<string, NearWinSummary>
+  withOtherHard: NearWinSummary
+  withoutOtherHard: NearWinSummary
+} {
+  const episodes = records.flatMap((record) => record.nearWins ?? [])
+  const byLevel: Record<string, NearWinSummary> = {}
+  for (const level of [...new Set(episodes.map((episode) => episode.level))]) {
+    byLevel[level] = nearWinSummary(episodes.filter((episode) => episode.level === level))
+  }
+  return {
+    all: nearWinSummary(episodes),
+    byLevel,
+    withOtherHard: nearWinSummary(episodes.filter((episode) => episode.otherHardSeats > 0)),
+    withoutOtherHard: nearWinSummary(episodes.filter((episode) => episode.otherHardSeats === 0)),
+  }
 }
 
 const TRACKED_SHIP_TYPES = ['destroyer', 'cruiser', 'carrier', 'battleship', 'hyper']
@@ -412,6 +474,7 @@ export function summarize(records: readonly GameRecord[]): Summary {
       amplification: amplifications.length ? mean(amplifications) : null,
     },
     winRateByDifficulty: summarizeDifficulties(ok),
+    nearWins: summarizeNearWins(ok),
     bot: {
       errors: records.reduce((sum, record) => sum + (record.botErrors ?? 0), 0),
       planRejects: records.reduce((sum, record) => sum + (record.botPlanRejects ?? 0), 0),

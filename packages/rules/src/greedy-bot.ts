@@ -509,7 +509,9 @@ function executeMarkerPlan(
     errors = act(game, map, playerId, 'execute-marker-movement', { from: { ...marker.coord }, moves: plan.moves }).errors
   }
   // Отказ за человека в живой партии — не расхождение оценки с правилами.
-  if (errors.length && errors[0] !== NOT_A_BOT) botErrorListener?.(new Error(errors.join('; ')), `plan-${plan.kind}`)
+  if (errors.length && errors[0] !== NOT_A_BOT) {
+    botErrorListener?.(new Error(`${errors.join('; ')} [${plan.reason}]`), `plan-${plan.kind}`)
+  }
   return errors.length === 0
 }
 
@@ -539,11 +541,15 @@ function stepActionsSmart(
   let modeNote = ''
   const evaluated = safeEval('actions', () => {
     const ctx = createTacticalContext(game, map, playerId, difficulty)
-    if (botTraceListener) modeNote = describeModes(ctx.situation.modes)
+    if (botTraceListener) {
+      const target = ctx.situation.nearWinner
+      modeNote = describeModes(ctx.situation.modes)
+        + (target && ctx.situation.modes.deny > 0 ? `; мешаю ${target.id}: ${target.reason}` : '')
+    }
     return markers.map((marker) => {
       const key = hexKey(marker.coord.q, marker.coord.r)
       const tried = attempts.get(`${game.turnNumber}:${marker.id}`) ?? 0
-      const plan = tried >= MAX_MARKER_ATTEMPTS ? null : planMarker(ctx, key, false)
+      const plan = tried >= MAX_MARKER_ATTEMPTS ? null : planMarker(ctx, key, !ctx.situation.profile.previewCombat)
       const reserve = reserveValueOf(ctx, key)
       const value = plan?.value ?? -Infinity
       return { marker, plan, reserve, tried, score: value - (rivalsStillAct ? reserve : 0) }
@@ -675,17 +681,18 @@ export function stepCombat(
       // Третьи игроки: без их ответа бой не начнётся.
       for (const candidate of preview?.supportCandidates ?? []) {
         if (prep.readyBy[candidate.playerId]) continue
-        const smart = smartCombatOf(difficultyOf(candidate.playerId))
+        const level = difficultyOf(candidate.playerId)
         const ready = act(game, map, candidate.playerId, 'update-combat-prep', {
           ready: true,
-          // Гарнизон встаёт против своего осаждающего; прочие — против лидера (лёгкий и
-          // средний) или против того, кто опаснее самому боту (высокий).
+          // Гарнизон встаёт против своего осаждающего; прочие — лёгкий против лидера по
+          // центрам, средний и высокий — против того, кто опаснее им самим (высокий — всегда
+          // против того, кто вот-вот победит).
           supportSide: candidate.garrisonShipIds?.length
             ? 'attacker'
-            : smart
+            : level !== 'easy'
               ? safeEval(
                 'support',
-                () => hardSupportSide(game, candidate.playerId, attackerId, prep.defenderId, smartLevel(difficultyOf(candidate.playerId))),
+                () => hardSupportSide(game, candidate.playerId, attackerId, prep.defenderId, level),
                 () => supportSideFor(game, candidate.playerId, attackerId, prep.defenderId),
               )
               : supportSideFor(game, candidate.playerId, attackerId, prep.defenderId),

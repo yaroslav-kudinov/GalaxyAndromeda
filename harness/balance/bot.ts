@@ -25,6 +25,7 @@ import {
   hexKey,
   rechargePicksRemaining,
   siegeLossesOwedBy,
+  victoryThresholdForSnapshot,
   doctrineChoiceOwed,
   type DoctrineId,
   SHIP_PRODUCTION_COST,
@@ -433,6 +434,27 @@ function runGameSeeded(map: MapDefinition, seed: number, options: RunOptions): G
       orderIndex = 0
     }
 
+    // Почти победитель: в начале фазы действий у игрока на один центр меньше порога. Эпизод
+    // заводится заново, если игрок откатился и снова подошёл к порогу.
+    const threshold = victoryThresholdForSnapshot(game)
+    const nearWinArmed = new Set(playerIds)
+    const openEpisodes: { playerId: string; turn: number }[] = []
+    let nearWinCheckedTurn = 0
+    const checkNearWinners = () => {
+      if (game.phase !== 'actions' || nearWinCheckedTurn === game.turnNumber) return
+      nearWinCheckedTurn = game.turnNumber
+      for (const playerId of playerIds) {
+        const powerCenters = countControlledPowerCenters(game, playerId)
+        if (powerCenters < threshold - 1) {
+          nearWinArmed.add(playerId)
+          continue
+        }
+        if (!nearWinArmed.has(playerId)) continue
+        nearWinArmed.delete(playerId)
+        openEpisodes.push({ playerId, turn: game.turnNumber })
+      }
+    }
+
     let knownSieges: Record<string, { besiegerId: string }> = {}
     const watchSieges = () => {
       const now = game.sieges ?? {}
@@ -486,6 +508,7 @@ function runGameSeeded(map: MapDefinition, seed: number, options: RunOptions): G
       }
 
       if (game.turnNumber !== currentTurn) closeTurn()
+      checkNearWinners()
 
       const active = game.activePlayerId
       if (!active) break
@@ -569,6 +592,16 @@ function runGameSeeded(map: MapDefinition, seed: number, options: RunOptions): G
     record.turns = Math.max(1, record.samples.at(-1)?.turn ?? game.turnNumber)
     record.winnerId = game.gameOver?.winnerId ?? null
     record.reason = game.gameOver?.reason ?? null
+    // Остановлен — не победил в ближайшие два хода: захватами этого и следующего хода или
+    // штурмом до конца следующего хода.
+    const winTurn = game.gameOver ? game.turnNumber : Infinity
+    record.nearWins = openEpisodes.map((episode) => ({
+      playerId: episode.playerId,
+      turn: episode.turn,
+      level: difficultyOf(episode.playerId),
+      otherHardSeats: playerIds.filter((id) => id !== episode.playerId && difficultyOf(id) === 'hard').length,
+      stopped: !(record.winnerId === episode.playerId && winTurn <= episode.turn + 2),
+    }))
     record.tokenFaceValueSpent = tally.tokenFaceValue
     record.shipCostPaid = tally.shipCost
     record.meanOrderPosition = Object.fromEntries(
