@@ -400,7 +400,7 @@ onUnmounted(() => {
                 ? isBombardment
                   ? 'Подготовка к обстрелу'
                   : siegeResponse
-                    ? 'Ответ на осаду'
+                    ? isLocalAttacker ? 'Ответ на осаду' : 'Гарнизон решает, нападать ли'
                     : 'Подготовка к бою'
                 : isBombardment
                   ? 'Обстрел'
@@ -461,6 +461,10 @@ onUnmounted(() => {
           <template v-else>
           <p v-if="isDefenderObserver" class="observer-banner">
             Вы наблюдаете за обстрелом
+          </p>
+          <p v-if="siegeResponse && isLocalDefender" class="observer-banner">
+            Вы осадили центр власти. Гарнизон может сразу напасть на ваш флот — тогда начнётся
+            бой прямо на клетке. Если гарнизон откажется, осада продолжится.
           </p>
           <p v-if="siegeResponse && isLocalAttacker" class="observer-banner">
             Ваш центр власти осадили. Можно напасть на осаждающих сейчас или отказаться — тогда
