@@ -1,0 +1,2610 @@
+{
+  "before": {
+    "duel-h2h-easy-medium-hard": {
+      "games": 300,
+      "turns": {
+        "mean": 5.756666666666667,
+        "p10": 5,
+        "median": 5,
+        "p90": 8
+      },
+      "winRateByDifficulty": {
+        "easy": {
+          "seats": 200,
+          "wins": 1,
+          "winRate": 0.0033333333333333335,
+          "fairShare": 0.3333333333333333,
+          "winsPerSeat": 0.005,
+          "perSeatVsFair": 0.01
+        },
+        "medium": {
+          "seats": 200,
+          "wins": 127,
+          "winRate": 0.42333333333333334,
+          "fairShare": 0.3333333333333333,
+          "winsPerSeat": 0.635,
+          "perSeatVsFair": 1.27
+        },
+        "hard": {
+          "seats": 200,
+          "wins": 172,
+          "winRate": 0.5733333333333334,
+          "fairShare": 0.3333333333333333,
+          "winsPerSeat": 0.86,
+          "perSeatVsFair": 1.72
+        }
+      },
+      "economyByDifficulty": {
+        "easy": {
+          "seats": 200,
+          "meanCells": 10.306583333333332,
+          "cellsAtTurn5": 16.405,
+          "cellsAtEnd": 17.77,
+          "largestRegionAtEnd": 7.395,
+          "productionRegionsAtEnd": 1.66,
+          "tokenCellsAtEnd": 15.17,
+          "meanPowerCenters": 1.9945000000000015,
+          "powerCentersAtTurn3": 2.245,
+          "powerCentersAtTurn5": 2.94,
+          "buildsPerGame": 4.285,
+          "shipsBuiltPerGame": 6.455,
+          "tokensSpentPerGame": 39.97,
+          "tokensSpentPerTurn": 7.442458333333336,
+          "budgetZeroShare": 0.018611111111111113,
+          "starvedShare": 0.018611111111111113,
+          "meanFaceUpValue": 16.546319444444443,
+          "meanStrandedValue": 10.987138888888886,
+          "shipsAtEnd": 12.01
+        },
+        "medium": {
+          "seats": 200,
+          "meanCells": 12.82943204018203,
+          "cellsAtTurn5": 20.64321608040201,
+          "cellsAtEnd": 23.04,
+          "largestRegionAtEnd": 15.825,
+          "productionRegionsAtEnd": 1.56,
+          "tokenCellsAtEnd": 11.24,
+          "meanPowerCenters": 2.835741563991564,
+          "powerCentersAtTurn3": 3,
+          "powerCentersAtTurn5": 4.743718592964824,
+          "buildsPerGame": 2.425,
+          "shipsBuiltPerGame": 4.63,
+          "tokensSpentPerGame": 24.01,
+          "tokensSpentPerTurn": 3.9436097097347034,
+          "budgetZeroShare": 0.22683855033855058,
+          "starvedShare": 0.22683855033855058,
+          "meanFaceUpValue": 14.497805611055604,
+          "meanStrandedValue": 7.580015706515703,
+          "shipsAtEnd": 7.915
+        },
+        "hard": {
+          "seats": 200,
+          "meanCells": 12.376623695748705,
+          "cellsAtTurn5": 21.34170854271357,
+          "cellsAtEnd": 23.12,
+          "largestRegionAtEnd": 13.585,
+          "productionRegionsAtEnd": 1.695,
+          "tokenCellsAtEnd": 11.935,
+          "meanPowerCenters": 3.0615231990231986,
+          "powerCentersAtTurn3": 3,
+          "powerCentersAtTurn5": 5.517587939698492,
+          "buildsPerGame": 3.34,
+          "shipsBuiltPerGame": 5.98,
+          "tokensSpentPerGame": 30.975,
+          "tokensSpentPerTurn": 5.405463231213234,
+          "budgetZeroShare": 0.3591153984903987,
+          "starvedShare": 0.3591153984903987,
+          "meanFaceUpValue": 12.490000124875131,
+          "meanStrandedValue": 8.358031121656131,
+          "shipsAtEnd": 9.725
+        }
+      },
+      "nearWins": {
+        "all": {
+          "episodes": 179,
+          "stopped": 91,
+          "share": 0.5083798882681564
+        },
+        "byLevel": {
+          "medium": {
+            "episodes": 82,
+            "stopped": 45,
+            "share": 0.5487804878048781
+          },
+          "hard": {
+            "episodes": 84,
+            "stopped": 34,
+            "share": 0.40476190476190477
+          },
+          "easy": {
+            "episodes": 13,
+            "stopped": 12,
+            "share": 0.9230769230769231
+          }
+        },
+        "withOtherHard": {
+          "episodes": 50,
+          "stopped": 32,
+          "share": 0.64
+        },
+        "withoutOtherHard": {
+          "episodes": 129,
+          "stopped": 59,
+          "share": 0.4573643410852713
+        }
+      }
+    },
+    "duel-h2h-hard-easy": {
+      "games": 300,
+      "turns": {
+        "mean": 5.1466666666666665,
+        "p10": 5,
+        "median": 5,
+        "p90": 6
+      },
+      "winRateByDifficulty": {
+        "hard": {
+          "seats": 300,
+          "wins": 300,
+          "winRate": 1,
+          "fairShare": 0.5,
+          "winsPerSeat": 1,
+          "perSeatVsFair": 2
+        },
+        "easy": {
+          "seats": 300,
+          "wins": 0,
+          "winRate": 0,
+          "fairShare": 0.5,
+          "winsPerSeat": 0,
+          "perSeatVsFair": 0
+        }
+      },
+      "economyByDifficulty": {
+        "hard": {
+          "seats": 300,
+          "meanCells": 10.949063492063514,
+          "cellsAtTurn5": 20.756666666666668,
+          "cellsAtEnd": 20.986666666666668,
+          "largestRegionAtEnd": 11.4,
+          "productionRegionsAtEnd": 1.5633333333333332,
+          "tokenCellsAtEnd": 11.65,
+          "meanPowerCenters": 3.0357936507936483,
+          "powerCentersAtTurn3": 3,
+          "powerCentersAtTurn5": 6.01,
+          "buildsPerGame": 3.0833333333333335,
+          "shipsBuiltPerGame": 5.6,
+          "tokensSpentPerGame": 28.43,
+          "tokensSpentPerTurn": 5.542507936507917,
+          "budgetZeroShare": 0.36501587301587457,
+          "starvedShare": 0.36501587301587457,
+          "meanFaceUpValue": 12.249507936507943,
+          "meanStrandedValue": 8.961523809523808,
+          "shipsAtEnd": 11.38
+        },
+        "easy": {
+          "seats": 300,
+          "meanCells": 10.243158730158727,
+          "cellsAtTurn5": 17.28,
+          "cellsAtEnd": 17.826666666666668,
+          "largestRegionAtEnd": 7.323333333333333,
+          "productionRegionsAtEnd": 1.7433333333333334,
+          "tokenCellsAtEnd": 15.163333333333334,
+          "meanPowerCenters": 1.9005079365079371,
+          "powerCentersAtTurn3": 2.1866666666666665,
+          "powerCentersAtTurn5": 2.8,
+          "buildsPerGame": 4.3533333333333335,
+          "shipsBuiltPerGame": 6.45,
+          "tokensSpentPerGame": 40.486666666666665,
+          "tokensSpentPerTurn": 7.883126984126986,
+          "budgetZeroShare": 0.0027777777777777775,
+          "starvedShare": 0.0027777777777777775,
+          "meanFaceUpValue": 15.870047619047618,
+          "meanStrandedValue": 10.290349206349203,
+          "shipsAtEnd": 12.22
+        }
+      },
+      "nearWins": {
+        "all": {
+          "episodes": 46,
+          "stopped": 2,
+          "share": 0.043478260869565216
+        },
+        "byLevel": {
+          "hard": {
+            "episodes": 45,
+            "stopped": 1,
+            "share": 0.022222222222222223
+          },
+          "easy": {
+            "episodes": 1,
+            "stopped": 1,
+            "share": 1
+          }
+        },
+        "withOtherHard": {
+          "episodes": 1,
+          "stopped": 1,
+          "share": 1
+        },
+        "withoutOtherHard": {
+          "episodes": 45,
+          "stopped": 1,
+          "share": 0.022222222222222223
+        }
+      }
+    },
+    "duel-h2h-hard-medium": {
+      "games": 300,
+      "turns": {
+        "mean": 6.553333333333334,
+        "p10": 5,
+        "median": 6,
+        "p90": 9
+      },
+      "winRateByDifficulty": {
+        "hard": {
+          "seats": 300,
+          "wins": 231,
+          "winRate": 0.77,
+          "fairShare": 0.5,
+          "winsPerSeat": 0.77,
+          "perSeatVsFair": 1.54
+        },
+        "medium": {
+          "seats": 300,
+          "wins": 69,
+          "winRate": 0.23,
+          "fairShare": 0.5,
+          "winsPerSeat": 0.23,
+          "perSeatVsFair": 0.46
+        }
+      },
+      "economyByDifficulty": {
+        "hard": {
+          "seats": 300,
+          "meanCells": 14.0122392977393,
+          "cellsAtTurn5": 22.28767123287671,
+          "cellsAtEnd": 25.76,
+          "largestRegionAtEnd": 15.586666666666666,
+          "productionRegionsAtEnd": 1.9533333333333334,
+          "tokenCellsAtEnd": 12.376666666666667,
+          "meanPowerCenters": 3.1462217412217424,
+          "powerCentersAtTurn3": 3,
+          "powerCentersAtTurn5": 4.993150684931507,
+          "buildsPerGame": 3.69,
+          "shipsBuiltPerGame": 6.3966666666666665,
+          "tokensSpentPerGame": 33.8,
+          "tokensSpentPerTurn": 5.2748644781144725,
+          "budgetZeroShare": 0.3649767917267923,
+          "starvedShare": 0.3649767917267923,
+          "meanFaceUpValue": 12.99346536796537,
+          "meanStrandedValue": 8.06105399230399,
+          "shipsAtEnd": 7.783333333333333
+        },
+        "medium": {
+          "seats": 300,
+          "meanCells": 14.01990668590667,
+          "cellsAtTurn5": 21.893835616438356,
+          "cellsAtEnd": 24.25,
+          "largestRegionAtEnd": 18.736666666666668,
+          "productionRegionsAtEnd": 1.45,
+          "tokenCellsAtEnd": 10.626666666666667,
+          "meanPowerCenters": 2.738981842231844,
+          "powerCentersAtTurn3": 3,
+          "powerCentersAtTurn5": 3.904109589041096,
+          "buildsPerGame": 2.78,
+          "shipsBuiltPerGame": 5.223333333333334,
+          "tokensSpentPerGame": 27.736666666666668,
+          "tokensSpentPerTurn": 4.203382515632508,
+          "budgetZeroShare": 0.22095454545454568,
+          "starvedShare": 0.22095454545454568,
+          "meanFaceUpValue": 13.537256132756136,
+          "meanStrandedValue": 6.317051346801343,
+          "shipsAtEnd": 6.026666666666666
+        }
+      },
+      "nearWins": {
+        "all": {
+          "episodes": 392,
+          "stopped": 232,
+          "share": 0.5918367346938775
+        },
+        "byLevel": {
+          "medium": {
+            "episodes": 163,
+            "stopped": 133,
+            "share": 0.8159509202453987
+          },
+          "hard": {
+            "episodes": 229,
+            "stopped": 99,
+            "share": 0.43231441048034935
+          }
+        },
+        "withOtherHard": {
+          "episodes": 163,
+          "stopped": 133,
+          "share": 0.8159509202453987
+        },
+        "withoutOtherHard": {
+          "episodes": 229,
+          "stopped": 99,
+          "share": 0.43231441048034935
+        }
+      }
+    },
+    "duel-h2h-medium-easy": {
+      "games": 300,
+      "turns": {
+        "mean": 5.746666666666667,
+        "p10": 5,
+        "median": 5,
+        "p90": 8
+      },
+      "winRateByDifficulty": {
+        "medium": {
+          "seats": 300,
+          "wins": 298,
+          "winRate": 0.9933333333333333,
+          "fairShare": 0.5,
+          "winsPerSeat": 0.9933333333333333,
+          "perSeatVsFair": 1.9866666666666666
+        },
+        "easy": {
+          "seats": 300,
+          "wins": 2,
+          "winRate": 0.006666666666666667,
+          "fairShare": 0.5,
+          "winsPerSeat": 0.006666666666666667,
+          "perSeatVsFair": 0.013333333333333334
+        }
+      },
+      "economyByDifficulty": {
+        "medium": {
+          "seats": 300,
+          "meanCells": 12.263967652717614,
+          "cellsAtTurn5": 19.913333333333334,
+          "cellsAtEnd": 23.04,
+          "largestRegionAtEnd": 14.19,
+          "productionRegionsAtEnd": 1.56,
+          "tokenCellsAtEnd": 12.393333333333333,
+          "meanPowerCenters": 3.005288119288109,
+          "powerCentersAtTurn3": 3,
+          "powerCentersAtTurn5": 5.666666666666667,
+          "buildsPerGame": 2.25,
+          "shipsBuiltPerGame": 4.326666666666667,
+          "tokensSpentPerGame": 22.543333333333333,
+          "tokensSpentPerTurn": 3.887015031265017,
+          "budgetZeroShare": 0.2608650793650803,
+          "starvedShare": 0.2608650793650803,
+          "meanFaceUpValue": 15.999557479557492,
+          "meanStrandedValue": 9.70354797979797,
+          "shipsAtEnd": 9.573333333333334
+        },
+        "easy": {
+          "seats": 300,
+          "meanCells": 10.345836219336203,
+          "cellsAtTurn5": 14.9,
+          "cellsAtEnd": 17.2,
+          "largestRegionAtEnd": 7.083333333333333,
+          "productionRegionsAtEnd": 1.6466666666666667,
+          "tokenCellsAtEnd": 14.84,
+          "meanPowerCenters": 2.0501271043771045,
+          "powerCentersAtTurn3": 2.19,
+          "powerCentersAtTurn5": 3.033333333333333,
+          "buildsPerGame": 4.443333333333333,
+          "shipsBuiltPerGame": 6.71,
+          "tokensSpentPerGame": 41.10666666666667,
+          "tokensSpentPerTurn": 7.208255531505533,
+          "budgetZeroShare": 0.026390692640692645,
+          "starvedShare": 0.026390692640692645,
+          "meanFaceUpValue": 17.300163419913407,
+          "meanStrandedValue": 11.262322991822995,
+          "shipsAtEnd": 12.15
+        }
+      },
+      "nearWins": {
+        "all": {
+          "episodes": 128,
+          "stopped": 60,
+          "share": 0.46875
+        },
+        "byLevel": {
+          "medium": {
+            "episodes": 108,
+            "stopped": 42,
+            "share": 0.3888888888888889
+          },
+          "easy": {
+            "episodes": 20,
+            "stopped": 18,
+            "share": 0.9
+          }
+        },
+        "withOtherHard": {
+          "episodes": 0,
+          "stopped": 0,
+          "share": 0
+        },
+        "withoutOtherHard": {
+          "episodes": 128,
+          "stopped": 60,
+          "share": 0.46875
+        }
+      }
+    },
+    "maltese-cross-4-h2h-easy-medium-hard": {
+      "games": 300,
+      "turns": {
+        "mean": 10.603333333333333,
+        "p10": 6,
+        "median": 11,
+        "p90": 15
+      },
+      "winRateByDifficulty": {
+        "easy": {
+          "seats": 400,
+          "wins": 49,
+          "winRate": 0.16333333333333333,
+          "fairShare": 0.3333333333333333,
+          "winsPerSeat": 0.1225,
+          "perSeatVsFair": 0.49
+        },
+        "medium": {
+          "seats": 400,
+          "wins": 77,
+          "winRate": 0.25666666666666665,
+          "fairShare": 0.3333333333333333,
+          "winsPerSeat": 0.1925,
+          "perSeatVsFair": 0.77
+        },
+        "hard": {
+          "seats": 400,
+          "wins": 174,
+          "winRate": 0.58,
+          "fairShare": 0.3333333333333333,
+          "winsPerSeat": 0.435,
+          "perSeatVsFair": 1.74
+        }
+      },
+      "economyByDifficulty": {
+        "easy": {
+          "seats": 400,
+          "meanCells": 19.341971084471087,
+          "cellsAtTurn5": 17.7275,
+          "cellsAtEnd": 32.005,
+          "largestRegionAtEnd": 26.2225,
+          "productionRegionsAtEnd": 1.555,
+          "tokenCellsAtEnd": 16.8575,
+          "meanPowerCenters": 2.1650789835164854,
+          "powerCentersAtTurn3": 1,
+          "powerCentersAtTurn5": 2.6125,
+          "buildsPerGame": 10.25,
+          "shipsBuiltPerGame": 13.315,
+          "tokensSpentPerGame": 116.67,
+          "tokensSpentPerTurn": 10.749686438561437,
+          "budgetZeroShare": 0.09155317599067603,
+          "starvedShare": 0.09137460456210458,
+          "meanFaceUpValue": 17.970144875957374,
+          "meanStrandedValue": 9.701646076146073,
+          "shipsAtEnd": 11.3025
+        },
+        "medium": {
+          "seats": 400,
+          "meanCells": 18.445387341824834,
+          "cellsAtTurn5": 21.6275,
+          "cellsAtEnd": 28.285,
+          "largestRegionAtEnd": 24.3225,
+          "productionRegionsAtEnd": 1.395,
+          "tokenCellsAtEnd": 13.975,
+          "meanPowerCenters": 2.681369318181819,
+          "powerCentersAtTurn3": 2.955,
+          "powerCentersAtTurn5": 3.2275,
+          "buildsPerGame": 7.285,
+          "shipsBuiltPerGame": 13.9175,
+          "tokensSpentPerGame": 103.86,
+          "tokensSpentPerTurn": 9.936652805527812,
+          "budgetZeroShare": 0.16428585997336007,
+          "starvedShare": 0.16428585997336007,
+          "meanFaceUpValue": 11.894448669386172,
+          "meanStrandedValue": 4.247448287823293,
+          "shipsAtEnd": 8.1875
+        },
+        "hard": {
+          "seats": 400,
+          "meanCells": 19.12501646270397,
+          "cellsAtTurn5": 22.175,
+          "cellsAtEnd": 28.45,
+          "largestRegionAtEnd": 22.73,
+          "productionRegionsAtEnd": 1.5625,
+          "tokenCellsAtEnd": 13.955,
+          "meanPowerCenters": 3.058678543678541,
+          "powerCentersAtTurn3": 3.045,
+          "powerCentersAtTurn5": 3.7675,
+          "buildsPerGame": 8.295,
+          "shipsBuiltPerGame": 14.285,
+          "tokensSpentPerGame": 101.6425,
+          "tokensSpentPerTurn": 9.208512480574985,
+          "budgetZeroShare": 0.25183439477189506,
+          "starvedShare": 0.25183439477189506,
+          "meanFaceUpValue": 10.466732198357194,
+          "meanStrandedValue": 4.800351537351537,
+          "shipsAtEnd": 8.4175
+        }
+      },
+      "nearWins": {
+        "all": {
+          "episodes": 725,
+          "stopped": 558,
+          "share": 0.7696551724137931
+        },
+        "byLevel": {
+          "medium": {
+            "episodes": 245,
+            "stopped": 202,
+            "share": 0.8244897959183674
+          },
+          "easy": {
+            "episodes": 110,
+            "stopped": 91,
+            "share": 0.8272727272727273
+          },
+          "hard": {
+            "episodes": 370,
+            "stopped": 265,
+            "share": 0.7162162162162162
+          }
+        },
+        "withOtherHard": {
+          "episodes": 522,
+          "stopped": 426,
+          "share": 0.8160919540229885
+        },
+        "withoutOtherHard": {
+          "episodes": 203,
+          "stopped": 132,
+          "share": 0.6502463054187192
+        }
+      }
+    },
+    "maltese-cross-4-h2h-hard-easy": {
+      "games": 300,
+      "turns": {
+        "mean": 9.313333333333333,
+        "p10": 6,
+        "median": 8,
+        "p90": 15
+      },
+      "winRateByDifficulty": {
+        "hard": {
+          "seats": 600,
+          "wins": 265,
+          "winRate": 0.8833333333333333,
+          "fairShare": 0.5,
+          "winsPerSeat": 0.44166666666666665,
+          "perSeatVsFair": 1.7666666666666666
+        },
+        "easy": {
+          "seats": 600,
+          "wins": 35,
+          "winRate": 0.11666666666666667,
+          "fairShare": 0.5,
+          "winsPerSeat": 0.058333333333333334,
+          "perSeatVsFair": 0.23333333333333334
+        }
+      },
+      "economyByDifficulty": {
+        "hard": {
+          "seats": 600,
+          "meanCells": 17.451420861545873,
+          "cellsAtTurn5": 22.676666666666666,
+          "cellsAtEnd": 27.206666666666667,
+          "largestRegionAtEnd": 20.183333333333334,
+          "productionRegionsAtEnd": 1.685,
+          "tokenCellsAtEnd": 14.075,
+          "meanPowerCenters": 3.125232739482736,
+          "powerCentersAtTurn3": 3,
+          "powerCentersAtTurn5": 4.206666666666667,
+          "buildsPerGame": 6.578333333333333,
+          "shipsBuiltPerGame": 11.633333333333333,
+          "tokensSpentPerGame": 78.61,
+          "tokensSpentPerTurn": 8.071570998446001,
+          "budgetZeroShare": 0.3292182447182452,
+          "starvedShare": 0.3292182447182452,
+          "meanFaceUpValue": 12.413956760831768,
+          "meanStrandedValue": 6.037915015540017,
+          "shipsAtEnd": 9.711666666666666
+        },
+        "easy": {
+          "seats": 600,
+          "meanCells": 17.274273088023087,
+          "cellsAtTurn5": 17.843333333333334,
+          "cellsAtEnd": 28.448333333333334,
+          "largestRegionAtEnd": 22.325,
+          "productionRegionsAtEnd": 1.6,
+          "tokenCellsAtEnd": 15.956666666666667,
+          "meanPowerCenters": 1.930571960446961,
+          "powerCentersAtTurn3": 1,
+          "powerCentersAtTurn5": 2.2916666666666665,
+          "buildsPerGame": 8.936666666666667,
+          "shipsBuiltPerGame": 11.835,
+          "tokensSpentPerGame": 101.27666666666667,
+          "tokensSpentPerTurn": 10.775918812668818,
+          "budgetZeroShare": 0.06351682576682577,
+          "starvedShare": 0.06340571465571467,
+          "meanFaceUpValue": 17.989700586450592,
+          "meanStrandedValue": 9.406647422022427,
+          "shipsAtEnd": 11.601666666666667
+        }
+      },
+      "nearWins": {
+        "all": {
+          "episodes": 723,
+          "stopped": 583,
+          "share": 0.8063623789764869
+        },
+        "byLevel": {
+          "hard": {
+            "episodes": 641,
+            "stopped": 512,
+            "share": 0.7987519500780031
+          },
+          "easy": {
+            "episodes": 82,
+            "stopped": 71,
+            "share": 0.8658536585365854
+          }
+        },
+        "withOtherHard": {
+          "episodes": 723,
+          "stopped": 583,
+          "share": 0.8063623789764869
+        },
+        "withoutOtherHard": {
+          "episodes": 0,
+          "stopped": 0,
+          "share": 0
+        }
+      }
+    },
+    "maltese-cross-4-h2h-hard-medium": {
+      "games": 300,
+      "turns": {
+        "mean": 11.48,
+        "p10": 7,
+        "median": 12,
+        "p90": 15
+      },
+      "winRateByDifficulty": {
+        "hard": {
+          "seats": 600,
+          "wins": 204,
+          "winRate": 0.68,
+          "fairShare": 0.5,
+          "winsPerSeat": 0.34,
+          "perSeatVsFair": 1.36
+        },
+        "medium": {
+          "seats": 600,
+          "wins": 96,
+          "winRate": 0.32,
+          "fairShare": 0.5,
+          "winsPerSeat": 0.16,
+          "perSeatVsFair": 0.64
+        }
+      },
+      "economyByDifficulty": {
+        "hard": {
+          "seats": 600,
+          "meanCells": 18.450062742812747,
+          "cellsAtTurn5": 19.16,
+          "cellsAtEnd": 28.7,
+          "largestRegionAtEnd": 23.253333333333334,
+          "productionRegionsAtEnd": 1.52,
+          "tokenCellsAtEnd": 14.175,
+          "meanPowerCenters": 2.9223172013172016,
+          "powerCentersAtTurn3": 3.305,
+          "powerCentersAtTurn5": 3.4383333333333335,
+          "buildsPerGame": 9.268333333333333,
+          "shipsBuiltPerGame": 14.716666666666667,
+          "tokensSpentPerGame": 112.90333333333334,
+          "tokensSpentPerTurn": 9.728223655973652,
+          "budgetZeroShare": 0.19342383542383587,
+          "starvedShare": 0.19342383542383587,
+          "meanFaceUpValue": 10.775636557886557,
+          "meanStrandedValue": 5.07162546250046,
+          "shipsAtEnd": 7.54
+        },
+        "medium": {
+          "seats": 600,
+          "meanCells": 19.729162985162983,
+          "cellsAtTurn5": 20.77,
+          "cellsAtEnd": 28.763333333333332,
+          "largestRegionAtEnd": 25.078333333333333,
+          "productionRegionsAtEnd": 1.3133333333333332,
+          "tokenCellsAtEnd": 13.883333333333333,
+          "meanPowerCenters": 2.6752233738483735,
+          "powerCentersAtTurn3": 2.695,
+          "powerCentersAtTurn5": 3.0566666666666666,
+          "buildsPerGame": 7.95,
+          "shipsBuiltPerGame": 14.288333333333334,
+          "tokensSpentPerGame": 118.085,
+          "tokensSpentPerTurn": 10.234366161616174,
+          "budgetZeroShare": 0.17095356495356537,
+          "starvedShare": 0.17095356495356537,
+          "meanFaceUpValue": 12.727369732119726,
+          "meanStrandedValue": 4.326937025937027,
+          "shipsAtEnd": 6.618333333333333
+        }
+      },
+      "nearWins": {
+        "all": {
+          "episodes": 760,
+          "stopped": 603,
+          "share": 0.7934210526315789
+        },
+        "byLevel": {
+          "medium": {
+            "episodes": 304,
+            "stopped": 256,
+            "share": 0.8421052631578947
+          },
+          "hard": {
+            "episodes": 456,
+            "stopped": 347,
+            "share": 0.7609649122807017
+          }
+        },
+        "withOtherHard": {
+          "episodes": 760,
+          "stopped": 603,
+          "share": 0.7934210526315789
+        },
+        "withoutOtherHard": {
+          "episodes": 0,
+          "stopped": 0,
+          "share": 0
+        }
+      }
+    },
+    "maltese-cross-4-h2h-medium-easy": {
+      "games": 300,
+      "turns": {
+        "mean": 10.373333333333333,
+        "p10": 6,
+        "median": 10,
+        "p90": 15
+      },
+      "winRateByDifficulty": {
+        "medium": {
+          "seats": 600,
+          "wins": 214,
+          "winRate": 0.7133333333333334,
+          "fairShare": 0.5,
+          "winsPerSeat": 0.3566666666666667,
+          "perSeatVsFair": 1.4266666666666667
+        },
+        "easy": {
+          "seats": 600,
+          "wins": 86,
+          "winRate": 0.2866666666666667,
+          "fairShare": 0.5,
+          "winsPerSeat": 0.14333333333333334,
+          "perSeatVsFair": 0.5733333333333334
+        }
+      },
+      "economyByDifficulty": {
+        "medium": {
+          "seats": 600,
+          "meanCells": 18.973555019055002,
+          "cellsAtTurn5": 22.571666666666665,
+          "cellsAtEnd": 29.59,
+          "largestRegionAtEnd": 24.686666666666667,
+          "productionRegionsAtEnd": 1.4116666666666666,
+          "tokenCellsAtEnd": 14.695,
+          "meanPowerCenters": 3.0158672716172714,
+          "powerCentersAtTurn3": 3,
+          "powerCentersAtTurn5": 3.815,
+          "buildsPerGame": 7.315,
+          "shipsBuiltPerGame": 13.528333333333334,
+          "tokensSpentPerGame": 101.19333333333333,
+          "tokensSpentPerTurn": 9.421772607022618,
+          "budgetZeroShare": 0.2892157148407157,
+          "starvedShare": 0.2892157148407157,
+          "meanFaceUpValue": 12.522759268509267,
+          "meanStrandedValue": 5.278218790468787,
+          "shipsAtEnd": 8.671666666666667
+        },
+        "easy": {
+          "seats": 600,
+          "meanCells": 18.75518025030526,
+          "cellsAtTurn5": 18.555,
+          "cellsAtEnd": 30.38,
+          "largestRegionAtEnd": 24.585,
+          "productionRegionsAtEnd": 1.59,
+          "tokenCellsAtEnd": 16.06833333333333,
+          "meanPowerCenters": 2.207325230325232,
+          "powerCentersAtTurn3": 1,
+          "powerCentersAtTurn5": 2.6766666666666667,
+          "buildsPerGame": 9.798333333333334,
+          "shipsBuiltPerGame": 12.818333333333333,
+          "tokensSpentPerGame": 111.935,
+          "tokensSpentPerTurn": 10.875915043290053,
+          "budgetZeroShare": 0.10965820290820313,
+          "starvedShare": 0.10930899655899677,
+          "meanFaceUpValue": 17.38434622322123,
+          "meanStrandedValue": 8.878119371369378,
+          "shipsAtEnd": 10.453333333333333
+        }
+      },
+      "nearWins": {
+        "all": {
+          "episodes": 856,
+          "stopped": 710,
+          "share": 0.8294392523364486
+        },
+        "byLevel": {
+          "medium": {
+            "episodes": 645,
+            "stopped": 536,
+            "share": 0.8310077519379845
+          },
+          "easy": {
+            "episodes": 211,
+            "stopped": 174,
+            "share": 0.8246445497630331
+          }
+        },
+        "withOtherHard": {
+          "episodes": 0,
+          "stopped": 0,
+          "share": 0
+        },
+        "withoutOtherHard": {
+          "episodes": 856,
+          "stopped": 710,
+          "share": 0.8294392523364486
+        }
+      }
+    },
+    "trio-start-h2h-easy-medium-hard": {
+      "games": 300,
+      "turns": {
+        "mean": 8.776666666666667,
+        "p10": 6,
+        "median": 8,
+        "p90": 13
+      },
+      "winRateByDifficulty": {
+        "easy": {
+          "seats": 300,
+          "wins": 15,
+          "winRate": 0.05,
+          "fairShare": 0.3333333333333322,
+          "winsPerSeat": 0.05,
+          "perSeatVsFair": 0.15000000000000052
+        },
+        "medium": {
+          "seats": 300,
+          "wins": 69,
+          "winRate": 0.23,
+          "fairShare": 0.3333333333333322,
+          "winsPerSeat": 0.23,
+          "perSeatVsFair": 0.6900000000000024
+        },
+        "hard": {
+          "seats": 300,
+          "wins": 216,
+          "winRate": 0.72,
+          "fairShare": 0.3333333333333322,
+          "winsPerSeat": 0.72,
+          "perSeatVsFair": 2.1600000000000072
+        }
+      },
+      "economyByDifficulty": {
+        "easy": {
+          "seats": 300,
+          "meanCells": 16.86945158545159,
+          "cellsAtTurn5": 17.906666666666666,
+          "cellsAtEnd": 29.033333333333335,
+          "largestRegionAtEnd": 24.083333333333332,
+          "productionRegionsAtEnd": 1.56,
+          "tokenCellsAtEnd": 14.93,
+          "meanPowerCenters": 2.1228446090946096,
+          "powerCentersAtTurn3": 2.486666666666667,
+          "powerCentersAtTurn5": 2.0966666666666667,
+          "buildsPerGame": 8.963333333333333,
+          "shipsBuiltPerGame": 12.156666666666666,
+          "tokensSpentPerGame": 85.19,
+          "tokensSpentPerTurn": 9.76264601139601,
+          "budgetZeroShare": 0.07227497502497499,
+          "starvedShare": 0.07227497502497499,
+          "meanFaceUpValue": 11.90214772264772,
+          "meanStrandedValue": 5.649944869944871,
+          "shipsAtEnd": 11.84
+        },
+        "medium": {
+          "seats": 300,
+          "meanCells": 17.2085571003071,
+          "cellsAtTurn5": 21.196666666666665,
+          "cellsAtEnd": 28.246666666666666,
+          "largestRegionAtEnd": 21.086666666666666,
+          "productionRegionsAtEnd": 1.8133333333333332,
+          "tokenCellsAtEnd": 14.073333333333334,
+          "meanPowerCenters": 2.742878436378434,
+          "powerCentersAtTurn3": 2.0366666666666666,
+          "powerCentersAtTurn5": 3.986666666666667,
+          "buildsPerGame": 5.553333333333334,
+          "shipsBuiltPerGame": 13.023333333333333,
+          "tokensSpentPerGame": 74.95,
+          "tokensSpentPerTurn": 8.314530192030185,
+          "budgetZeroShare": 0.24660113035113057,
+          "starvedShare": 0.24660113035113057,
+          "meanFaceUpValue": 14.668938820438816,
+          "meanStrandedValue": 5.218584165834165,
+          "shipsAtEnd": 8.846666666666666
+        },
+        "hard": {
+          "seats": 300,
+          "meanCells": 16.701968614718613,
+          "cellsAtTurn5": 17.596666666666668,
+          "cellsAtEnd": 30.456666666666667,
+          "largestRegionAtEnd": 21.313333333333333,
+          "productionRegionsAtEnd": 1.98,
+          "tokenCellsAtEnd": 15.643333333333333,
+          "meanPowerCenters": 3.015357475857474,
+          "powerCentersAtTurn3": 1.4766666666666666,
+          "powerCentersAtTurn5": 3.73,
+          "buildsPerGame": 6.316666666666666,
+          "shipsBuiltPerGame": 12.096666666666666,
+          "tokensSpentPerGame": 71.04333333333334,
+          "tokensSpentPerTurn": 8.069556711806714,
+          "budgetZeroShare": 0.3245652125652125,
+          "starvedShare": 0.3245652125652125,
+          "meanFaceUpValue": 10.849404290154299,
+          "meanStrandedValue": 4.548643384393385,
+          "shipsAtEnd": 12.023333333333333
+        }
+      },
+      "nearWins": {
+        "all": {
+          "episodes": 481,
+          "stopped": 328,
+          "share": 0.681912681912682
+        },
+        "byLevel": {
+          "medium": {
+            "episodes": 167,
+            "stopped": 141,
+            "share": 0.844311377245509
+          },
+          "hard": {
+            "episodes": 241,
+            "stopped": 121,
+            "share": 0.5020746887966805
+          },
+          "easy": {
+            "episodes": 73,
+            "stopped": 66,
+            "share": 0.9041095890410958
+          }
+        },
+        "withOtherHard": {
+          "episodes": 240,
+          "stopped": 207,
+          "share": 0.8625
+        },
+        "withoutOtherHard": {
+          "episodes": 241,
+          "stopped": 121,
+          "share": 0.5020746887966805
+        }
+      }
+    },
+    "trio-start-h2h-hard-easy": {
+      "games": 300,
+      "turns": {
+        "mean": 8.986666666666666,
+        "p10": 6,
+        "median": 8,
+        "p90": 13
+      },
+      "winRateByDifficulty": {
+        "hard": {
+          "seats": 450,
+          "wins": 284,
+          "winRate": 0.9466666666666667,
+          "fairShare": 0.4999999999999996,
+          "winsPerSeat": 0.6311111111111111,
+          "perSeatVsFair": 1.8933333333333395
+        },
+        "easy": {
+          "seats": 450,
+          "wins": 16,
+          "winRate": 0.05333333333333334,
+          "fairShare": 0.4999999999999996,
+          "winsPerSeat": 0.035555555555555556,
+          "perSeatVsFair": 0.10666666666666703
+        }
+      },
+      "economyByDifficulty": {
+        "hard": {
+          "seats": 450,
+          "meanCells": 19.351228265561588,
+          "cellsAtTurn5": 20.962222222222223,
+          "cellsAtEnd": 33.52,
+          "largestRegionAtEnd": 24.684444444444445,
+          "productionRegionsAtEnd": 1.9755555555555555,
+          "tokenCellsAtEnd": 16.30666666666667,
+          "meanPowerCenters": 3.123166802333468,
+          "powerCentersAtTurn3": 1.691111111111111,
+          "powerCentersAtTurn5": 3.7977777777777777,
+          "buildsPerGame": 7,
+          "shipsBuiltPerGame": 13.277777777777779,
+          "tokensSpentPerGame": 79.41111111111111,
+          "tokensSpentPerTurn": 8.322366954033622,
+          "budgetZeroShare": 0.33371995905329266,
+          "starvedShare": 0.33371995905329266,
+          "meanFaceUpValue": 10.55298453398454,
+          "meanStrandedValue": 4.270391102724436,
+          "shipsAtEnd": 11.977777777777778
+        },
+        "easy": {
+          "seats": 450,
+          "meanCells": 16.378533855033847,
+          "cellsAtTurn5": 18.54222222222222,
+          "cellsAtEnd": 27.65111111111111,
+          "largestRegionAtEnd": 22.23111111111111,
+          "productionRegionsAtEnd": 1.511111111111111,
+          "tokenCellsAtEnd": 14.813333333333333,
+          "meanPowerCenters": 2.14834703568037,
+          "powerCentersAtTurn3": 2.3088888888888888,
+          "powerCentersAtTurn5": 2.448888888888889,
+          "buildsPerGame": 8.442222222222222,
+          "shipsBuiltPerGame": 11.433333333333334,
+          "tokensSpentPerGame": 77.7,
+          "tokensSpentPerTurn": 9.231576812076804,
+          "budgetZeroShare": 0.07431255781255779,
+          "starvedShare": 0.07379403929403928,
+          "meanFaceUpValue": 13.200264920264917,
+          "meanStrandedValue": 6.58355170755171,
+          "shipsAtEnd": 11.731111111111112
+        }
+      },
+      "nearWins": {
+        "all": {
+          "episodes": 490,
+          "stopped": 311,
+          "share": 0.6346938775510204
+        },
+        "byLevel": {
+          "hard": {
+            "episodes": 413,
+            "stopped": 240,
+            "share": 0.5811138014527845
+          },
+          "easy": {
+            "episodes": 77,
+            "stopped": 71,
+            "share": 0.922077922077922
+          }
+        },
+        "withOtherHard": {
+          "episodes": 372,
+          "stopped": 281,
+          "share": 0.7553763440860215
+        },
+        "withoutOtherHard": {
+          "episodes": 118,
+          "stopped": 30,
+          "share": 0.2542372881355932
+        }
+      }
+    },
+    "trio-start-h2h-hard-medium": {
+      "games": 300,
+      "turns": {
+        "mean": 9.833333333333334,
+        "p10": 6,
+        "median": 9,
+        "p90": 14
+      },
+      "winRateByDifficulty": {
+        "hard": {
+          "seats": 450,
+          "wins": 225,
+          "winRate": 0.75,
+          "fairShare": 0.4999999999999996,
+          "winsPerSeat": 0.5,
+          "perSeatVsFair": 1.500000000000005
+        },
+        "medium": {
+          "seats": 450,
+          "wins": 75,
+          "winRate": 0.25,
+          "fairShare": 0.4999999999999996,
+          "winsPerSeat": 0.16666666666666666,
+          "perSeatVsFair": 0.5000000000000017
+        }
+      },
+      "economyByDifficulty": {
+        "hard": {
+          "seats": 450,
+          "meanCells": 19.223495048161723,
+          "cellsAtTurn5": 18.128888888888888,
+          "cellsAtEnd": 33.33777777777778,
+          "largestRegionAtEnd": 26.355555555555554,
+          "productionRegionsAtEnd": 1.7,
+          "tokenCellsAtEnd": 16.026666666666667,
+          "meanPowerCenters": 2.9428229856563206,
+          "powerCentersAtTurn3": 2.022222222222222,
+          "powerCentersAtTurn5": 3.2844444444444445,
+          "buildsPerGame": 7.833333333333333,
+          "shipsBuiltPerGame": 14.848888888888888,
+          "tokensSpentPerGame": 90.05777777777777,
+          "tokensSpentPerTurn": 8.92975369075369,
+          "budgetZeroShare": 0.2522806144472811,
+          "starvedShare": 0.2522806144472811,
+          "meanFaceUpValue": 9.520473921140585,
+          "meanStrandedValue": 3.6524200614200644,
+          "shipsAtEnd": 10.955555555555556
+        },
+        "medium": {
+          "seats": 450,
+          "meanCells": 17.87481346431345,
+          "cellsAtTurn5": 19.697777777777777,
+          "cellsAtEnd": 29.686666666666667,
+          "largestRegionAtEnd": 23.80666666666667,
+          "productionRegionsAtEnd": 1.6111111111111112,
+          "tokenCellsAtEnd": 14.231111111111112,
+          "meanPowerCenters": 2.5482920474587125,
+          "powerCentersAtTurn3": 1.9777777777777779,
+          "powerCentersAtTurn5": 3.24,
+          "buildsPerGame": 6.426666666666667,
+          "shipsBuiltPerGame": 14.571111111111112,
+          "tokensSpentPerGame": 88.09555555555555,
+          "tokensSpentPerTurn": 9.095386058386056,
+          "budgetZeroShare": 0.180140507640508,
+          "starvedShare": 0.180140507640508,
+          "meanFaceUpValue": 12.879016532849874,
+          "meanStrandedValue": 4.344189464856131,
+          "shipsAtEnd": 8.28
+        }
+      },
+      "nearWins": {
+        "all": {
+          "episodes": 562,
+          "stopped": 405,
+          "share": 0.7206405693950177
+        },
+        "byLevel": {
+          "hard": {
+            "episodes": 371,
+            "stopped": 246,
+            "share": 0.6630727762803235
+          },
+          "medium": {
+            "episodes": 191,
+            "stopped": 159,
+            "share": 0.8324607329842932
+          }
+        },
+        "withOtherHard": {
+          "episodes": 450,
+          "stopped": 346,
+          "share": 0.7688888888888888
+        },
+        "withoutOtherHard": {
+          "episodes": 112,
+          "stopped": 59,
+          "share": 0.5267857142857143
+        }
+      }
+    },
+    "trio-start-h2h-medium-easy": {
+      "games": 300,
+      "turns": {
+        "mean": 7.96,
+        "p10": 5,
+        "median": 7,
+        "p90": 12
+      },
+      "winRateByDifficulty": {
+        "medium": {
+          "seats": 450,
+          "wins": 243,
+          "winRate": 0.81,
+          "fairShare": 0.4999999999999996,
+          "winsPerSeat": 0.54,
+          "perSeatVsFair": 1.6200000000000057
+        },
+        "easy": {
+          "seats": 450,
+          "wins": 57,
+          "winRate": 0.19,
+          "fairShare": 0.4999999999999996,
+          "winsPerSeat": 0.12666666666666668,
+          "perSeatVsFair": 0.38000000000000134
+        }
+      },
+      "economyByDifficulty": {
+        "medium": {
+          "seats": 450,
+          "meanCells": 16.35795690729024,
+          "cellsAtTurn5": 21.095555555555556,
+          "cellsAtEnd": 28.055555555555557,
+          "largestRegionAtEnd": 20.40222222222222,
+          "productionRegionsAtEnd": 1.8333333333333333,
+          "tokenCellsAtEnd": 14.015555555555556,
+          "meanPowerCenters": 2.9567095928762583,
+          "powerCentersAtTurn3": 1.9066666666666667,
+          "powerCentersAtTurn5": 4.268888888888889,
+          "buildsPerGame": 4.937777777777778,
+          "shipsBuiltPerGame": 11.602222222222222,
+          "tokensSpentPerGame": 65.4088888888889,
+          "tokensSpentPerTurn": 7.9013813223813125,
+          "budgetZeroShare": 0.3115250736917409,
+          "starvedShare": 0.31001890085223477,
+          "meanFaceUpValue": 14.085465411132084,
+          "meanStrandedValue": 4.633203691370361,
+          "shipsAtEnd": 9.748888888888889
+        },
+        "easy": {
+          "seats": 450,
+          "meanCells": 14.969440602607278,
+          "cellsAtTurn5": 17.362222222222222,
+          "cellsAtEnd": 25.773333333333333,
+          "largestRegionAtEnd": 20.662222222222223,
+          "productionRegionsAtEnd": 1.46,
+          "tokenCellsAtEnd": 13.802222222222222,
+          "meanPowerCenters": 2.0568857993857996,
+          "powerCentersAtTurn3": 2.0933333333333333,
+          "powerCentersAtTurn5": 2.3266666666666667,
+          "buildsPerGame": 7.735555555555556,
+          "shipsBuiltPerGame": 10.53111111111111,
+          "tokensSpentPerGame": 72.26222222222222,
+          "tokensSpentPerTurn": 9.230472410305744,
+          "budgetZeroShare": 0.08535182718516046,
+          "starvedShare": 0.08535182718516046,
+          "meanFaceUpValue": 12.39480653913987,
+          "meanStrandedValue": 6.328419426252758,
+          "shipsAtEnd": 11.433333333333334
+        }
+      },
+      "nearWins": {
+        "all": {
+          "episodes": 416,
+          "stopped": 305,
+          "share": 0.7331730769230769
+        },
+        "byLevel": {
+          "medium": {
+            "episodes": 283,
+            "stopped": 195,
+            "share": 0.6890459363957597
+          },
+          "easy": {
+            "episodes": 133,
+            "stopped": 110,
+            "share": 0.8270676691729323
+          }
+        },
+        "withOtherHard": {
+          "episodes": 0,
+          "stopped": 0,
+          "share": 0
+        },
+        "withoutOtherHard": {
+          "episodes": 416,
+          "stopped": 305,
+          "share": 0.7331730769230769
+        }
+      }
+    }
+  },
+  "after": {
+    "duel-h2h-easy-medium-hard": {
+      "games": 300,
+      "turns": {
+        "mean": 7.086666666666667,
+        "p10": 6,
+        "median": 7,
+        "p90": 9
+      },
+      "winRateByDifficulty": {
+        "easy": {
+          "seats": 200,
+          "wins": 1,
+          "winRate": 0.0033333333333333335,
+          "fairShare": 0.3333333333333333,
+          "winsPerSeat": 0.005,
+          "perSeatVsFair": 0.01
+        },
+        "medium": {
+          "seats": 200,
+          "wins": 110,
+          "winRate": 0.36666666666666664,
+          "fairShare": 0.3333333333333333,
+          "winsPerSeat": 0.55,
+          "perSeatVsFair": 1.1
+        },
+        "hard": {
+          "seats": 200,
+          "wins": 189,
+          "winRate": 0.63,
+          "fairShare": 0.3333333333333333,
+          "winsPerSeat": 0.945,
+          "perSeatVsFair": 1.89
+        }
+      },
+      "economyByDifficulty": {
+        "easy": {
+          "seats": 200,
+          "meanCells": 13.626607323232324,
+          "cellsAtTurn5": 17.41,
+          "cellsAtEnd": 24.59,
+          "largestRegionAtEnd": 11.66,
+          "productionRegionsAtEnd": 2.195,
+          "tokenCellsAtEnd": 18.465,
+          "meanPowerCenters": 2.276483294483295,
+          "powerCentersAtTurn3": 2.24,
+          "powerCentersAtTurn5": 3.1,
+          "buildsPerGame": 5.695,
+          "shipsBuiltPerGame": 8.145,
+          "tokensSpentPerGame": 51.325,
+          "tokensSpentPerTurn": 7.353324370074367,
+          "budgetZeroShare": 0.050727300477300466,
+          "starvedShare": 0.050727300477300466,
+          "meanFaceUpValue": 20.44597272172272,
+          "meanStrandedValue": 13.296918192918197,
+          "shipsAtEnd": 12.82
+        },
+        "medium": {
+          "seats": 200,
+          "meanCells": 15.275140637140645,
+          "cellsAtTurn5": 19.495,
+          "cellsAtEnd": 28.755,
+          "largestRegionAtEnd": 17.09,
+          "productionRegionsAtEnd": 2.575,
+          "tokenCellsAtEnd": 14.825,
+          "meanPowerCenters": 2.9009730269730274,
+          "powerCentersAtTurn3": 2,
+          "powerCentersAtTurn5": 4.215,
+          "buildsPerGame": 3.56,
+          "shipsBuiltPerGame": 6.905,
+          "tokensSpentPerGame": 36.15,
+          "tokensSpentPerTurn": 4.891624333999333,
+          "budgetZeroShare": 0.29304822954822957,
+          "starvedShare": 0.29221489621489627,
+          "meanFaceUpValue": 19.42098475135975,
+          "meanStrandedValue": 8.427600815850816,
+          "shipsAtEnd": 8.22
+        },
+        "hard": {
+          "seats": 200,
+          "meanCells": 13.701076923076918,
+          "cellsAtTurn5": 16.09,
+          "cellsAtEnd": 27.49,
+          "largestRegionAtEnd": 14.21,
+          "productionRegionsAtEnd": 2.42,
+          "tokenCellsAtEnd": 15.025,
+          "meanPowerCenters": 3.045549506049507,
+          "powerCentersAtTurn3": 2,
+          "powerCentersAtTurn5": 4.035,
+          "buildsPerGame": 3.77,
+          "shipsBuiltPerGame": 7.13,
+          "tokensSpentPerGame": 42.4,
+          "tokensSpentPerTurn": 6.139477938727937,
+          "budgetZeroShare": 0.35408577533577573,
+          "starvedShare": 0.35408577533577573,
+          "meanFaceUpValue": 13.862677849927843,
+          "meanStrandedValue": 8.58001683039183,
+          "shipsAtEnd": 10.96
+        }
+      },
+      "nearWins": {
+        "all": {
+          "episodes": 308,
+          "stopped": 126,
+          "share": 0.4090909090909091
+        },
+        "byLevel": {
+          "medium": {
+            "episodes": 139,
+            "stopped": 77,
+            "share": 0.5539568345323741
+          },
+          "hard": {
+            "episodes": 147,
+            "stopped": 28,
+            "share": 0.19047619047619047
+          },
+          "easy": {
+            "episodes": 22,
+            "stopped": 21,
+            "share": 0.9545454545454546
+          }
+        },
+        "withOtherHard": {
+          "episodes": 58,
+          "stopped": 53,
+          "share": 0.9137931034482759
+        },
+        "withoutOtherHard": {
+          "episodes": 250,
+          "stopped": 73,
+          "share": 0.292
+        }
+      }
+    },
+    "duel-h2h-hard-easy": {
+      "games": 300,
+      "turns": {
+        "mean": 6.76,
+        "p10": 6,
+        "median": 6,
+        "p90": 8
+      },
+      "winRateByDifficulty": {
+        "hard": {
+          "seats": 300,
+          "wins": 299,
+          "winRate": 0.9966666666666667,
+          "fairShare": 0.5,
+          "winsPerSeat": 0.9966666666666667,
+          "perSeatVsFair": 1.9933333333333334
+        },
+        "easy": {
+          "seats": 300,
+          "wins": 1,
+          "winRate": 0.0033333333333333335,
+          "fairShare": 0.5,
+          "winsPerSeat": 0.0033333333333333335,
+          "perSeatVsFair": 0.006666666666666667
+        }
+      },
+      "economyByDifficulty": {
+        "hard": {
+          "seats": 300,
+          "meanCells": 14.427210012210017,
+          "cellsAtTurn5": 18.31,
+          "cellsAtEnd": 29.073333333333334,
+          "largestRegionAtEnd": 15.95,
+          "productionRegionsAtEnd": 2.34,
+          "tokenCellsAtEnd": 15.97,
+          "meanPowerCenters": 3.0774088319088366,
+          "powerCentersAtTurn3": 2,
+          "powerCentersAtTurn5": 4.1433333333333335,
+          "buildsPerGame": 3.82,
+          "shipsBuiltPerGame": 6.96,
+          "tokensSpentPerGame": 42.236666666666665,
+          "tokensSpentPerTurn": 6.301068681318682,
+          "budgetZeroShare": 0.3628823768823761,
+          "starvedShare": 0.3628823768823761,
+          "meanFaceUpValue": 14.483309218559224,
+          "meanStrandedValue": 8.844307488807486,
+          "shipsAtEnd": 12.06
+        },
+        "easy": {
+          "seats": 300,
+          "meanCells": 13.555498066748058,
+          "cellsAtTurn5": 17.97,
+          "cellsAtEnd": 24.496666666666666,
+          "largestRegionAtEnd": 11.973333333333333,
+          "productionRegionsAtEnd": 2.1266666666666665,
+          "tokenCellsAtEnd": 18.096666666666668,
+          "meanPowerCenters": 2.1970953398453408,
+          "powerCentersAtTurn3": 2.1866666666666665,
+          "powerCentersAtTurn5": 3.0966666666666667,
+          "buildsPerGame": 5.79,
+          "shipsBuiltPerGame": 8.106666666666667,
+          "tokensSpentPerGame": 52.083333333333336,
+          "tokensSpentPerTurn": 7.725420126170127,
+          "budgetZeroShare": 0.04378713878713876,
+          "starvedShare": 0.04378713878713876,
+          "meanFaceUpValue": 19.447995726495723,
+          "meanStrandedValue": 13.061993589743599,
+          "shipsAtEnd": 12.936666666666667
+        }
+      },
+      "nearWins": {
+        "all": {
+          "episodes": 251,
+          "stopped": 38,
+          "share": 0.15139442231075698
+        },
+        "byLevel": {
+          "hard": {
+            "episodes": 231,
+            "stopped": 19,
+            "share": 0.08225108225108226
+          },
+          "easy": {
+            "episodes": 20,
+            "stopped": 19,
+            "share": 0.95
+          }
+        },
+        "withOtherHard": {
+          "episodes": 20,
+          "stopped": 19,
+          "share": 0.95
+        },
+        "withoutOtherHard": {
+          "episodes": 231,
+          "stopped": 19,
+          "share": 0.08225108225108226
+        }
+      }
+    },
+    "duel-h2h-hard-medium": {
+      "games": 300,
+      "turns": {
+        "mean": 7.6433333333333335,
+        "p10": 6,
+        "median": 7,
+        "p90": 10
+      },
+      "winRateByDifficulty": {
+        "hard": {
+          "seats": 300,
+          "wins": 268,
+          "winRate": 0.8933333333333333,
+          "fairShare": 0.5,
+          "winsPerSeat": 0.8933333333333333,
+          "perSeatVsFair": 1.7866666666666666
+        },
+        "medium": {
+          "seats": 300,
+          "wins": 32,
+          "winRate": 0.10666666666666667,
+          "fairShare": 0.5,
+          "winsPerSeat": 0.10666666666666667,
+          "perSeatVsFair": 0.21333333333333335
+        }
+      },
+      "economyByDifficulty": {
+        "hard": {
+          "seats": 300,
+          "meanCells": 13.730934648684658,
+          "cellsAtTurn5": 13.79,
+          "cellsAtEnd": 27.22,
+          "largestRegionAtEnd": 14.16,
+          "productionRegionsAtEnd": 2.41,
+          "tokenCellsAtEnd": 14.6,
+          "meanPowerCenters": 3.0501576109076134,
+          "powerCentersAtTurn3": 2,
+          "powerCentersAtTurn5": 3.7,
+          "buildsPerGame": 4.1066666666666665,
+          "shipsBuiltPerGame": 7.8566666666666665,
+          "tokensSpentPerGame": 46.22,
+          "tokensSpentPerTurn": 6.176308608058606,
+          "budgetZeroShare": 0.33898852073852054,
+          "starvedShare": 0.33898852073852054,
+          "meanFaceUpValue": 12.72918111518112,
+          "meanStrandedValue": 7.688616189366187,
+          "shipsAtEnd": 9.93
+        },
+        "medium": {
+          "seats": 300,
+          "meanCells": 15.418207930957925,
+          "cellsAtTurn5": 19.54,
+          "cellsAtEnd": 27.17,
+          "largestRegionAtEnd": 17.773333333333333,
+          "productionRegionsAtEnd": 2.32,
+          "tokenCellsAtEnd": 13.273333333333333,
+          "meanPowerCenters": 2.6441091408591397,
+          "powerCentersAtTurn3": 2,
+          "powerCentersAtTurn5": 4.153333333333333,
+          "buildsPerGame": 4.183333333333334,
+          "shipsBuiltPerGame": 7.98,
+          "tokensSpentPerGame": 42.266666666666666,
+          "tokensSpentPerTurn": 5.438410413660415,
+          "budgetZeroShare": 0.19645011470011478,
+          "starvedShare": 0.18933900358900366,
+          "meanFaceUpValue": 18.301393375143366,
+          "meanStrandedValue": 7.958767260517261,
+          "shipsAtEnd": 6.233333333333333
+        }
+      },
+      "nearWins": {
+        "all": {
+          "episodes": 458,
+          "stopped": 295,
+          "share": 0.6441048034934498
+        },
+        "byLevel": {
+          "hard": {
+            "episodes": 243,
+            "stopped": 96,
+            "share": 0.3950617283950617
+          },
+          "medium": {
+            "episodes": 215,
+            "stopped": 199,
+            "share": 0.9255813953488372
+          }
+        },
+        "withOtherHard": {
+          "episodes": 215,
+          "stopped": 199,
+          "share": 0.9255813953488372
+        },
+        "withoutOtherHard": {
+          "episodes": 243,
+          "stopped": 96,
+          "share": 0.3950617283950617
+        }
+      }
+    },
+    "duel-h2h-medium-easy": {
+      "games": 300,
+      "turns": {
+        "mean": 7.3133333333333335,
+        "p10": 6,
+        "median": 7,
+        "p90": 9
+      },
+      "winRateByDifficulty": {
+        "medium": {
+          "seats": 300,
+          "wins": 294,
+          "winRate": 0.98,
+          "fairShare": 0.5,
+          "winsPerSeat": 0.98,
+          "perSeatVsFair": 1.96
+        },
+        "easy": {
+          "seats": 300,
+          "wins": 6,
+          "winRate": 0.02,
+          "fairShare": 0.5,
+          "winsPerSeat": 0.02,
+          "perSeatVsFair": 0.04
+        }
+      },
+      "economyByDifficulty": {
+        "medium": {
+          "seats": 300,
+          "meanCells": 16.020621480371485,
+          "cellsAtTurn5": 19.483333333333334,
+          "cellsAtEnd": 31.69,
+          "largestRegionAtEnd": 16.876666666666665,
+          "productionRegionsAtEnd": 2.98,
+          "tokenCellsAtEnd": 16.736666666666668,
+          "meanPowerCenters": 3.207882783882786,
+          "powerCentersAtTurn3": 2,
+          "powerCentersAtTurn5": 4.31,
+          "buildsPerGame": 3.04,
+          "shipsBuiltPerGame": 5.996666666666667,
+          "tokensSpentPerGame": 31.656666666666666,
+          "tokensSpentPerTurn": 4.270203176453177,
+          "budgetZeroShare": 0.3915152162652162,
+          "starvedShare": 0.38443188293188285,
+          "meanFaceUpValue": 21.568662689162693,
+          "meanStrandedValue": 9.239855144855147,
+          "shipsAtEnd": 10.296666666666667
+        },
+        "easy": {
+          "seats": 300,
+          "meanCells": 13.466080687830686,
+          "cellsAtTurn5": 15.786666666666667,
+          "cellsAtEnd": 23.97,
+          "largestRegionAtEnd": 10.2,
+          "productionRegionsAtEnd": 2.3233333333333333,
+          "tokenCellsAtEnd": 18.636666666666667,
+          "meanPowerCenters": 2.3158718596218595,
+          "powerCentersAtTurn3": 2.1866666666666665,
+          "powerCentersAtTurn5": 3.0866666666666664,
+          "buildsPerGame": 5.7,
+          "shipsBuiltPerGame": 8.186666666666667,
+          "tokensSpentPerGame": 51.45333333333333,
+          "tokensSpentPerTurn": 7.038200854700855,
+          "budgetZeroShare": 0.06215081215081212,
+          "starvedShare": 0.06173414548414545,
+          "meanFaceUpValue": 21.78001933251934,
+          "meanStrandedValue": 13.922449911199914,
+          "shipsAtEnd": 12.756666666666666
+        }
+      },
+      "nearWins": {
+        "all": {
+          "episodes": 306,
+          "stopped": 126,
+          "share": 0.4117647058823529
+        },
+        "byLevel": {
+          "medium": {
+            "episodes": 254,
+            "stopped": 77,
+            "share": 0.3031496062992126
+          },
+          "easy": {
+            "episodes": 52,
+            "stopped": 49,
+            "share": 0.9423076923076923
+          }
+        },
+        "withOtherHard": {
+          "episodes": 0,
+          "stopped": 0,
+          "share": 0
+        },
+        "withoutOtherHard": {
+          "episodes": 306,
+          "stopped": 126,
+          "share": 0.4117647058823529
+        }
+      }
+    },
+    "maltese-cross-4-h2h-easy-medium-hard": {
+      "games": 300,
+      "turns": {
+        "mean": 11.616666666666667,
+        "p10": 7,
+        "median": 12,
+        "p90": 15
+      },
+      "winRateByDifficulty": {
+        "easy": {
+          "seats": 400,
+          "wins": 52,
+          "winRate": 0.17333333333333334,
+          "fairShare": 0.3333333333333333,
+          "winsPerSeat": 0.13,
+          "perSeatVsFair": 0.52
+        },
+        "medium": {
+          "seats": 400,
+          "wins": 90,
+          "winRate": 0.3,
+          "fairShare": 0.3333333333333333,
+          "winsPerSeat": 0.225,
+          "perSeatVsFair": 0.9
+        },
+        "hard": {
+          "seats": 400,
+          "wins": 158,
+          "winRate": 0.5266666666666666,
+          "fairShare": 0.3333333333333333,
+          "winsPerSeat": 0.395,
+          "perSeatVsFair": 1.58
+        }
+      },
+      "economyByDifficulty": {
+        "easy": {
+          "seats": 400,
+          "meanCells": 19.959963224275718,
+          "cellsAtTurn5": 17.9525,
+          "cellsAtEnd": 32.8925,
+          "largestRegionAtEnd": 26.89,
+          "productionRegionsAtEnd": 1.6025,
+          "tokenCellsAtEnd": 16.88,
+          "meanPowerCenters": 2.2199495712620707,
+          "powerCentersAtTurn3": 1,
+          "powerCentersAtTurn5": 2.8575,
+          "buildsPerGame": 10.915,
+          "shipsBuiltPerGame": 14.155,
+          "tokensSpentPerGame": 125.17,
+          "tokensSpentPerTurn": 10.845174235486727,
+          "budgetZeroShare": 0.09815272227772227,
+          "starvedShare": 0.09767355561105559,
+          "meanFaceUpValue": 17.449857871295357,
+          "meanStrandedValue": 9.272387765012754,
+          "shipsAtEnd": 10.9675
+        },
+        "medium": {
+          "seats": 400,
+          "meanCells": 20.2784884004884,
+          "cellsAtTurn5": 20.5425,
+          "cellsAtEnd": 31.245,
+          "largestRegionAtEnd": 27.5475,
+          "productionRegionsAtEnd": 1.3275,
+          "tokenCellsAtEnd": 14.6475,
+          "meanPowerCenters": 2.699605942668443,
+          "powerCentersAtTurn3": 2.075,
+          "powerCentersAtTurn5": 3.24,
+          "buildsPerGame": 7.6475,
+          "shipsBuiltPerGame": 15.135,
+          "tokensSpentPerGame": 125.9825,
+          "tokensSpentPerTurn": 10.847047702297697,
+          "budgetZeroShare": 0.1904497030747032,
+          "starvedShare": 0.1904497030747032,
+          "meanFaceUpValue": 11.290158466533473,
+          "meanStrandedValue": 3.50493444055944,
+          "shipsAtEnd": 7.4925
+        },
+        "hard": {
+          "seats": 400,
+          "meanCells": 20.03947787629037,
+          "cellsAtTurn5": 21.1475,
+          "cellsAtEnd": 29.7275,
+          "largestRegionAtEnd": 24.9575,
+          "productionRegionsAtEnd": 1.4175,
+          "tokenCellsAtEnd": 14.0425,
+          "meanPowerCenters": 2.9528303987678997,
+          "powerCentersAtTurn3": 1.925,
+          "powerCentersAtTurn5": 3.53,
+          "buildsPerGame": 8.75,
+          "shipsBuiltPerGame": 13.885,
+          "tokensSpentPerGame": 116.8425,
+          "tokensSpentPerTurn": 9.887069937007448,
+          "budgetZeroShare": 0.23930829587079636,
+          "starvedShare": 0.23930829587079636,
+          "meanFaceUpValue": 8.328699654512153,
+          "meanStrandedValue": 3.929612734487734,
+          "shipsAtEnd": 7.9475
+        }
+      },
+      "nearWins": {
+        "all": {
+          "episodes": 710,
+          "stopped": 566,
+          "share": 0.7971830985915493
+        },
+        "byLevel": {
+          "hard": {
+            "episodes": 351,
+            "stopped": 267,
+            "share": 0.7606837606837606
+          },
+          "easy": {
+            "episodes": 124,
+            "stopped": 110,
+            "share": 0.8870967741935484
+          },
+          "medium": {
+            "episodes": 235,
+            "stopped": 189,
+            "share": 0.8042553191489362
+          }
+        },
+        "withOtherHard": {
+          "episodes": 506,
+          "stopped": 412,
+          "share": 0.8142292490118577
+        },
+        "withoutOtherHard": {
+          "episodes": 204,
+          "stopped": 154,
+          "share": 0.7549019607843137
+        }
+      }
+    },
+    "maltese-cross-4-h2h-hard-easy": {
+      "games": 300,
+      "turns": {
+        "mean": 10.163333333333334,
+        "p10": 6,
+        "median": 9,
+        "p90": 15
+      },
+      "winRateByDifficulty": {
+        "hard": {
+          "seats": 600,
+          "wins": 257,
+          "winRate": 0.8566666666666667,
+          "fairShare": 0.5,
+          "winsPerSeat": 0.42833333333333334,
+          "perSeatVsFair": 1.7133333333333334
+        },
+        "easy": {
+          "seats": 600,
+          "wins": 43,
+          "winRate": 0.14333333333333334,
+          "fairShare": 0.5,
+          "winsPerSeat": 0.07166666666666667,
+          "perSeatVsFair": 0.2866666666666667
+        }
+      },
+      "economyByDifficulty": {
+        "hard": {
+          "seats": 600,
+          "meanCells": 17.8312493756244,
+          "cellsAtTurn5": 21.508333333333333,
+          "cellsAtEnd": 27.73,
+          "largestRegionAtEnd": 22.821666666666665,
+          "productionRegionsAtEnd": 1.4516666666666667,
+          "tokenCellsAtEnd": 14.041666666666666,
+          "meanPowerCenters": 2.985209697709698,
+          "powerCentersAtTurn3": 2,
+          "powerCentersAtTurn5": 3.9433333333333334,
+          "buildsPerGame": 7.193333333333333,
+          "shipsBuiltPerGame": 11.54,
+          "tokensSpentPerGame": 93.52833333333334,
+          "tokensSpentPerTurn": 8.981560180560189,
+          "budgetZeroShare": 0.30652803215303276,
+          "starvedShare": 0.30652803215303276,
+          "meanFaceUpValue": 10.052076442076435,
+          "meanStrandedValue": 5.131651131276129,
+          "shipsAtEnd": 9.328333333333333
+        },
+        "easy": {
+          "seats": 600,
+          "meanCells": 18.103352554852563,
+          "cellsAtTurn5": 17.791666666666668,
+          "cellsAtEnd": 29.718333333333334,
+          "largestRegionAtEnd": 23.733333333333334,
+          "productionRegionsAtEnd": 1.5033333333333334,
+          "tokenCellsAtEnd": 16.286666666666665,
+          "meanPowerCenters": 2.0371651311651338,
+          "powerCentersAtTurn3": 1,
+          "powerCentersAtTurn5": 2.5516666666666667,
+          "buildsPerGame": 9.595,
+          "shipsBuiltPerGame": 12.646666666666667,
+          "tokensSpentPerGame": 109.36166666666666,
+          "tokensSpentPerTurn": 10.690012001887004,
+          "budgetZeroShare": 0.07156821881821894,
+          "starvedShare": 0.07130559255559268,
+          "meanFaceUpValue": 18.41337986087987,
+          "meanStrandedValue": 10.306524609649614,
+          "shipsAtEnd": 11.001666666666667
+        }
+      },
+      "nearWins": {
+        "all": {
+          "episodes": 636,
+          "stopped": 496,
+          "share": 0.779874213836478
+        },
+        "byLevel": {
+          "hard": {
+            "episodes": 530,
+            "stopped": 404,
+            "share": 0.7622641509433963
+          },
+          "easy": {
+            "episodes": 106,
+            "stopped": 92,
+            "share": 0.8679245283018868
+          }
+        },
+        "withOtherHard": {
+          "episodes": 636,
+          "stopped": 496,
+          "share": 0.779874213836478
+        },
+        "withoutOtherHard": {
+          "episodes": 0,
+          "stopped": 0,
+          "share": 0
+        }
+      }
+    },
+    "maltese-cross-4-h2h-hard-medium": {
+      "games": 300,
+      "turns": {
+        "mean": 12.13,
+        "p10": 9,
+        "median": 12,
+        "p90": 15
+      },
+      "winRateByDifficulty": {
+        "hard": {
+          "seats": 600,
+          "wins": 184,
+          "winRate": 0.6133333333333333,
+          "fairShare": 0.5,
+          "winsPerSeat": 0.30666666666666664,
+          "perSeatVsFair": 1.2266666666666666
+        },
+        "medium": {
+          "seats": 600,
+          "wins": 116,
+          "winRate": 0.38666666666666666,
+          "fairShare": 0.5,
+          "winsPerSeat": 0.19333333333333333,
+          "perSeatVsFair": 0.7733333333333333
+        }
+      },
+      "economyByDifficulty": {
+        "hard": {
+          "seats": 600,
+          "meanCells": 20.58134511322013,
+          "cellsAtTurn5": 21.525,
+          "cellsAtEnd": 30.296666666666667,
+          "largestRegionAtEnd": 26.25,
+          "productionRegionsAtEnd": 1.3633333333333333,
+          "tokenCellsAtEnd": 13.72,
+          "meanPowerCenters": 2.8573501961001977,
+          "powerCentersAtTurn3": 1.7466666666666666,
+          "powerCentersAtTurn5": 3.5366666666666666,
+          "buildsPerGame": 9.265,
+          "shipsBuiltPerGame": 14.611666666666666,
+          "tokensSpentPerGame": 126.00666666666666,
+          "tokensSpentPerTurn": 10.315511423761436,
+          "budgetZeroShare": 0.22619100806600842,
+          "starvedShare": 0.22619100806600842,
+          "meanFaceUpValue": 8.048043174418172,
+          "meanStrandedValue": 3.6244158711658723,
+          "shipsAtEnd": 6.741666666666666
+        },
+        "medium": {
+          "seats": 600,
+          "meanCells": 20.854936137936143,
+          "cellsAtTurn5": 20.045,
+          "cellsAtEnd": 31.946666666666665,
+          "largestRegionAtEnd": 28.731666666666666,
+          "productionRegionsAtEnd": 1.2766666666666666,
+          "tokenCellsAtEnd": 14.76,
+          "meanPowerCenters": 2.5842972351722318,
+          "powerCentersAtTurn3": 2.2533333333333334,
+          "powerCentersAtTurn5": 2.9466666666666668,
+          "buildsPerGame": 8.073333333333334,
+          "shipsBuiltPerGame": 15.861666666666666,
+          "tokensSpentPerGame": 136.21166666666667,
+          "tokensSpentPerTurn": 11.244184694934697,
+          "budgetZeroShare": 0.14187711362711392,
+          "starvedShare": 0.14187711362711392,
+          "meanFaceUpValue": 10.641359108484103,
+          "meanStrandedValue": 3.065993881118881,
+          "shipsAtEnd": 6.833333333333333
+        }
+      },
+      "nearWins": {
+        "all": {
+          "episodes": 757,
+          "stopped": 606,
+          "share": 0.8005284015852048
+        },
+        "byLevel": {
+          "hard": {
+            "episodes": 515,
+            "stopped": 426,
+            "share": 0.8271844660194175
+          },
+          "medium": {
+            "episodes": 242,
+            "stopped": 180,
+            "share": 0.743801652892562
+          }
+        },
+        "withOtherHard": {
+          "episodes": 757,
+          "stopped": 606,
+          "share": 0.8005284015852048
+        },
+        "withoutOtherHard": {
+          "episodes": 0,
+          "stopped": 0,
+          "share": 0
+        }
+      }
+    },
+    "maltese-cross-4-h2h-medium-easy": {
+      "games": 300,
+      "turns": {
+        "mean": 10.726666666666667,
+        "p10": 6,
+        "median": 10,
+        "p90": 15
+      },
+      "winRateByDifficulty": {
+        "medium": {
+          "seats": 600,
+          "wins": 201,
+          "winRate": 0.67,
+          "fairShare": 0.5,
+          "winsPerSeat": 0.335,
+          "perSeatVsFair": 1.34
+        },
+        "easy": {
+          "seats": 600,
+          "wins": 99,
+          "winRate": 0.33,
+          "fairShare": 0.5,
+          "winsPerSeat": 0.165,
+          "perSeatVsFair": 0.66
+        }
+      },
+      "economyByDifficulty": {
+        "medium": {
+          "seats": 600,
+          "meanCells": 19.530594484219474,
+          "cellsAtTurn5": 20.18166666666667,
+          "cellsAtEnd": 30.725,
+          "largestRegionAtEnd": 26.261666666666667,
+          "productionRegionsAtEnd": 1.4266666666666667,
+          "tokenCellsAtEnd": 15.116666666666667,
+          "meanPowerCenters": 2.919788165538162,
+          "powerCentersAtTurn3": 2,
+          "powerCentersAtTurn5": 3.5816666666666666,
+          "buildsPerGame": 6.558333333333334,
+          "shipsBuiltPerGame": 12.873333333333333,
+          "tokensSpentPerGame": 105.535,
+          "tokensSpentPerTurn": 9.700955641580638,
+          "budgetZeroShare": 0.3008459179709185,
+          "starvedShare": 0.3008459179709185,
+          "meanFaceUpValue": 12.029223105598108,
+          "meanStrandedValue": 4.44978945128945,
+          "shipsAtEnd": 7.975
+        },
+        "easy": {
+          "seats": 600,
+          "meanCells": 18.845234885484867,
+          "cellsAtTurn5": 18.55666666666667,
+          "cellsAtEnd": 30.65,
+          "largestRegionAtEnd": 24.871666666666666,
+          "productionRegionsAtEnd": 1.5633333333333332,
+          "tokenCellsAtEnd": 16.006666666666668,
+          "meanPowerCenters": 2.2104940707440734,
+          "powerCentersAtTurn3": 1,
+          "powerCentersAtTurn5": 2.8983333333333334,
+          "buildsPerGame": 10.051666666666666,
+          "shipsBuiltPerGame": 13.168333333333333,
+          "tokensSpentPerGame": 114.64666666666666,
+          "tokensSpentPerTurn": 10.857379731379739,
+          "budgetZeroShare": 0.10227422114922141,
+          "starvedShare": 0.1015486319236322,
+          "meanFaceUpValue": 17.109393907018895,
+          "meanStrandedValue": 8.940342897842894,
+          "shipsAtEnd": 10.011666666666667
+        }
+      },
+      "nearWins": {
+        "all": {
+          "episodes": 731,
+          "stopped": 574,
+          "share": 0.7852257181942545
+        },
+        "byLevel": {
+          "medium": {
+            "episodes": 526,
+            "stopped": 413,
+            "share": 0.785171102661597
+          },
+          "easy": {
+            "episodes": 205,
+            "stopped": 161,
+            "share": 0.7853658536585366
+          }
+        },
+        "withOtherHard": {
+          "episodes": 0,
+          "stopped": 0,
+          "share": 0
+        },
+        "withoutOtherHard": {
+          "episodes": 731,
+          "stopped": 574,
+          "share": 0.7852257181942545
+        }
+      }
+    },
+    "trio-start-h2h-easy-medium-hard": {
+      "games": 300,
+      "turns": {
+        "mean": 8.946666666666667,
+        "p10": 6,
+        "median": 9,
+        "p90": 13
+      },
+      "winRateByDifficulty": {
+        "easy": {
+          "seats": 300,
+          "wins": 24,
+          "winRate": 0.08,
+          "fairShare": 0.3333333333333322,
+          "winsPerSeat": 0.08,
+          "perSeatVsFair": 0.24000000000000082
+        },
+        "medium": {
+          "seats": 300,
+          "wins": 60,
+          "winRate": 0.2,
+          "fairShare": 0.3333333333333322,
+          "winsPerSeat": 0.2,
+          "perSeatVsFair": 0.6000000000000021
+        },
+        "hard": {
+          "seats": 300,
+          "wins": 216,
+          "winRate": 0.72,
+          "fairShare": 0.3333333333333322,
+          "winsPerSeat": 0.72,
+          "perSeatVsFair": 2.1600000000000072
+        }
+      },
+      "economyByDifficulty": {
+        "easy": {
+          "seats": 300,
+          "meanCells": 16.91877076627076,
+          "cellsAtTurn5": 18.02,
+          "cellsAtEnd": 28.84,
+          "largestRegionAtEnd": 23.83,
+          "productionRegionsAtEnd": 1.5,
+          "tokenCellsAtEnd": 14.783333333333333,
+          "meanPowerCenters": 2.116799274799274,
+          "powerCentersAtTurn3": 2.4,
+          "powerCentersAtTurn5": 2.31,
+          "buildsPerGame": 9.16,
+          "shipsBuiltPerGame": 12.393333333333333,
+          "tokensSpentPerGame": 86.73333333333333,
+          "tokensSpentPerTurn": 9.748107808857803,
+          "budgetZeroShare": 0.06794953194953189,
+          "starvedShare": 0.06794953194953189,
+          "meanFaceUpValue": 11.93590815665815,
+          "meanStrandedValue": 5.667258482258483,
+          "shipsAtEnd": 11.286666666666667
+        },
+        "medium": {
+          "seats": 300,
+          "meanCells": 17.79809507159508,
+          "cellsAtTurn5": 20.606666666666666,
+          "cellsAtEnd": 29.72,
+          "largestRegionAtEnd": 25.426666666666666,
+          "productionRegionsAtEnd": 1.4666666666666666,
+          "tokenCellsAtEnd": 14.533333333333333,
+          "meanPowerCenters": 2.6063729881229882,
+          "powerCentersAtTurn3": 2.0633333333333335,
+          "powerCentersAtTurn5": 3.64,
+          "buildsPerGame": 5.76,
+          "shipsBuiltPerGame": 13.323333333333334,
+          "tokensSpentPerGame": 79.97666666666667,
+          "tokensSpentPerTurn": 8.72352468827469,
+          "budgetZeroShare": 0.20482090132090155,
+          "starvedShare": 0.20482090132090155,
+          "meanFaceUpValue": 12.425591353091347,
+          "meanStrandedValue": 2.937626160876162,
+          "shipsAtEnd": 9.073333333333334
+        },
+        "hard": {
+          "seats": 300,
+          "meanCells": 17.33034993709995,
+          "cellsAtTurn5": 18.903333333333332,
+          "cellsAtEnd": 30.5,
+          "largestRegionAtEnd": 23.91,
+          "productionRegionsAtEnd": 1.63,
+          "tokenCellsAtEnd": 14.28,
+          "meanPowerCenters": 3.085270091020092,
+          "powerCentersAtTurn3": 1.5366666666666666,
+          "powerCentersAtTurn5": 3.4266666666666667,
+          "buildsPerGame": 5.953333333333333,
+          "shipsBuiltPerGame": 11.346666666666666,
+          "tokensSpentPerGame": 68.92333333333333,
+          "tokensSpentPerTurn": 7.682256336256334,
+          "budgetZeroShare": 0.3567794520294519,
+          "starvedShare": 0.3567794520294519,
+          "meanFaceUpValue": 8.420754384504384,
+          "meanStrandedValue": 3.5211593129093126,
+          "shipsAtEnd": 10.236666666666666
+        }
+      },
+      "nearWins": {
+        "all": {
+          "episodes": 481,
+          "stopped": 311,
+          "share": 0.6465696465696466
+        },
+        "byLevel": {
+          "hard": {
+            "episodes": 279,
+            "stopped": 148,
+            "share": 0.5304659498207885
+          },
+          "medium": {
+            "episodes": 135,
+            "stopped": 105,
+            "share": 0.7777777777777778
+          },
+          "easy": {
+            "episodes": 67,
+            "stopped": 58,
+            "share": 0.8656716417910447
+          }
+        },
+        "withOtherHard": {
+          "episodes": 202,
+          "stopped": 163,
+          "share": 0.806930693069307
+        },
+        "withoutOtherHard": {
+          "episodes": 279,
+          "stopped": 148,
+          "share": 0.5304659498207885
+        }
+      }
+    },
+    "trio-start-h2h-hard-easy": {
+      "games": 300,
+      "turns": {
+        "mean": 8.823333333333334,
+        "p10": 6,
+        "median": 8,
+        "p90": 13
+      },
+      "winRateByDifficulty": {
+        "hard": {
+          "seats": 450,
+          "wins": 276,
+          "winRate": 0.92,
+          "fairShare": 0.4999999999999996,
+          "winsPerSeat": 0.6133333333333333,
+          "perSeatVsFair": 1.840000000000006
+        },
+        "easy": {
+          "seats": 450,
+          "wins": 24,
+          "winRate": 0.08,
+          "fairShare": 0.4999999999999996,
+          "winsPerSeat": 0.05333333333333334,
+          "perSeatVsFair": 0.16000000000000056
+        }
+      },
+      "economyByDifficulty": {
+        "hard": {
+          "seats": 450,
+          "meanCells": 18.301904102070765,
+          "cellsAtTurn5": 20.697777777777777,
+          "cellsAtEnd": 31.448888888888888,
+          "largestRegionAtEnd": 25.515555555555554,
+          "productionRegionsAtEnd": 1.528888888888889,
+          "tokenCellsAtEnd": 14.353333333333333,
+          "meanPowerCenters": 3.0351968463635126,
+          "powerCentersAtTurn3": 1.5555555555555556,
+          "powerCentersAtTurn5": 3.7311111111111113,
+          "buildsPerGame": 6.544444444444444,
+          "shipsBuiltPerGame": 12.164444444444445,
+          "tokensSpentPerGame": 76.06,
+          "tokensSpentPerTurn": 8.197211745045088,
+          "budgetZeroShare": 0.33429649979649967,
+          "starvedShare": 0.33429649979649967,
+          "meanFaceUpValue": 8.443002497502498,
+          "meanStrandedValue": 3.202731940898607,
+          "shipsAtEnd": 10.686666666666667
+        },
+        "easy": {
+          "seats": 450,
+          "meanCells": 16.40318834868836,
+          "cellsAtTurn5": 18.715555555555557,
+          "cellsAtEnd": 27.866666666666667,
+          "largestRegionAtEnd": 22.515555555555554,
+          "productionRegionsAtEnd": 1.5377777777777777,
+          "tokenCellsAtEnd": 14.884444444444444,
+          "meanPowerCenters": 2.16376670243337,
+          "powerCentersAtTurn3": 2.4444444444444446,
+          "powerCentersAtTurn5": 2.5244444444444443,
+          "buildsPerGame": 8.411111111111111,
+          "shipsBuiltPerGame": 11.462222222222222,
+          "tokensSpentPerGame": 77.16666666666667,
+          "tokensSpentPerTurn": 9.17666852283519,
+          "budgetZeroShare": 0.07640695107361778,
+          "starvedShare": 0.07640695107361778,
+          "meanFaceUpValue": 12.897415757082422,
+          "meanStrandedValue": 6.461240401573733,
+          "shipsAtEnd": 11.664444444444445
+        }
+      },
+      "nearWins": {
+        "all": {
+          "episodes": 449,
+          "stopped": 297,
+          "share": 0.6614699331848553
+        },
+        "byLevel": {
+          "hard": {
+            "episodes": 366,
+            "stopped": 221,
+            "share": 0.6038251366120219
+          },
+          "easy": {
+            "episodes": 83,
+            "stopped": 76,
+            "share": 0.9156626506024096
+          }
+        },
+        "withOtherHard": {
+          "episodes": 340,
+          "stopped": 259,
+          "share": 0.7617647058823529
+        },
+        "withoutOtherHard": {
+          "episodes": 109,
+          "stopped": 38,
+          "share": 0.3486238532110092
+        }
+      }
+    },
+    "trio-start-h2h-hard-medium": {
+      "games": 300,
+      "turns": {
+        "mean": 10.16,
+        "p10": 6,
+        "median": 10,
+        "p90": 15
+      },
+      "winRateByDifficulty": {
+        "hard": {
+          "seats": 450,
+          "wins": 225,
+          "winRate": 0.75,
+          "fairShare": 0.4999999999999996,
+          "winsPerSeat": 0.5,
+          "perSeatVsFair": 1.500000000000005
+        },
+        "medium": {
+          "seats": 450,
+          "wins": 75,
+          "winRate": 0.25,
+          "fairShare": 0.4999999999999996,
+          "winsPerSeat": 0.16666666666666666,
+          "perSeatVsFair": 0.5000000000000017
+        }
+      },
+      "economyByDifficulty": {
+        "hard": {
+          "seats": 450,
+          "meanCells": 20.10969807353139,
+          "cellsAtTurn5": 19.90888888888889,
+          "cellsAtEnd": 33.76444444444444,
+          "largestRegionAtEnd": 28.622222222222224,
+          "productionRegionsAtEnd": 1.431111111111111,
+          "tokenCellsAtEnd": 15.122222222222222,
+          "meanPowerCenters": 3.000621360121359,
+          "powerCentersAtTurn3": 2.3155555555555556,
+          "powerCentersAtTurn5": 3.2688888888888887,
+          "buildsPerGame": 7.768888888888889,
+          "shipsBuiltPerGame": 14.075555555555555,
+          "tokensSpentPerGame": 90.26,
+          "tokensSpentPerTurn": 8.654378972878977,
+          "budgetZeroShare": 0.2653608120274787,
+          "starvedShare": 0.2653608120274787,
+          "meanFaceUpValue": 7.348836484503142,
+          "meanStrandedValue": 2.9160988394321716,
+          "shipsAtEnd": 9.024444444444445
+        },
+        "medium": {
+          "seats": 450,
+          "meanCells": 18.39382804232804,
+          "cellsAtTurn5": 19.686666666666667,
+          "cellsAtEnd": 30.655555555555555,
+          "largestRegionAtEnd": 26.813333333333333,
+          "productionRegionsAtEnd": 1.3622222222222222,
+          "tokenCellsAtEnd": 14.428888888888888,
+          "meanPowerCenters": 2.430710394543726,
+          "powerCentersAtTurn3": 1.6844444444444444,
+          "powerCentersAtTurn5": 3.0844444444444443,
+          "buildsPerGame": 6.831111111111111,
+          "shipsBuiltPerGame": 15.195555555555556,
+          "tokensSpentPerGame": 97.2088888888889,
+          "tokensSpentPerTurn": 9.658897651730983,
+          "budgetZeroShare": 0.15845440362107044,
+          "starvedShare": 0.15808403325070008,
+          "meanFaceUpValue": 11.138218812052148,
+          "meanStrandedValue": 2.8708121693121704,
+          "shipsAtEnd": 8.555555555555555
+        }
+      },
+      "nearWins": {
+        "all": {
+          "episodes": 582,
+          "stopped": 414,
+          "share": 0.711340206185567
+        },
+        "byLevel": {
+          "medium": {
+            "episodes": 190,
+            "stopped": 151,
+            "share": 0.7947368421052632
+          },
+          "hard": {
+            "episodes": 392,
+            "stopped": 263,
+            "share": 0.6709183673469388
+          }
+        },
+        "withOtherHard": {
+          "episodes": 454,
+          "stopped": 346,
+          "share": 0.762114537444934
+        },
+        "withoutOtherHard": {
+          "episodes": 128,
+          "stopped": 68,
+          "share": 0.53125
+        }
+      }
+    },
+    "trio-start-h2h-medium-easy": {
+      "games": 300,
+      "turns": {
+        "mean": 8.48,
+        "p10": 5,
+        "median": 8,
+        "p90": 13
+      },
+      "winRateByDifficulty": {
+        "medium": {
+          "seats": 450,
+          "wins": 222,
+          "winRate": 0.74,
+          "fairShare": 0.4999999999999996,
+          "winsPerSeat": 0.49333333333333335,
+          "perSeatVsFair": 1.480000000000005
+        },
+        "easy": {
+          "seats": 450,
+          "wins": 78,
+          "winRate": 0.26,
+          "fairShare": 0.4999999999999996,
+          "winsPerSeat": 0.17333333333333334,
+          "perSeatVsFair": 0.5200000000000018
+        }
+      },
+      "economyByDifficulty": {
+        "medium": {
+          "seats": 450,
+          "meanCells": 17.25484398934398,
+          "cellsAtTurn5": 20.835555555555555,
+          "cellsAtEnd": 29.513333333333332,
+          "largestRegionAtEnd": 23.413333333333334,
+          "productionRegionsAtEnd": 1.6333333333333333,
+          "tokenCellsAtEnd": 14.297777777777778,
+          "meanPowerCenters": 2.8998813902147207,
+          "powerCentersAtTurn3": 1.9066666666666667,
+          "powerCentersAtTurn5": 4.0311111111111115,
+          "buildsPerGame": 5.326666666666667,
+          "shipsBuiltPerGame": 12.173333333333334,
+          "tokensSpentPerGame": 73.13111111111111,
+          "tokensSpentPerTurn": 8.255276223776214,
+          "budgetZeroShare": 0.29924631541298247,
+          "starvedShare": 0.2948357815024485,
+          "meanFaceUpValue": 12.41335865369198,
+          "meanStrandedValue": 3.141485656318991,
+          "shipsAtEnd": 9.566666666666666
+        },
+        "easy": {
+          "seats": 450,
+          "meanCells": 15.771176181842852,
+          "cellsAtTurn5": 17.586666666666666,
+          "cellsAtEnd": 27.033333333333335,
+          "largestRegionAtEnd": 21.657777777777778,
+          "productionRegionsAtEnd": 1.451111111111111,
+          "tokenCellsAtEnd": 14.231111111111112,
+          "meanPowerCenters": 2.1561459281459285,
+          "powerCentersAtTurn3": 2.0933333333333333,
+          "powerCentersAtTurn5": 2.422222222222222,
+          "buildsPerGame": 8.097777777777777,
+          "shipsBuiltPerGame": 11.026666666666667,
+          "tokensSpentPerGame": 75.84222222222222,
+          "tokensSpentPerTurn": 9.116877869044533,
+          "budgetZeroShare": 0.09751134051134061,
+          "starvedShare": 0.09751134051134061,
+          "meanFaceUpValue": 12.584658397158409,
+          "meanStrandedValue": 6.323917403584067,
+          "shipsAtEnd": 11.246666666666666
+        }
+      },
+      "nearWins": {
+        "all": {
+          "episodes": 458,
+          "stopped": 339,
+          "share": 0.740174672489083
+        },
+        "byLevel": {
+          "medium": {
+            "episodes": 314,
+            "stopped": 227,
+            "share": 0.7229299363057324
+          },
+          "easy": {
+            "episodes": 144,
+            "stopped": 112,
+            "share": 0.7777777777777778
+          }
+        },
+        "withOtherHard": {
+          "episodes": 0,
+          "stopped": 0,
+          "share": 0
+        },
+        "withoutOtherHard": {
+          "episodes": 458,
+          "stopped": 339,
+          "share": 0.740174672489083
+        }
+      }
+    }
+  }
+}
