@@ -9,13 +9,22 @@
 
 import {
   buildCombatPreviewFromPending,
+  createBotMemory,
   planGreedyBotAction,
+  type BotDifficulty,
+  type BotMemory,
   type MarkerAttempts,
   type PlannedBotAction,
 } from '@galaxy/rules'
 import { roomBotIds } from './bot-tick.js'
 import { debugLog } from './debug-log.js'
 import type { Room } from './room.js'
+
+/**
+ * Сложность нового бота, если хозяин не выбрал другую. «Средний» — адаптируется, но не
+ * душит: лёгкий слишком прост для игрока, знающего правила, сложный — для новичка.
+ */
+export const DEFAULT_LOBBY_BOT_DIFFICULTY: BotDifficulty = 'medium'
 
 /** Имена ботов — по порядку мест в лобби. */
 export const LOBBY_BOT_NAMES = ['Бот Альфа', 'Бот Бета', 'Бот Гамма', 'Бот Дельта', 'Бот Эпсилон']
@@ -47,6 +56,8 @@ const MAX_REJECTS = 3
 interface LobbyBotRuntime {
   turn: number
   attempts: MarkerAttempts
+  /** Память ботов комнаты: план сложного бота живёт между его ходами. */
+  memory: BotMemory
   nextAt: number
   /** Ревизия партии, при которой бот последний раз смотрел на неё. */
   revision: number
@@ -67,6 +78,7 @@ function runtimeOf(room: Room, now: number): LobbyBotRuntime {
     runtime = {
       turn: room.state.turnNumber,
       attempts: new Map(),
+      memory: createBotMemory(),
       nextAt: 0,
       revision: room.observationRevision,
       since: now,
@@ -144,7 +156,12 @@ export function stepLobbyBots(room: Room, apply: ApplyBotAction, now = Date.now(
   let planned: PlannedBotAction | null = null
   if (!runtime.idle && runtime.rejects < MAX_REJECTS) {
     try {
-      planned = planGreedyBotAction(room.state, room.map, bots, runtime.attempts)
+      planned = planGreedyBotAction(room.state, room.map, bots, runtime.attempts, {
+        memory: runtime.memory,
+        difficultyByPlayer: Object.fromEntries(
+          [...bots].map((id) => [id, room.botDifficulty?.[id] ?? DEFAULT_LOBBY_BOT_DIFFICULTY]),
+        ),
+      })
     } catch (error) {
       debugLog('lobby-bot.plan-error', { roomId: room.id, error: String(error) })
     }

@@ -4,26 +4,30 @@
  *
  *   pnpm balance --map duel --games 200
  *   pnpm balance --map duel,maltese-cross-4 --games 100 --out harness/balance/baselines
+ *   pnpm balance --map reference-duel --games 80 --difficulty hard
+ *   pnpm balance --map reference-duel --games 80 --mix "player-1=hard,player-2=easy" --rotate
+ *   pnpm balance --map reference-six-13 --games 80 --h2h hard,easy
+ *   pnpm balance --map @4+ --games 150 --seed 41 --solo hard      # одно место сложного среди средних
+ *
+ * `--map` понимает выборки каталога `maps/bundled/manifest.json`: `@published`, `@4+`, `@4`.
  *
  * Пишет JSON со сводкой и печатает её человекочитаемо. Базовые замеры снимаются до любой
  * правки правил: без них все последующие числа — угадайка.
  */
 
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
-import type { DoctrineId } from '../../packages/rules/src/index.js'
-import { dirname, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { writeFileSync, mkdirSync } from 'node:fs'
+import type { BotDifficulty, DoctrineId } from '../../packages/rules/src/index.js'
+import { resolve } from 'node:path'
 
-import { DOCTRINES, normalizeMapDefinition } from '../../packages/rules/src/index.js'
-import type { MapDefinition } from '../../packages/rules/src/index.js'
-import { DEFAULT_RUN_OPTIONS, runGame } from './bot.js'
+import { BOT_DIFFICULTIES } from '../../packages/rules/src/index.js'
+import { DEFAULT_RUN_OPTIONS, runGame, seatIdsOf } from './bot.js'
 import type { RunOptions } from './bot.js'
-import { summarize } from './metrics.js'
+import { loadMap, REPO_ROOT, resolveMapNames } from './maps.js'
+import { summarize, BEHAVIOR_LABELS } from './metrics.js'
 import type { GameRecord, Summary } from './metrics.js'
 import { mixSeed } from './rng.js'
-
-const HERE = dirname(fileURLToPath(import.meta.url))
-const REPO_ROOT = resolve(HERE, '../..')
+import { parseSeating, seatDifficultyFor, type SeatingPlan } from './seating.js'
+import { applyBotTuning, applyDoctrineTuning } from './tuning.js'
 
 interface Args {
   maps: string[]
@@ -32,6 +36,7 @@ interface Args {
   options: RunOptions
   out: string | null
   label: string | null
+  seating: SeatingPlan
 }
 
 function parseArgs(argv: readonly string[]): Args {
@@ -51,7 +56,7 @@ function parseArgs(argv: readonly string[]): Args {
   }
 
   return {
-    maps: (flags.get('map') ?? 'duel').split(',').map((s) => s.trim()).filter(Boolean),
+    maps: resolveMapNames(flags.get('map') ?? 'duel'),
     games: Math.max(1, Math.floor(number('games', 50))),
     seed: Math.floor(number('seed', 1)),
     options: {
@@ -76,24 +81,8 @@ function parseArgs(argv: readonly string[]): Args {
     },
     out: flags.get('out') ?? null,
     label: flags.get('label') ?? null,
+    seating: parseSeating(flags),
   }
-}
-
-function loadMap(name: string): MapDefinition {
-  const candidates = [
-    resolve(HERE, 'maps', `${name}.json`),
-    resolve(REPO_ROOT, 'maps/bundled', `${name}.json`),
-    resolve(REPO_ROOT, 'maps', `${name}.json`),
-    resolve(process.cwd(), name),
-  ]
-  for (const path of candidates) {
-    try {
-      return normalizeMapDefinition(JSON.parse(readFileSync(path, 'utf8')))
-    } catch {
-      continue
-    }
-  }
-  throw new Error(`Карта не найдена: ${name} (искал в harness/balance/maps, maps/bundled, maps и по прямому пути)`)
 }
 
 function percent(value: number | null | undefined): string {
@@ -191,8 +180,67 @@ function report(mapId: string, summary: Summary, records: readonly GameRecord[])
           .join(', '),
     )
   }
+  const paths = Object.entries(summary.winPaths ?? {})
+  if (paths.length) {
+    lines.push('Победы по порогу: ' + paths
+      .map(([level, item]) => `${level} — ${item.wins}, из них с порога ${item.fromBrink}, рывком ${item.surge}`)
+      .join('; '))
+  }
   lines.push('Исходы: ' + (Object.entries(summary.victoryReasons)
     .map(([reason, n]) => `${reason} ${n}`).join(', ') || '—'))
+  const levels = Object.entries(summary.winRateByDifficulty)
+  if (levels.length > 1 || levels.some(([level]) => level !== 'easy')) {
+    lines.push('Победы по уровням ботов: ' + levels
+      .sort((a, b) => BOT_DIFFICULTIES.indexOf(a[0] as BotDifficulty) - BOT_DIFFICULTIES.indexOf(b[0] as BotDifficulty))
+      .map(([level, result]) =>
+        `${level} ${percent(result.winRate)} (${result.wins} из ${result.decided} партий с его участием, `
+          + `при равной силе ${percent(result.fairShare)}; на место ${percent(result.winsPerSeat)}, `
+          + `к справедливой ×${num(result.perSeatVsFair)})`)
+      .join(', '))
+  }
+  const economy = Object.entries(summary.economyByDifficulty)
+  if (economy.length > 1 || economy.some(([level]) => level !== 'easy')) {
+    lines.push('Экономика по уровням (среднее на место):')
+    for (const [level, item] of economy.sort((a, b) =>
+      BOT_DIFFICULTIES.indexOf(a[0] as BotDifficulty) - BOT_DIFFICULTIES.indexOf(b[0] as BotDifficulty))) {
+      lines.push(
+        `- ${level}: клеток ${num(item.meanCells, 1)} по ходу (ход 5 — ${num(item.cellsAtTurn5, 1)}, конец — ${num(item.cellsAtEnd, 1)}), `
+          + `наибольший регион ${num(item.largestRegionAtEnd, 1)}, регионов от 3 клеток ${num(item.productionRegionsAtEnd, 1)}, `
+          + `клеток с фишками ${num(item.tokenCellsAtEnd, 1)}; центров ${num(item.meanPowerCenters, 2)} по ходу `
+          + `(ход 3 — ${num(item.powerCentersAtTurn3, 2)}, ход 5 — ${num(item.powerCentersAtTurn5, 2)}); `
+          + `построек ${num(item.buildsPerGame, 1)}, кораблей построено ${num(item.shipsBuiltPerGame, 1)}, `
+          + `номинал ${num(item.tokensSpentPerGame, 1)} (${num(item.tokensSpentPerTurn, 2)} за ход); `
+          + `бюджет перезарядки 0 — ${percent(item.budgetZeroShare)} ходов, из них с фишками лицом вниз — ${percent(item.starvedShare)}; `
+          + `деньги лицом вверх ${num(item.meanFaceUpValue, 1)} (в мелких регионах ${num(item.meanStrandedValue, 1)}); кораблей в конце ${num(item.shipsAtEnd, 1)}`,
+      )
+    }
+  }
+  const behavior = Object.entries(summary.behaviorByDifficulty)
+  if (behavior.length > 1 || behavior.some(([level]) => level !== 'easy')) {
+    lines.push('Поведение по уровням (на место за партию; открытые центры — за ход):')
+    for (const [level, item] of behavior.sort((a, b) =>
+      BOT_DIFFICULTIES.indexOf(a[0] as BotDifficulty) - BOT_DIFFICULTIES.indexOf(b[0] as BotDifficulty))) {
+      lines.push(`- ${level}: ` + BEHAVIOR_LABELS
+        .map(([key, label, digits]) => `${label} ${num(item[key], digits)}`)
+        .join(', '))
+    }
+  }
+  const near = summary.nearWins
+  if (near.all.episodes > 0) {
+    const part = (item: { episodes: number; stopped: number; share: number; otherWon: number }) =>
+      `${percent(item.share)} (${item.stopped} из ${item.episodes}; из них раньше победил другой — ${item.otherWon})`
+    lines.push(
+      `Почти победителя остановили: ${part(near.all)}; `
+        + Object.entries(near.byLevel).map(([level, item]) => `он ${level} — ${part(item)}`).join(', ')
+        + `; в партии есть другой высокий — ${part(near.withOtherHard)}, нет — ${part(near.withoutOtherHard)}`,
+    )
+  }
+  if (summary.bot.errors || summary.bot.planRejects) {
+    lines.push(
+      `Сбои оценки бота: ${summary.bot.errors}, отказы движка в плане: ${summary.bot.planRejects}`
+        + (summary.bot.samples.length ? ` — ${summary.bot.samples.join(' | ')}` : ''),
+    )
+  }
 
   const errors = records.filter((r) => r.error)
   if (errors.length) {
@@ -203,41 +251,22 @@ function report(mapId: string, summary: Summary, records: readonly GameRecord[])
   return lines.join('\n')
 }
 
-/**
- * Подбор чисел доктрин без правки правил: `--tune maneuvers.claimLimit=-2,attack.claimLimit=-1`.
- * Меняет таблицу только в этом процессе.
- */
-function applyDoctrineTuning(raw: string | undefined): void {
-  if (!raw) return
-  for (const entry of raw.split(',').map((part) => part.trim()).filter(Boolean)) {
-    // Значение — число, true/false или список классов через «|».
-    const match = entry.match(/^(\w+)\.(\w+)=([\w|-]+)$/)
-    const doctrine = match && DOCTRINES.find((candidate) => candidate.id === match[1])
-    if (!match || !doctrine) throw new Error(`Не понял настройку доктрины: ${entry}`)
-    const raw = match[3]!
-    const value = raw === 'true'
-      ? true
-      : raw === 'false'
-        ? false
-        : /^-?\d+$/.test(raw)
-          ? Number(raw)
-          : raw.split('|')
-    ;(doctrine as unknown as Record<string, unknown>)[match[2]!] = value
-  }
-}
-
 function main(): void {
   const tuneIndex = process.argv.indexOf('--tune')
   applyDoctrineTuning(tuneIndex > 0 ? process.argv[tuneIndex + 1] : undefined)
+  const botTuneIndex = process.argv.indexOf('--botTune')
+  applyBotTuning(botTuneIndex > 0 ? process.argv[botTuneIndex + 1] : undefined)
   const args = parseArgs(process.argv.slice(2))
   const blocks: string[] = []
   const payload: Record<string, { summary: Summary; records: GameRecord[] }> = {}
 
   for (const name of args.maps) {
     const map = loadMap(name)
+    const seats = seatIdsOf(map)
     const records: GameRecord[] = []
     for (let i = 0; i < args.games; i += 1) {
-      records.push(runGame(map, mixSeed(args.seed + i, map.id), args.options))
+      const seatDifficulty = seatDifficultyFor(args.seating, seats, i)
+      records.push(runGame(map, mixSeed(args.seed + i, map.id), { ...args.options, seatDifficulty }))
     }
     const summary = summarize(records)
     payload[map.id] = { summary, records }
@@ -258,7 +287,7 @@ function main(): void {
     )
     writeFileSync(
       resolve(dir, `${stamp}.json`),
-      `${JSON.stringify({ label: stamp, seed: args.seed, games: args.games, options: args.options, summaries }, null, 2)}\n`,
+      `${JSON.stringify({ label: stamp, seed: args.seed, games: args.games, options: args.options, seating: args.seating, summaries }, null, 2)}\n`,
       'utf8',
     )
     writeFileSync(resolve(dir, `${stamp}.md`), `${text}\n`, 'utf8')

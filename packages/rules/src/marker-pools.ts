@@ -92,7 +92,8 @@ export function trimExcessActionMarkers(game: GameSnapshot): void {
   game.actionMarkers = game.actionMarkers.filter((marker) => !removeIds.has(marker.id))
   for (const cell of game.cells) {
     if (cell.actionMarkerId && removeIds.has(cell.actionMarkerId)) {
-      cell.actionMarkerId = null
+      cell.actionMarkerId =
+        game.actionMarkers.find((m) => m.coord.q === cell.coord.q && m.coord.r === cell.coord.r)?.id ?? null
     }
   }
 }

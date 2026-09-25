@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import type { GalaxySaveFile, GameSnapshot, HexCoord, LegalAction, MapDefinition, ScenarioHighlight, ScenarioStep, ShipMovePlan, BombardmentPlan, CombatOptions, CombatResolutionResult, TokenSpendRef } from '@galaxy/rules'
+import type { BotDifficulty, GalaxySaveFile, GameSnapshot, HexCoord, LegalAction, MapDefinition, ScenarioHighlight, ScenarioStep, ShipMovePlan, BombardmentPlan, CombatOptions, CombatResolutionResult, TokenSpendRef } from '@galaxy/rules'
 import {
+  actionMarkerOf,
   createEmptyMap,
   GALAXY_SAVE_VERSION,
   executeMarkerBombardment,
@@ -49,10 +50,12 @@ import {
   combatResolutionFingerprint,
   combatResolutionFromPending,
   computeRechargeBudget,
+  countFaceDownTokens,
+  explainRechargeBudget,
   formatRechargeBudgetHint,
   getCombatRetreatDestinations,
 } from '@galaxy/rules'
-import { advanceScenarioStep, fetchObservation, fetchRoomBootstrap, GameApiError, joinRoom, rejoinRoom, startRoom, closeRoom, addRoomBot, removeRoomBot, markCombatResultSeen, submitGameAction, updateCombatPrepAction } from '~/composables/useGameApi'
+import { advanceScenarioStep, fetchObservation, fetchRoomBootstrap, GameApiError, joinRoom, rejoinRoom, startRoom, closeRoom, addRoomBot, removeRoomBot, setRoomBotDifficulty, markCombatResultSeen, submitGameAction, updateCombatPrepAction } from '~/composables/useGameApi'
 import { loadGameSessionForRoom, saveGameSession, persistLocalGalaxySave, clearLocalGalaxySave, loadLocalGalaxySaveRaw, pruneOnlineGalaxySaveCache } from '~/composables/useGameSession'
 import { loadPlayerClaim, savePlayerClaim } from '~/composables/usePlayerClaim'
 import { bootstrapToLobbySlots, defaultSlotForRoom, roomHasFreeSlot } from '~/utils/lobby-slot'
@@ -690,15 +693,6 @@ watch(
   { immediate: true },
 )
 
-/** Противник игрока в текущем бою — чьи корабли служат целями. */
-const combatEnemyId = computed(() => {
-  const preview = pendingCombatPreview.value
-  if (!preview) return null
-  const onAttackerSide = preview.attackerId === playerId.value
-    || preview.attacker.supportingShips.some((ship) => ship.ownerId === playerId.value)
-  return onAttackerSide ? preview.defenderId : preview.attackerId
-})
-
 const currentCombatRollsKey = computed(() => combatResultRollsKey(battleResolution.value))
 
 const battleResolutionKey = computed(() =>
@@ -1239,6 +1233,26 @@ const boardCaptureAhead = computed(() => {
   return out
 })
 
+/** Осаждённые клетки: зубчатое кольцо цвета осаждающего и пояснение в подсказке. */
+const boardSiegeMarks = computed(() => {
+  const game = snapshot.value
+  const out: Record<string, { color: string; note: string }> = {}
+  if (!game || game.gameOver) return out
+  for (const [key, siege] of Object.entries(game.sieges ?? {})) {
+    const cell = game.cells.find((candidate) => hexKey(candidate.coord.q, candidate.coord.r) === key)
+    const garrison = cell?.ships.filter((ship) => ship.ownerId === siege.besiegedId).length ?? 0
+    out[key] = {
+      color: playerColorById.value[siege.besiegerId] ?? '#f97316',
+      note: ui.siegeMark.note(
+        playerNameById.value[siege.besiegerId] ?? siege.besiegerId,
+        playerNameById.value[siege.besiegedId] ?? siege.besiegedId,
+        garrison,
+      ),
+    }
+  }
+  return out
+})
+
 function sidePanelPlayerColor(ownerId: string): string {
   return playerColorById.value[ownerId] ?? '#64748b'
 }
@@ -1557,8 +1571,9 @@ const resourceRechargeBanner = computed(() => {
   // бюджета, и бюджет падает с ростом числа центров власти.
   const owed = game.rechargePicksRemainingByPlayer?.[me] ?? 0
   const budget = computeRechargeBudget(game, me)
-  if (owed <= 0 && budget <= 0) return null
-  return formatRechargeBudgetHint(budget, owed)
+  // Нулевой бюджет тоже объясняем: иначе непонятно, почему фишки не переворачиваются.
+  if (owed <= 0 && budget <= 0 && countFaceDownTokens(game, me) === 0) return null
+  return formatRechargeBudgetHint(budget, owed, explainRechargeBudget(game, me))
 })
 
 const {
@@ -1592,10 +1607,7 @@ const canRemoveActionMarkerOnSelected = computed(() => {
   if (!canRemoveActionMarkerThisTurn(saveFile.value.game, playerId.value)) return false
   const key = selectedKey.value
   const cell = saveFile.value.game.cells.find((c) => hexKey(c.coord.q, c.coord.r) === key)
-  if (!cell?.actionMarkerId) return false
-  return saveFile.value.game.actionMarkers.some(
-    (m) => m.id === cell.actionMarkerId && m.ownerId === playerId.value,
-  )
+  return !!cell && !!actionMarkerOf(saveFile.value.game, cell.coord, playerId.value)
 })
 
 const remainingActionMarkersCount = computed(() => actionMarkers.value.length)
@@ -1645,9 +1657,7 @@ const boardInteractiveKeys = computed(() => {
     const key = hexKey(cell.coord.q, cell.coord.r)
     const hasMyShip = cell.ships.some((ship) => ship.ownerId === playerId.value)
     const hasMyPowerCenter = !!cell.isPowerCenter && cell.controlOwnerId === playerId.value
-    const hasMyMarker =
-      !!cell.actionMarkerId &&
-      game.actionMarkers.some((m) => m.id === cell.actionMarkerId && m.ownerId === playerId.value)
+    const hasMyMarker = !!actionMarkerOf(game, cell.coord, playerId.value)
     if (hasMyShip || hasMyPowerCenter || hasMyMarker) keys.push(key)
   }
   return filterTutorialMarkerKeys(keys)
@@ -1731,10 +1741,7 @@ function hasMyActionMarkerAt(q: number, r: number): boolean {
   if (!snapshot.value) return false
   const key = hexKey(q, r)
   const cell = snapshot.value.cells.find((c) => hexKey(c.coord.q, c.coord.r) === key)
-  if (!cell?.actionMarkerId) return false
-  return snapshot.value.actionMarkers.some(
-    (m) => m.id === cell.actionMarkerId && m.ownerId === playerId.value,
-  )
+  return !!cell && !!actionMarkerOf(snapshot.value, cell.coord, playerId.value)
 }
 
 const canSurrender = computed(() => {
@@ -2257,7 +2264,8 @@ async function confirmMarkerBuild(
   const cell = saveFile.value.game.cells.find(
     (c) => c.coord.q === from.q && c.coord.r === from.r,
   )
-  const markerId = cell?.actionMarkerId
+  // На осаждённой клетке маркеров два — берём свой.
+  const markerId = cell ? actionMarkerOf(saveFile.value.game, cell.coord, playerId.value)?.id : undefined
   if (!markerId) {
     markerActionHint.value = 'На клетке нет маркера действия'
     return
@@ -2596,6 +2604,20 @@ async function startLobbyGame() {
   }
 }
 
+async function changeLobbyBotDifficulty(slotId: string, difficulty: BotDifficulty) {
+  if (!isLobbyHost.value || joinBusy.value) return
+  joinBusy.value = true
+  joinError.value = null
+  try {
+    await setRoomBotDifficulty(roomId.value, playerId.value, slotId, difficulty)
+    await refreshJoinLobby()
+  } catch (e) {
+    joinError.value = e instanceof Error ? e.message : 'Не удалось изменить сложность бота'
+  } finally {
+    joinBusy.value = false
+  }
+}
+
 async function changeLobbyBot(slotId: string, change: 'add' | 'remove') {
   if (!isLobbyHost.value || joinBusy.value) return
   joinBusy.value = true
@@ -2895,10 +2917,7 @@ async function toggleMarkerOnCell(q: number, r: number) {
 function wouldRemoveMyActionMarkerAt(game: GameSnapshot, q: number, r: number): boolean {
   const key = hexKey(q, r)
   const cell = game.cells.find((c) => hexKey(c.coord.q, c.coord.r) === key)
-  if (!cell?.actionMarkerId) return false
-  return game.actionMarkers.some(
-    (m) => m.id === cell.actionMarkerId && m.ownerId === playerId.value,
-  )
+  return !!cell && !!actionMarkerOf(game, cell.coord, playerId.value)
 }
 
 function confirmRemoveActionMarker(): boolean {
@@ -2911,12 +2930,13 @@ function removeMarkerAtSourceFromModal() {
   if (!saveFile.value?.game || !markerActionSource.value) return
   const key = hexKey(markerActionSource.value.q, markerActionSource.value.r)
   const cell = saveFile.value.game.cells.find((c) => hexKey(c.coord.q, c.coord.r) === key)
-  if (!cell?.actionMarkerId) return
+  const myMarkerId = cell ? actionMarkerOf(saveFile.value.game, cell.coord, playerId.value)?.id : undefined
+  if (!myMarkerId) return
 
   if (serverStatus.value === 'online' && !roomId.value.startsWith('local-')) {
     bumpObservationEpoch()
     submitGameAction(roomId.value, playerId.value, 'remove-marker', {
-      markerId: cell.actionMarkerId,
+      markerId: myMarkerId,
       kind: 'action',
     })
       .then((obs) => {
@@ -2933,7 +2953,7 @@ function removeMarkerAtSourceFromModal() {
 
   const errors = removeActionMarker(
     saveFile.value.game,
-    cell.actionMarkerId,
+    myMarkerId,
     playerId.value,
   )
   if (errors.length) {
@@ -2953,12 +2973,13 @@ function removeSelectedActionMarker() {
   const cell = saveFile.value.game.cells.find(
     (c) => hexKey(c.coord.q, c.coord.r) === selectedKey.value,
   )
-  if (!cell?.actionMarkerId) return
+  const myMarkerId = cell ? actionMarkerOf(saveFile.value.game, cell.coord, playerId.value)?.id : undefined
+  if (!myMarkerId) return
 
   if (serverStatus.value === 'online' && !roomId.value.startsWith('local-')) {
     bumpObservationEpoch()
     submitGameAction(roomId.value, playerId.value, 'remove-marker', {
-      markerId: cell.actionMarkerId,
+      markerId: myMarkerId,
       kind: 'action',
     })
       .then((obs) => {
@@ -2974,7 +2995,7 @@ function removeSelectedActionMarker() {
 
   const errors = removeActionMarker(
     saveFile.value.game,
-    cell.actionMarkerId,
+    myMarkerId,
     playerId.value,
   )
   if (errors.length) {
@@ -3113,6 +3134,7 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
           @slot-pick="onLobbySlotPicked"
           @add-bot="changeLobbyBot($event, 'add')"
           @remove-bot="changeLobbyBot($event, 'remove')"
+          @bot-difficulty="changeLobbyBotDifficulty"
         />
       </div>
     </div>
@@ -3155,6 +3177,7 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
         :token-pick-keys="boardTokenPickKeys"
         :token-picked-keys="boardTokenPickedKeys"
         :capture-ahead="boardCaptureAhead"
+        :siege-marks="boardSiegeMarks"
         :players="snapshot?.players ?? []"
         :snapshot="snapshot"
         :map-id="mapDefinition?.id ?? null"
@@ -3287,16 +3310,18 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
           Атакующий продолжил бой — ваш ход как защитника: продолжить или отступить на подсвеченную клетку.
         </template>
       </p>
-      <CombatTargetsPanel
+      <BattleField
         v-if="pendingCombatPreview"
-        v-model="roundTargets"
+        v-model:targets="roundTargets"
         class="map-pick-targets"
         :preview="pendingCombatPreview"
-        :player-id="playerId"
-        :player-color="sidePanelPlayerColor(playerId)"
-        :enemy-color="sidePanelPlayerColor(combatEnemyId ?? '')"
+        :local-player-id="playerId"
+        :player-colors="playerColorById"
+        :player-names="playerNameById"
         :round-number="pendingCombatState.roundNumber"
         :damage-by-ship-id="pendingCombatState.damageByShipId ?? {}"
+        editable
+        show-dice
       />
       <p v-if="combatRetreatAllowed && combatDecisionRole !== 'support'" class="map-pick-text map-pick-text--hint">
         Клетки отступления подсвечены на карте. Можно нажать на клетку или на кнопку ниже;
@@ -4044,10 +4069,14 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
 }
 .map-pick-banner--combat {
   border-color: rgba(248, 113, 113, 0.6);
+  /* Поле боя: флотам нужна ширина, иначе корабли встают по одному в строку. */
+  width: min(96vw, 640px);
+  max-width: min(96vw, 640px);
 }
 .map-pick-banner--combat .map-pick-targets {
+  align-self: stretch;
   margin: 0.4rem 0;
-  max-height: 45vh;
+  max-height: 48vh;
   overflow-y: auto;
 }
 .board-layer {

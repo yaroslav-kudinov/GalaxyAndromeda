@@ -34,7 +34,7 @@ import {
 import { doctrineShotModifier } from './doctrines.js'
 import { hexDistance } from './map.js'
 import { transferControlIfEnemyOwned } from './claim.js'
-import { removeStaleProductionMarkerAt } from './markers.js'
+import { removeStaleProductionMarkerAt, syncCellActionMarkerRef } from './markers.js'
 import { canBesiegeCell, siegeAt } from './siege.js'
 import { canSupportCombatSide, isCombatPrepSideReady, isEliminatedPlayer } from './surrender.js'
 import type { GameSnapshot, RuntimeCellState } from './save-file.js'
@@ -113,7 +113,7 @@ export interface CombatPreview {
   defender: CombatSidePreview
   supportCandidates?: CombatSupportCandidate[]
   /** Перебросы гарнизона осаждённой клетки в этом бою: по одному на его корабль в бою. */
-  siegeRerolls?: { playerId: string; pool: number }
+  siegeRerolls?: { playerId: string; pool: number; shipIds?: string[] }
   notes: string[]
 }
 
@@ -475,6 +475,22 @@ export function isCombatDestination(
   return cell.ships.some((s) => s.ownerId !== attackerId)
 }
 
+/**
+ * Штурм осады: осаждающий уже стоит на клетке вместе с гарнизоном. Вход подкрепления боя не
+ * начинает (isCombatDestination), а маркер на самой клетке — начинает.
+ */
+function isSiegeAssaultCell(
+  game: GameSnapshot,
+  attackerId: string,
+  cell: NonNullable<ReturnType<typeof cellAt>>,
+): boolean {
+  return (
+    siegeAt(game, cell.coord)?.besiegerId === attackerId
+    && cell.ships.some((s) => s.ownerId === attackerId)
+    && cell.ships.some((s) => s.ownerId !== attackerId)
+  )
+}
+
 /** Цель обстрела: любой вражеский корабль или чужой контроль. */
 export function isBombardmentDestination(
   game: GameSnapshot,
@@ -720,7 +736,7 @@ export function buildCombatPreview(
 
   const contested = options.forBombardment
     ? isBombardmentDestination(game, attackerId, coord)
-    : isCombatDestination(game, attackerId, coord)
+    : isCombatDestination(game, attackerId, coord) || isSiegeAssaultCell(game, attackerId, cell)
   if (!contested) return null
 
   const defenderId = inferDefenderId(game, cell, attackerId)
@@ -729,6 +745,11 @@ export function buildCombatPreview(
   const damage = options.damageByShipId ?? {}
   const defenderShips = cell.ships.filter((s) => s.ownerId === defenderId)
   const attackerShips = incomingAttackerShips.filter((s) => s.ownerId === attackerId)
+  // Владелец осаждённого центра снимает осаду подкреплением: гарнизон бьётся вместе с ним.
+  if (siegeAt(game, coord)?.besiegedId === attackerId) {
+    const joined = new Set(attackerShips.map((ship) => ship.id))
+    attackerShips.push(...cell.ships.filter((s) => s.ownerId === attackerId && !joined.has(s.id)))
+  }
   const attackerSupportOverrides = supportPositionOverridesForMovement(
     options.attackerMovementPlans,
     coord,
@@ -792,10 +813,15 @@ export function buildCombatPreview(
   )
 
   // Гарнизон осаждённой клетки перебрасывает промахи — по одному перебросу на корабль в бою.
+  // Перебросы только у кораблей гарнизона: подкрепление, пришедшее снять осаду, их не получает.
   const siege = siegeAt(game, coord)
-  const garrisonInBattle = siege
-    ? [...attackerSide.ships, ...defenderSide.ships].filter((ship) => ship.ownerId === siege.besiegedId).length
-    : 0
+  const garrisonIds = siege
+    ? new Set(cell.ships.filter((ship) => ship.ownerId === siege.besiegedId).map((ship) => ship.id))
+    : new Set<string>()
+  const garrisonShipIds = [...attackerSide.ships, ...defenderSide.ships]
+    .filter((ship) => garrisonIds.has(ship.shipId))
+    .map((ship) => ship.shipId)
+  const garrisonInBattle = garrisonShipIds.length
   const withPool = (side: CombatSidePreview): CombatSidePreview =>
     siege && garrisonInBattle && side.ships.some((ship) => ship.ownerId === siege.besiegedId)
       ? { ...side, rerollPool: garrisonInBattle }
@@ -809,7 +835,9 @@ export function buildCombatPreview(
     defenderId,
     attacker: withPool(attackerSide),
     defender: withPool(defenderSide),
-    ...(siege && garrisonInBattle ? { siegeRerolls: { playerId: siege.besiegedId, pool: garrisonInBattle } } : {}),
+    ...(siege && garrisonInBattle
+      ? { siegeRerolls: { playerId: siege.besiegedId, pool: garrisonInBattle, shipIds: garrisonShipIds } }
+      : {}),
     supportCandidates: [...supportCandidates.entries()].map(([playerId, ships]) => ({
       playerId,
       ships,
@@ -1038,7 +1066,10 @@ export function rollRoundDice(
   let rerolls: CombatRerollPool | null = null
   if (pool && pool.pool > 0) {
     for (const die of dice) {
-      die.rerollable = die.ownerId === pool.playerId && die.distance === 0 && die.targetShipId != null
+      const garrisonDie = pool.shipIds
+        ? pool.shipIds.includes(die.shooterShipId)
+        : die.ownerId === pool.playerId && die.distance === 0
+      die.rerollable = garrisonDie && die.targetShipId != null
     }
     if (dice.some((die) => die.rerollable)) rerolls = { playerId: pool.playerId, left: pool.pool }
   }
@@ -1201,15 +1232,15 @@ export function removeShipsFromSnapshot(game: GameSnapshot, shipIds: readonly st
  */
 export function removeOrphanedActionMarkersAt(game: GameSnapshot, coord: HexCoord): void {
   const cell = cellAt(game, coord)
-  if (!cell?.actionMarkerId) return
-  const marker = game.actionMarkers.find((candidate) => candidate.id === cell.actionMarkerId)
-  if (!marker) {
-    cell.actionMarkerId = null
-    return
-  }
-  if (cell.ships.some((ship) => ship.ownerId === marker.ownerId)) return
-  game.actionMarkers = game.actionMarkers.filter((candidate) => candidate.id !== marker.id)
-  cell.actionMarkerId = null
+  if (!cell) return
+  // На осаждённой клетке маркеров может быть два — у гарнизона и у осаждающего.
+  game.actionMarkers = game.actionMarkers.filter(
+    (marker) =>
+      marker.coord.q !== coord.q
+      || marker.coord.r !== coord.r
+      || cell.ships.some((ship) => ship.ownerId === marker.ownerId),
+  )
+  syncCellActionMarkerRef(game, coord)
 }
 
 function findShipUnit(game: GameSnapshot, shipId: string): (ShipUnit & { cell: RuntimeCellState }) | null {

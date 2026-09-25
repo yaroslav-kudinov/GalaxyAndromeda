@@ -313,8 +313,8 @@ export function getBuildableShipsForMarker(
 
     if (!region) {
       disabledReason = 'Не удалось определить регион этого маркера'
-    } else if (siegeAt(game, marker.coord)?.besiegedId === playerId) {
-      disabledReason = BESIEGED_BUILD_BLOCKED_MSG
+    } else if (buildBlockedAt(game, marker.coord, playerId)) {
+      disabledReason = buildBlockedAt(game, marker.coord, playerId)!
     } else if (fleetRemaining < 1) {
       disabledReason = `Лимит флота: ${fleetMax} ${SHIP_LABELS[type]} (на карте ${fleetCount})`
     } else if (!canBuildShipInRegionSize(type, region.size)) {
@@ -351,6 +351,18 @@ function tokenAt(game: GameSnapshot, ref: TokenSpendRef): ResourceTokenDef | nul
 
 /** Осаждённый не строит в осаждённой клетке: верфь отрезана (ADR 019). */
 export const BESIEGED_BUILD_BLOCKED_MSG = 'Клетка в осаде: строить здесь нельзя'
+export const ENEMY_SHIPS_BUILD_BLOCKED_MSG = 'На клетке чужие корабли: строить здесь нельзя'
+
+/**
+ * Почему на клетке нельзя строить, или null. Верфь под чужими кораблями не работает: иначе
+ * новый корабль появлялся бы на одной клетке с противником без боя.
+ */
+function buildBlockedAt(game: GameSnapshot, coord: HexCoord, playerId: string): string | null {
+  if (siegeAt(game, coord)?.besiegedId === playerId) return BESIEGED_BUILD_BLOCKED_MSG
+  const cell = cellAt(game, coord)
+  if (cell?.ships.some((ship) => ship.ownerId !== playerId)) return ENEMY_SHIPS_BUILD_BLOCKED_MSG
+  return null
+}
 
 function validateMarkerResolutionPreconditions(
   game: GameSnapshot,
@@ -364,13 +376,9 @@ function validateMarkerResolutionPreconditions(
   const marker = findActionMarkerForProduction(game, markerId, playerId)
   if (!marker) return ['На этой клетке больше нет вашего маркера действия']
 
-  const cell = cellAt(game, marker.coord)
-  if (!cell?.actionMarkerId || cell.actionMarkerId !== marker.id) {
-    return ['На клетке нет этого маркера действия']
-  }
-  if (siegeAt(game, marker.coord)?.besiegedId === playerId) {
-    return [BESIEGED_BUILD_BLOCKED_MSG]
-  }
+  if (!cellAt(game, marker.coord)) return ['На клетке нет этого маркера действия']
+  const blocked = buildBlockedAt(game, marker.coord, playerId)
+  if (blocked) return [blocked]
 
   return { marker }
 }

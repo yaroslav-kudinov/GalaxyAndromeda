@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import type { BotDifficulty } from '@galaxy/rules'
+import { BOT_DIFFICULTIES } from '@galaxy/rules'
 import type { LobbyPlayerSlot } from '~/components/LobbyPlayerList.vue'
 import type { RoomBootstrap } from '~/composables/useGameApi'
 import { PLAYER_LABELS, slotFromPlayerId } from '@galaxy/rules'
@@ -29,6 +31,7 @@ const emit = defineEmits<{
   slotPick: [value: string | null]
   addBot: [slotId: string]
   removeBot: [slotId: string]
+  botDifficulty: [slotId: string, difficulty: BotDifficulty]
 }>()
 
 const t = useUiStrings().lobby
@@ -132,6 +135,22 @@ function onSlotUpdate(value: string | null) {
             <span class="bot-seat-label">
               <strong>{{ seatColor(slot.id) }}</strong>
               · {{ slot.joined ? slot.name : t.freeSeat }}
+            </span>
+            <span v-if="slot.joined" class="bot-levels" role="radiogroup" :aria-label="t.botLevelLabel">
+              <button
+                v-for="level in BOT_DIFFICULTIES"
+                :key="level"
+                type="button"
+                role="radio"
+                class="bot-level"
+                :class="{ 'bot-level--on': (slot.botDifficulty ?? 'medium') === level }"
+                :aria-checked="(slot.botDifficulty ?? 'medium') === level"
+                :title="t.botLevelHint[level]"
+                :disabled="busy"
+                @click="emit('botDifficulty', slot.id, level)"
+              >
+                {{ t.botLevel[level] }}
+              </button>
             </span>
             <button
               v-if="slot.joined"
@@ -251,7 +270,7 @@ function onSlotUpdate(value: string | null) {
 }
 .bot-seat {
   display: grid;
-  grid-template-columns: auto 1fr auto;
+  grid-template-columns: auto 1fr auto auto;
   align-items: center;
   gap: 0.5rem;
   padding: 0.35rem 0.5rem;
@@ -276,6 +295,42 @@ function onSlotUpdate(value: string | null) {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.bot-levels {
+  display: inline-flex;
+  border: 1px solid #475569;
+  border-radius: 6px;
+  overflow: hidden;
+}
+.bot-level {
+  padding: 0.25rem 0.45rem;
+  border: none;
+  background: #0f172a;
+  color: #94a3b8;
+  font-size: 0.74rem;
+  cursor: pointer;
+}
+.bot-level + .bot-level {
+  border-left: 1px solid #334155;
+}
+.bot-level--on {
+  background: #1e3a8a;
+  color: #f8fafc;
+  font-weight: 600;
+}
+.bot-level:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+@media (max-width: 520px) {
+  .bot-seat {
+    grid-template-columns: auto 1fr;
+  }
+  .bot-levels,
+  .bot-seat-btn {
+    grid-column: 1 / -1;
+    justify-self: start;
+  }
 }
 .bot-seat-btn {
   padding: 0.3rem 0.6rem;

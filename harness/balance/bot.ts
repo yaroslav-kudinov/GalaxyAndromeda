@@ -21,10 +21,12 @@ import {
   gameSnapshotFromMap,
   claimPicksRemaining,
   computeClaimLimit,
+  computeRechargeBudget,
   getShipProductionRegionMin,
   hexKey,
   rechargePicksRemaining,
   siegeLossesOwedBy,
+  victoryThresholdForSnapshot,
   doctrineChoiceOwed,
   type DoctrineId,
   SHIP_PRODUCTION_COST,
@@ -35,16 +37,23 @@ import type {
   ShipType,
 } from '../../packages/rules/src/index.js'
 import {
+  createBotMemory,
   faceUpValueFor,
   indexCells,
   parseKey,
   pickDoctrine,
+  setBotErrorListener,
+  settleClaimPicks,
+  withBotMemory,
+  settleRechargePicks,
   stepActions,
   stepCombat,
   tryPlaceMarker,
+  type BotDifficulty,
   type MarkerAttempts,
   type SpendTally,
 } from '../../packages/rules/src/index.js'
+import { createBehaviorTracker } from './behavior.js'
 import type { BattleRecord, GameRecord, PlayerSample, TurnSample } from './metrics.js'
 import { withSeededRandom } from './rng.js'
 
@@ -81,6 +90,12 @@ export interface RunOptions {
    * иначе: выдаём фору и смотрим, растёт она или тает.
    */
   handicapCells: number
+  /**
+   * Сложность бота на каждом месте этой партии (`player-1` → `hard`). Не указано — лёгкий
+   * уровень, прежний жадный бот. Замер «лоб в лоб» задаёт места по-разному от партии к партии,
+   * чтобы преимущество места взаимно гасилось.
+   */
+  seatDifficulty?: Readonly<Record<string, BotDifficulty>>
 }
 
 export const DEFAULT_RUN_OPTIONS: RunOptions = {
@@ -106,27 +121,37 @@ const NEIGHBOUR_OFFSETS = [
  * (`SHIP_PRODUCTION_REGION_MIN`). Считаем сами, чтобы не строить полный spatial summary.
  */
 function largestRegionSize(game: GameSnapshot, playerId: string): number {
+  return Math.max(0, ...regionSizes(game, playerId))
+}
+
+/** Размеры всех связных регионов игрока. */
+function regionSizes(game: GameSnapshot, playerId: string): number[] {
+  return regionsOf(game, playerId).map((region) => region.length)
+}
+
+/** Связные регионы игрока — списки ключей клеток. */
+function regionsOf(game: GameSnapshot, playerId: string): string[][] {
   const own = new Set<string>()
   for (const cell of game.cells) {
     if (cell.controlOwnerId === playerId) own.add(hexKey(cell.coord.q, cell.coord.r))
   }
   const seen = new Set<string>()
-  let largest = 0
+  const regions: string[][] = []
   for (const start of own) {
     if (seen.has(start)) continue
-    let size = 0
+    const region: string[] = []
     const stack = [start]
     while (stack.length) {
       const key = stack.pop()!
       if (seen.has(key) || !own.has(key)) continue
       seen.add(key)
-      size += 1
+      region.push(key)
       const { q, r } = parseKey(key)
       for (const [dq, dr] of NEIGHBOUR_OFFSETS) stack.push(hexKey(q + dq, r + dr))
     }
-    if (size > largest) largest = size
+    regions.push(region)
   }
-  return largest
+  return regions
 }
 
 /**
@@ -164,6 +189,18 @@ function applyHandicap(game: GameSnapshot, playerId: string, cells: number): voi
   }
 }
 
+/** Места карты, на которых есть стартовая позиция, — по порядку игроков в карте. */
+export function seatIdsOf(map: MapDefinition): string[] {
+  const game = gameSnapshotFromMap(map)
+  return game.players
+    .filter((player) =>
+      game.cells.some(
+        (cell) => cell.controlOwnerId === player.id || cell.ships.some((ship) => ship.ownerId === player.id),
+      ),
+    )
+    .map((player) => player.id)
+}
+
 function controlledCells(game: GameSnapshot, playerId: string): number {
   return game.cells.filter((cell) => cell.controlOwnerId === playerId).length
 }
@@ -185,6 +222,23 @@ function sampleTurn(
   for (const playerId of playerIds) {
     const powerCenters = countControlledPowerCenters(game, playerId)
     const cells = controlledCells(game, playerId)
+    const regionList = regionsOf(game, playerId)
+    const regions = regionList.map((region) => region.length)
+    const index = indexCells(game)
+    let stranded = 0
+    for (const region of regionList) {
+      if (region.length >= getShipProductionRegionMin('destroyer')) continue
+      for (const key of region) {
+        for (const token of index.get(key)?.resourceTokens ?? []) if (token.faceUp !== false) stranded += token.value
+      }
+    }
+    let faceDown = 0
+    let tokenCells = 0
+    for (const cell of game.cells) {
+      if (cell.controlOwnerId !== playerId || cell.resourceTokens.length === 0) continue
+      tokenCells += 1
+      for (const token of cell.resourceTokens) if (token.faceUp === false) faceDown += 1
+    }
     byPlayer[playerId] = {
       powerCenters,
       cells,
@@ -192,6 +246,12 @@ function sampleTurn(
       faceUpValue: faceUpValueFor(game, playerId),
       claimLimit: computeClaimLimit(game, playerId),
       claimsMade: Math.max(0, cells - (previousCells[playerId] ?? cells)),
+      largestRegion: Math.max(0, ...regions),
+      productionRegions: regions.filter((size) => size >= getShipProductionRegionMin('destroyer')).length,
+      rechargeBudget: computeRechargeBudget(game, playerId),
+      faceDownTokens: faceDown,
+      tokenCells,
+      strandedValue: stranded,
     }
   }
   return { turn, byPlayer }
@@ -281,6 +341,29 @@ function finishBattle(game: GameSnapshot, watch: BattleWatch): BattleRecord {
 }
 
 export function runGame(map: MapDefinition, seed: number, options: RunOptions): GameRecord {
+  const botIssues = { errors: 0, rejects: 0, samples: [] as string[] }
+  // Сбой оценки бот заменяет решением простого бота — партия идёт дальше, но замер это видит.
+  setBotErrorListener((error, where) => {
+    if (where.startsWith('plan-')) botIssues.rejects += 1
+    else botIssues.errors += 1
+    if (botIssues.samples.length < 3) {
+      botIssues.samples.push(`${where}: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  })
+  try {
+    // Память ботов — на партию, как у сервера на комнату: план высокого уровня живёт в ней.
+    const record = withBotMemory(createBotMemory(), () => runGameSeeded(map, seed, options))
+    record.botErrors = botIssues.errors
+    record.botPlanRejects = botIssues.rejects
+    if (botIssues.samples.length) record.botIssueSamples = botIssues.samples
+    return record
+  } finally {
+    setBotErrorListener(null)
+  }
+}
+
+function runGameSeeded(map: MapDefinition, seed: number, options: RunOptions): GameRecord {
+  const difficultyOf = (playerId: string): BotDifficulty => options.seatDifficulty?.[playerId] ?? 'easy'
   return withSeededRandom(seed, () => {
     const game = gameSnapshotFromMap(map)
     const playerIds = game.players
@@ -310,6 +393,7 @@ export function runGame(map: MapDefinition, seed: number, options: RunOptions): 
       battles: [],
       sieges: { established: 0, captured: 0, lifted: 0 },
       doctrines: {},
+      seatDifficulty: Object.fromEntries(playerIds.map((id) => [id, difficultyOf(id)])),
     }
 
     if (playerIds.length < 2) {
@@ -338,7 +422,10 @@ export function runGame(map: MapDefinition, seed: number, options: RunOptions): 
           : {}),
     })
 
-    const tally: SpendTally = { tokenFaceValue: 0, shipCost: 0 }
+    // Траты — у каждого свои: экономику уровней сравниваем по местам.
+    const tallies: Record<string, SpendTally> = Object.fromEntries(
+      playerIds.map((id) => [id, { tokenFaceValue: 0, shipCost: 0, builds: 0, shipsBuilt: 0 }]),
+    )
     const orderSeen: Record<string, number[]> = Object.fromEntries(
       playerIds.map((id) => [id, [] as number[]]),
     )
@@ -360,7 +447,12 @@ export function runGame(map: MapDefinition, seed: number, options: RunOptions): 
       if (trail.length > 24) trail.shift()
     }
 
+    const threshold = victoryThresholdForSnapshot(game)
+    record.threshold = threshold
+    const behavior = createBehaviorTracker(game, playerIds, threshold)
+
     const closeTurn = () => {
+      behavior.onTurnStart(game)
       const sample = sampleTurn(game, playerIds, currentTurn, previousCells)
       record.samples.push(sample)
       // Класс считается открытым, когда наибольший регион дорос до порога,
@@ -388,6 +480,27 @@ export function runGame(map: MapDefinition, seed: number, options: RunOptions): 
       orderIndex = 0
     }
 
+    // Почти победитель: в начале фазы действий у игрока на один центр меньше порога. Эпизод
+    // заводится заново, если игрок откатился и снова подошёл к порогу.
+    const nearWinArmed = new Set(playerIds)
+    const openEpisodes: { playerId: string; turn: number }[] = []
+    let nearWinCheckedTurn = 0
+    const checkNearWinners = () => {
+      if (game.phase !== 'actions' || nearWinCheckedTurn === game.turnNumber) return
+      nearWinCheckedTurn = game.turnNumber
+      behavior.onActionsStart(game)
+      for (const playerId of playerIds) {
+        const powerCenters = countControlledPowerCenters(game, playerId)
+        if (powerCenters < threshold - 1) {
+          nearWinArmed.add(playerId)
+          continue
+        }
+        if (!nearWinArmed.has(playerId)) continue
+        nearWinArmed.delete(playerId)
+        openEpisodes.push({ playerId, turn: game.turnNumber })
+      }
+    }
+
     let knownSieges: Record<string, { besiegerId: string }> = {}
     const watchSieges = () => {
       const now = game.sieges ?? {}
@@ -402,6 +515,7 @@ export function runGame(map: MapDefinition, seed: number, options: RunOptions): 
 
     while (steps-- > 0) {
       watchSieges()
+      behavior.observe(game)
       if (game.gameOver) break
       if (game.turnNumber > options.maxTurns) {
         record.hitTurnCap = true
@@ -411,7 +525,13 @@ export function runGame(map: MapDefinition, seed: number, options: RunOptions): 
       if (game.pendingCombat) {
         battle ??= watchBattle(game)
         combatGuard += 1
-        const progressed = stepCombat(game, map, options, { onSiegeEstablished: () => { record.sieges.established += 1 } })
+        const progressed = stepCombat(
+          game,
+          map,
+          options,
+          { onSiegeEstablished: () => { record.sieges.established += 1 } },
+          difficultyOf,
+        )
         if (!progressed || combatGuard > 200) {
           const attackerId = game.pendingCombat?.attackerId
           if (attackerId) applyGameActionOnSnapshot(game, map, attackerId, 'abort-combat')
@@ -435,6 +555,7 @@ export function runGame(map: MapDefinition, seed: number, options: RunOptions): 
       }
 
       if (game.turnNumber !== currentTurn) closeTurn()
+      checkNearWinners()
 
       const active = game.activePlayerId
       if (!active) break
@@ -454,7 +575,7 @@ export function runGame(map: MapDefinition, seed: number, options: RunOptions): 
           if (!doctrineChoiceOwed(game, playerId)) continue
           const doctrineId = playerId === record.deviantPlayerId && options.deviantDoctrine
             ? options.deviantDoctrine
-            : options.forcedDoctrine ?? pickDoctrine(game, playerId)
+            : options.forcedDoctrine ?? pickDoctrine(game, playerId, difficultyOf(playerId))
           const window = String(game.doctrineChoice?.windowStart ?? game.turnNumber)
           if (!applyGameActionOnSnapshot(game, map, playerId, 'choose-doctrine', { doctrineId }).errors.length) {
             record.doctrines[window] ??= {}
@@ -466,10 +587,10 @@ export function runGame(map: MapDefinition, seed: number, options: RunOptions): 
       if (game.phase === 'planning') {
         for (const playerId of playerIds) {
           if (claimPicksRemaining(game, playerId) > 0) {
-            applyGameActionOnSnapshot(game, map, playerId, 'execute-claim-picks')
+            settleClaimPicks(game, map, playerId, difficultyOf(playerId))
           }
           if (rechargePicksRemaining(game, playerId) > 0) {
-            applyGameActionOnSnapshot(game, map, playerId, 'execute-recharge-picks')
+            settleRechargePicks(game, map, playerId, difficultyOf(playerId))
           }
         }
       }
@@ -483,17 +604,15 @@ export function runGame(map: MapDefinition, seed: number, options: RunOptions): 
         ).errors.length === 0
       }
       if (!progressed && game.phase === 'planning' && claimPicksRemaining(game, active) > 0) {
-        progressed = applyGameActionOnSnapshot(
-          game, map, active, 'execute-claim-picks',
-        ).errors.length === 0
+        progressed = settleClaimPicks(game, map, active, difficultyOf(active))
       }
       if (!progressed && game.phase === 'planning' && rechargePicksRemaining(game, active) > 0) {
-        progressed = applyGameActionOnSnapshot(
-          game, map, active, 'execute-recharge-picks',
-        ).errors.length === 0
+        progressed = settleRechargePicks(game, map, active, difficultyOf(active))
       }
-      if (!progressed && game.phase === 'planning') progressed = tryPlaceMarker(game, map, active)
-      else if (game.phase === 'actions') progressed = stepActions(game, map, active, tally, attempts)
+      if (!progressed && game.phase === 'planning') progressed = tryPlaceMarker(game, map, active, difficultyOf(active))
+      else if (game.phase === 'actions') {
+        progressed = stepActions(game, map, active, tallies[active]!, attempts, difficultyOf(active))
+      }
 
       note(
         `t${game.turnNumber} ${game.phase} ${active} `
@@ -516,12 +635,35 @@ export function runGame(map: MapDefinition, seed: number, options: RunOptions): 
       record.error = `Исчерпан лимит шагов | ${trail.join(' ; ')}`
     }
 
+    behavior.observe(game)
     closeTurn()
     record.turns = Math.max(1, record.samples.at(-1)?.turn ?? game.turnNumber)
     record.winnerId = game.gameOver?.winnerId ?? null
     record.reason = game.gameOver?.reason ?? null
-    record.tokenFaceValueSpent = tally.tokenFaceValue
-    record.shipCostPaid = tally.shipCost
+    // Остановлен — не победил в ближайшие два хода: захватами этого и следующего хода или
+    // штурмом до конца следующего хода.
+    const winTurn = game.gameOver ? game.turnNumber : Infinity
+    record.nearWins = openEpisodes.map((episode) => ({
+      playerId: episode.playerId,
+      turn: episode.turn,
+      level: difficultyOf(episode.playerId),
+      otherHardSeats: playerIds.filter((id) => id !== episode.playerId && difficultyOf(id) === 'hard').length,
+      stopped: !(record.winnerId === episode.playerId && winTurn <= episode.turn + 2),
+      otherWon: !!record.winnerId && record.winnerId !== episode.playerId && winTurn <= episode.turn + 2,
+    }))
+    record.behavior = behavior.result()
+    if (record.winnerId && record.reason === 'power_centers') {
+      record.winnerCentersBefore = behavior.centersAtLastActionsStart(record.winnerId)
+    }
+    record.tokenFaceValueSpent = Object.values(tallies).reduce((sum, item) => sum + item.tokenFaceValue, 0)
+    record.shipCostPaid = Object.values(tallies).reduce((sum, item) => sum + item.shipCost, 0)
+    record.spendByPlayer = Object.fromEntries(
+      playerIds.map((id) => [id, {
+        tokenFaceValue: tallies[id]!.tokenFaceValue,
+        builds: tallies[id]!.builds ?? 0,
+        shipsBuilt: tallies[id]!.shipsBuilt ?? 0,
+      }]),
+    )
     record.meanOrderPosition = Object.fromEntries(
       playerIds.map((id) => {
         const seen = orderSeen[id] ?? []

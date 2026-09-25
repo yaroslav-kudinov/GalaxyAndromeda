@@ -7,6 +7,7 @@ import {
   resourceTokenLongLabel,
   shipTypeCountLabel,
 } from '~/utils/cell-display'
+import { useUiStrings } from '~/i18n/ui-strings'
 
 const props = defineProps<{
   cell: MapCellDefinition
@@ -14,10 +15,15 @@ const props = defineProps<{
   players?: PlayerState[]
   /** Центр власти сменит хозяина в начале следующего хода — почему и к кому. */
   captureNote?: string | null
+  /** Клетка в осаде — кто осаждает и что будет с гарнизоном. */
+  siegeNote?: string | null
+  /** Чьи маркеры действия стоят на клетке. */
+  markerOwnerNames?: string[]
   x: number
   y: number
 }>()
 
+const tt = useUiStrings().cellMarkers
 const token = computed(() => getCellResourceToken(props.cell))
 const shipGroups = computed(() => groupShipsByPlayer(props.cell.startingShips))
 const ownerName = computed(() => ownerLabel(props.cell.startPlayer, props.players))
@@ -49,10 +55,18 @@ const regionOwnerName = computed(() => {
       </span>
     </header>
 
-    <ul v-if="cell.isPowerCenter || token" class="tooltip-tokens">
+    <ul v-if="cell.isPowerCenter || token || markerOwnerNames?.length" class="tooltip-tokens">
       <li v-if="cell.isPowerCenter" class="token-row token-row--power">
         <span class="token-icon" aria-hidden="true">♛</span>
         <span>Центр власти</span>
+      </li>
+      <li v-if="markerOwnerNames?.length" class="token-row token-row--marker">
+        <span class="token-icon" aria-hidden="true">A</span>
+        <span>{{ tt.owners(markerOwnerNames) }}</span>
+      </li>
+      <li v-if="siegeNote" class="token-row token-row--siege">
+        <span class="token-icon" aria-hidden="true">⚔</span>
+        <span>{{ siegeNote }}</span>
       </li>
       <li v-if="cell.isPowerCenter && captureNote" class="token-row token-row--capture">
         <span class="token-icon" aria-hidden="true">⚑</span>
@@ -206,6 +220,10 @@ const regionOwnerName = computed(() => {
 }
 .token-row--power {
   color: #fde68a;
+}
+.token-row--siege {
+  color: #fdba74;
+  font-weight: 600;
 }
 .token-row--capture {
   color: #fca5a5;

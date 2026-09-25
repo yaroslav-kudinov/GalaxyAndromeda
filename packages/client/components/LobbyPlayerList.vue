@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { BotDifficulty } from '@galaxy/rules'
 import { useUiStrings } from '~/i18n/ui-strings'
 
 const t = useUiStrings().lobbyPlayers
@@ -11,6 +12,7 @@ export interface LobbyPlayerSlot {
   isYou?: boolean
   /** За место ходит сервер. */
   bot?: boolean
+  botDifficulty?: BotDifficulty
 }
 
 const props = defineProps<{
@@ -41,7 +43,7 @@ const props = defineProps<{
       </span>
       <span class="status">
         <template v-if="slot.isYou">{{ t.you }}</template>
-        <template v-else-if="slot.joined && slot.bot">{{ t.bot }}</template>
+        <template v-else-if="slot.joined && slot.bot">{{ slot.botDifficulty ? t.botWithLevel(slot.botDifficulty) : t.bot }}</template>
         <template v-else-if="slot.joined && slot.active">{{ t.inGame }}</template>
         <template v-else-if="slot.joined">{{ t.inRoom }}</template>
         <template v-else>{{ t.awaited }}</template>

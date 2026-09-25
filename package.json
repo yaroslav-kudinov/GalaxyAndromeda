@@ -12,7 +12,14 @@
     "typecheck": "pnpm -r run typecheck",
     "smoke": "tsx harness/agent-smoke/run-smoke.ts",
     "tabletop:print": "tsx harness/scripts/build-tabletop-print.mjs",
-    "balance": "tsx harness/balance/run.ts"
+    "balance": "tsx harness/balance/run.ts",
+    "balance:suite": "tsx harness/balance/suite.ts",
+    "balance:table": "tsx harness/balance/table.ts",
+    "balance:compare": "tsx harness/balance/compare.ts",
+    "balance:trace": "tsx harness/balance/trace.ts",
+    "balance:timing": "tsx harness/balance/timing.ts",
+    "balance:start": "tsx harness/balance/start-state.ts",
+    "balance:check": "tsx harness/balance/check-baseline.ts"
   },
   "devDependencies": {
     "tsx": "^4.19.2"

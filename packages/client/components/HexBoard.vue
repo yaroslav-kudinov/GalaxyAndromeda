@@ -12,6 +12,7 @@ import {
   storeOrientation,
 } from '~/utils/hex-layout'
 import { layoutShipPositions, shipBoardScale } from '~/utils/ship-glyphs'
+import { markerPaletteForSlot } from '~/utils/marker-colors'
 import { effectiveGlyphScale, overlayContentScale } from '~/utils/board-glyphs'
 import { STRATEGIC_ZOOM_THRESHOLD } from '~/utils/board-overview'
 import { buildTerritoryOverlay } from '~/utils/hex-territory'
@@ -40,6 +41,8 @@ const props = withDefaults(
     tokenPickedKeys?: string[]
     /** Центры власти, которые перейдут к другому игроку в начале следующего хода: цвет захватчика и пояснение */
     captureAhead?: Record<string, { color: string; note: string }>
+    /** Осаждённые клетки: цвет осаждающего и пояснение для подсказки. */
+    siegeMarks?: Record<string, { color: string; note: string }>
     myTerritoryKeys?: string[]
     /** Слоты игроков (1–6), чьи территории не рисуем на карте */
     hideTerritoryPlayers?: number[]
@@ -105,6 +108,7 @@ const props = withDefaults(
     tokenPickKeys: () => [],
     tokenPickedKeys: () => [],
     captureAhead: () => ({}),
+    siegeMarks: () => ({}),
     myTerritoryKeys: () => [],
     hideTerritoryPlayers: () => [],
     movementSourceKey: null,
@@ -464,6 +468,27 @@ function insetHexPoints(q: number, r: number, factor: number): string {
 
 function hasActionMarker(key: string): boolean {
   return props.actionMarkerKeys.includes(key)
+}
+
+/** Слоты владельцев маркеров действия на клетке (пусто — владелец неизвестен, как в редакторе). */
+function markerPlayers(cell: MapCellDefinition): number[] {
+  return (cell as { actionMarkerPlayers?: number[] }).actionMarkerPlayers ?? []
+}
+
+/** Кольцо маркера: в тоне владельца; на осаждённой клетке — две половины по вертикали. */
+function markerRings(cell: MapCellDefinition): { color: string | null; clip: string | null }[] {
+  const slots = markerPlayers(cell).slice(0, 2)
+  if (slots.length === 2) {
+    return [
+      { color: markerPaletteForSlot(slots[0]!).ring, clip: 'marker-half-left' },
+      { color: markerPaletteForSlot(slots[1]!).ring, clip: 'marker-half-right' },
+    ]
+  }
+  return [{ color: slots.length ? markerPaletteForSlot(slots[0]!).ring : null, clip: null }]
+}
+
+function markerOwnerNames(cell: MapCellDefinition): string[] {
+  return markerPlayers(cell).map((slot) => props.players?.[slot - 1]?.name ?? `Игрок ${slot}`)
 }
 
 function isAvailableActionMarker(key: string): boolean {
@@ -1006,6 +1031,15 @@ function onPointerCancel(e: PointerEvent) {
       @contextmenu="onSvgContextMenu"
     >
       <defs>
+        <!-- Половины маркера действия на осаждённой клетке: левая и правая по вертикали.
+             В долях собственной рамки фигуры, поэтому годятся и для кольца, и для значка при
+             любой ориентации шестиугольников (фигуры симметричны относительно вертикали). -->
+        <clipPath id="marker-half-left" clipPathUnits="objectBoundingBox">
+          <rect x="-0.5" y="-0.5" width="1" height="2" />
+        </clipPath>
+        <clipPath id="marker-half-right" clipPathUnits="objectBoundingBox">
+          <rect x="0.5" y="-0.5" width="1" height="2" />
+        </clipPath>
         <marker
           id="move-arrow-normal"
           markerWidth="8"
@@ -1154,13 +1188,38 @@ function onPointerCancel(e: PointerEvent) {
           class="hex-marker-ring hex-marker-ring--underlay"
           pointer-events="none"
         />
-        <polygon
-          v-if="hasActionMarker(hexKey(cell.q, cell.r))"
-          :points="insetHexPoints(cell.q, cell.r, 0.78)"
-          class="hex-marker-ring hex-marker-ring--action"
-          :class="{ 'hex-marker-ring--available': isAvailableActionMarker(hexKey(cell.q, cell.r)) }"
-          pointer-events="none"
-        />
+        <template v-if="hasActionMarker(hexKey(cell.q, cell.r))">
+          <polygon
+            v-for="(ring, i) in markerRings(cell)"
+            :key="'marker-ring-' + i"
+            :points="insetHexPoints(cell.q, cell.r, 0.78)"
+            class="hex-marker-ring hex-marker-ring--action"
+            :class="{ 'hex-marker-ring--available': isAvailableActionMarker(hexKey(cell.q, cell.r)) }"
+            :style="ring.color ? { stroke: ring.color } : undefined"
+            :clip-path="ring.clip ? `url(#${ring.clip})` : undefined"
+            pointer-events="none"
+          />
+        </template>
+
+        <template v-if="props.siegeMarks[hexKey(cell.q, cell.r)]">
+          <!-- Осада: «зубчатое» кольцо и значок цвета осаждающего. Неподвижно, в отличие от
+               бегущего пунктира «перейдёт на следующий ход». Значок справа сверху: слева сверху
+               стоит значок маркера действия. -->
+          <polygon
+            :points="insetHexPoints(cell.q, cell.r, 0.97)"
+            class="hex-siege-ring"
+            :stroke="props.siegeMarks[hexKey(cell.q, cell.r)]?.color"
+            pointer-events="none"
+          />
+          <g
+            class="hex-siege-badge"
+            :transform="`translate(${center(cell.q, cell.r).x + size * 0.42}, ${center(cell.q, cell.r).y - size * 0.6})`"
+            pointer-events="none"
+          >
+            <circle r="7.5" :stroke="props.siegeMarks[hexKey(cell.q, cell.r)]?.color" />
+            <path d="M-4,-4 L4,4 M4,-4 L-4,4 M-4.8,1.4 L-1.4,4.8 M4.8,1.4 L1.4,4.8" />
+          </g>
+        </template>
 
         <polygon
           v-if="props.captureAhead[hexKey(cell.q, cell.r)]"
@@ -1179,6 +1238,7 @@ function onPointerCancel(e: PointerEvent) {
           :show-resource="!!getCellResourceToken(cell)"
           :show-power-center="!!cell.isPowerCenter"
           :show-action-marker="hasActionMarker(hexKey(cell.q, cell.r))"
+          :action-marker-players="markerPlayers(cell)"
           :action-marker-available="isAvailableActionMarker(hexKey(cell.q, cell.r))"
           :token-pickable="isTokenPick(hexKey(cell.q, cell.r))"
           :token-picked="isTokenPicked(hexKey(cell.q, cell.r))"
@@ -1289,6 +1349,8 @@ function onPointerCancel(e: PointerEvent) {
         :region-info="hoverTooltipRegionInfo"
         :players="players"
         :capture-note="props.captureAhead[hexKey(hoverTooltipCell.q, hoverTooltipCell.r)]?.note ?? null"
+        :siege-note="props.siegeMarks[hexKey(hoverTooltipCell.q, hoverTooltipCell.r)]?.note ?? null"
+        :marker-owner-names="markerOwnerNames(hoverTooltipCell)"
         :x="hoverTooltipPos.x"
         :y="hoverTooltipPos.y"
       />
@@ -1510,6 +1572,24 @@ function onPointerCancel(e: PointerEvent) {
   stroke-width: 3.2;
   filter: drop-shadow(0 0 7px rgba(56, 189, 248, 0.85));
   animation: tutorial-outline-pulse 1.15s ease-in-out infinite;
+}
+/* Осада: неподвижное «зубчатое» кольцо и значок со скрещёнными клинками цвета осаждающего. */
+.hex-siege-ring {
+  fill: none;
+  stroke-width: 4.5;
+  stroke-dasharray: 5 3.5;
+  stroke-linecap: butt;
+  filter: drop-shadow(0 0 3px rgba(15, 23, 42, 0.95));
+}
+.hex-siege-badge circle {
+  fill: #0f172a;
+  stroke-width: 2;
+}
+.hex-siege-badge path {
+  fill: none;
+  stroke: #f8fafc;
+  stroke-width: 1.6;
+  stroke-linecap: round;
 }
 /* Центр власти сменит хозяина в начале следующего хода: бегущий пунктир цвета захватчика. */
 .hex-capture-ahead {

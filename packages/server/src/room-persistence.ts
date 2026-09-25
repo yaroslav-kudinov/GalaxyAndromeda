@@ -56,6 +56,7 @@ interface PersistedRoomFile {
   scenarioId?: string
   botPlayerId?: string
   botPlayerIds?: string[]
+  botDifficulty?: Room['botDifficulty']
   scenarioProgress?: Room['state']['scenarioProgress']
   /** Карта + снимок партии в формате обычного сохранения — переиспользуем миграции `@galaxy/rules`. */
   save: GalaxySaveFile
@@ -121,6 +122,7 @@ function serializeRoom(room: Room): string {
     scenarioId: room.scenarioId,
     botPlayerId: room.botPlayerId,
     botPlayerIds: room.botPlayerIds ? [...room.botPlayerIds] : undefined,
+    botDifficulty: room.botDifficulty ? { ...room.botDifficulty } : undefined,
     scenarioProgress: room.state.scenarioProgress,
     save: {
       format: GALAXY_SAVE_FORMAT,
@@ -280,6 +282,14 @@ function readPersistedRoom(path: string): Room | null {
     botPlayerId: typeof record.botPlayerId === 'string' ? record.botPlayerId : undefined,
     botPlayerIds: Array.isArray(record.botPlayerIds)
       ? record.botPlayerIds.filter((id): id is string => typeof id === 'string')
+      : undefined,
+    botDifficulty: record.botDifficulty && typeof record.botDifficulty === 'object'
+      ? Object.fromEntries(
+          Object.entries(record.botDifficulty).filter(
+            (entry): entry is [string, 'easy' | 'medium' | 'hard'] =>
+              entry[1] === 'easy' || entry[1] === 'medium' || entry[1] === 'hard',
+          ),
+        )
       : undefined,
   }
   if (record.scenarioProgress && typeof record.scenarioProgress.scenarioId === 'string') {

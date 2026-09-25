@@ -503,6 +503,7 @@ function slotsForListedRoom(lobby: LobbyListEntry): LobbyPlayerSlot[] {
     joined: player.joined,
     active: player.active,
     bot: player.bot,
+    botDifficulty: player.botDifficulty,
     isYou: claim?.playerId === player.id,
   }))
 }
