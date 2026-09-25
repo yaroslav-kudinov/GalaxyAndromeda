@@ -113,7 +113,7 @@ export interface CombatPreview {
   defender: CombatSidePreview
   supportCandidates?: CombatSupportCandidate[]
   /** Перебросы гарнизона осаждённой клетки в этом бою: по одному на его корабль в бою. */
-  siegeRerolls?: { playerId: string; pool: number }
+  siegeRerolls?: { playerId: string; pool: number; shipIds?: string[] }
   notes: string[]
 }
 
@@ -745,6 +745,11 @@ export function buildCombatPreview(
   const damage = options.damageByShipId ?? {}
   const defenderShips = cell.ships.filter((s) => s.ownerId === defenderId)
   const attackerShips = incomingAttackerShips.filter((s) => s.ownerId === attackerId)
+  // Владелец осаждённого центра снимает осаду подкреплением: гарнизон бьётся вместе с ним.
+  if (siegeAt(game, coord)?.besiegedId === attackerId) {
+    const joined = new Set(attackerShips.map((ship) => ship.id))
+    attackerShips.push(...cell.ships.filter((s) => s.ownerId === attackerId && !joined.has(s.id)))
+  }
   const attackerSupportOverrides = supportPositionOverridesForMovement(
     options.attackerMovementPlans,
     coord,
@@ -808,10 +813,15 @@ export function buildCombatPreview(
   )
 
   // Гарнизон осаждённой клетки перебрасывает промахи — по одному перебросу на корабль в бою.
+  // Перебросы только у кораблей гарнизона: подкрепление, пришедшее снять осаду, их не получает.
   const siege = siegeAt(game, coord)
-  const garrisonInBattle = siege
-    ? [...attackerSide.ships, ...defenderSide.ships].filter((ship) => ship.ownerId === siege.besiegedId).length
-    : 0
+  const garrisonIds = siege
+    ? new Set(cell.ships.filter((ship) => ship.ownerId === siege.besiegedId).map((ship) => ship.id))
+    : new Set<string>()
+  const garrisonShipIds = [...attackerSide.ships, ...defenderSide.ships]
+    .filter((ship) => garrisonIds.has(ship.shipId))
+    .map((ship) => ship.shipId)
+  const garrisonInBattle = garrisonShipIds.length
   const withPool = (side: CombatSidePreview): CombatSidePreview =>
     siege && garrisonInBattle && side.ships.some((ship) => ship.ownerId === siege.besiegedId)
       ? { ...side, rerollPool: garrisonInBattle }
@@ -825,7 +835,9 @@ export function buildCombatPreview(
     defenderId,
     attacker: withPool(attackerSide),
     defender: withPool(defenderSide),
-    ...(siege && garrisonInBattle ? { siegeRerolls: { playerId: siege.besiegedId, pool: garrisonInBattle } } : {}),
+    ...(siege && garrisonInBattle
+      ? { siegeRerolls: { playerId: siege.besiegedId, pool: garrisonInBattle, shipIds: garrisonShipIds } }
+      : {}),
     supportCandidates: [...supportCandidates.entries()].map(([playerId, ships]) => ({
       playerId,
       ships,
@@ -1054,7 +1066,10 @@ export function rollRoundDice(
   let rerolls: CombatRerollPool | null = null
   if (pool && pool.pool > 0) {
     for (const die of dice) {
-      die.rerollable = die.ownerId === pool.playerId && die.distance === 0 && die.targetShipId != null
+      const garrisonDie = pool.shipIds
+        ? pool.shipIds.includes(die.shooterShipId)
+        : die.ownerId === pool.playerId && die.distance === 0
+      die.rerollable = garrisonDie && die.targetShipId != null
     }
     if (dice.some((die) => die.rerollable)) rerolls = { playerId: pool.playerId, left: pool.pool }
   }

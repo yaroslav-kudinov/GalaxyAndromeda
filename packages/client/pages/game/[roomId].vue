@@ -50,6 +50,8 @@ import {
   combatResolutionFingerprint,
   combatResolutionFromPending,
   computeRechargeBudget,
+  countFaceDownTokens,
+  explainRechargeBudget,
   formatRechargeBudgetHint,
   getCombatRetreatDestinations,
 } from '@galaxy/rules'
@@ -1569,8 +1571,9 @@ const resourceRechargeBanner = computed(() => {
   // бюджета, и бюджет падает с ростом числа центров власти.
   const owed = game.rechargePicksRemainingByPlayer?.[me] ?? 0
   const budget = computeRechargeBudget(game, me)
-  if (owed <= 0 && budget <= 0) return null
-  return formatRechargeBudgetHint(budget, owed)
+  // Нулевой бюджет тоже объясняем: иначе непонятно, почему фишки не переворачиваются.
+  if (owed <= 0 && budget <= 0 && countFaceDownTokens(game, me) === 0) return null
+  return formatRechargeBudgetHint(budget, owed, explainRechargeBudget(game, me))
 })
 
 const {

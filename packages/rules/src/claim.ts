@@ -67,6 +67,15 @@ function claimCell(game: GameSnapshot, cell: RuntimeCellState, playerId: string)
   removeStaleProductionMarkerAt(game, cell.coord)
 }
 
+/** «Имя: (q,r) центр, (q,r)» — кто что занял; центры власти помечены. */
+function describeClaims(game: GameSnapshot, playerId: string, cells: readonly RuntimeCellState[]): string {
+  const name = game.players.find((player) => player.id === playerId)?.name ?? playerId
+  const list = cells
+    .map((cell) => `(${cell.coord.q},${cell.coord.r})${cell.isPowerCenter ? ' — центр власти' : ''}`)
+    .join(', ')
+  return `${name}: ${list}`
+}
+
 function appendClaimEvent(game: GameSnapshot, message: string): void {
   game.eventLog.push({
     id: `evt-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
@@ -96,18 +105,18 @@ function claimPriority(a: RuntimeCellState, b: RuntimeCellState): number {
 /**
  * Вход на клетку под контролем другого игрока: контроль сразу у входящего,
  * чужой маркер производства снимается. Нейтральную клетку не трогает.
- * Если на клетке ещё стоят чужие корабли — не захватывает (это бой).
+ * Если на клетке ещё стоят чужие корабли — не захватывает (это бой или осада).
  *
- * Центр власти так не переходит (ADR 019): защищённый берут штурмом или осадой, пустой —
- * захватом в конце хода, в счёт лимита. Иначе быстрые корабли снимали бы чужие центры
- * набегом без всякого лимита.
+ * Чужой центр власти без гарнизона переходит так же, как обычная клетка: оставленный без
+ * охраны центр — законная добыча набега. Защищённый берут штурмом или осадой, нейтральный —
+ * захватом в начале хода, в счёт лимита. Победа всё равно считается только в начале хода,
+ * после всех захватов, поэтому набег не выигрывает партию посреди хода.
  */
 export function transferControlIfEnemyOwned(
   game: GameSnapshot,
   cell: RuntimeCellState,
   enteringPlayerId: string,
 ): boolean {
-  if (cell.isPowerCenter) return false
   if (!cell.controlOwnerId || cell.controlOwnerId === enteringPlayerId) return false
   if (hasEnemyShips(cell, enteringPlayerId)) return false
   cell.controlOwnerId = enteringPlayerId
@@ -124,6 +133,7 @@ export function transferControlIfEnemyOwned(
  */
 export function applyTurnEndClaims(game: GameSnapshot, mapId: string): { claimed: number } {
   let claimed = 0
+  const parts: string[] = []
   game.claimPicksRemainingByPlayer = {}
 
   for (const playerId of participantsOf(game)) {
@@ -136,12 +146,13 @@ export function applyTurnEndClaims(game: GameSnapshot, mapId: string): { claimed
     if (eligible.length <= limit) {
       for (const cell of eligible) claimCell(game, cell, playerId)
       claimed += eligible.length
+      parts.push(describeClaims(game, playerId, eligible))
       continue
     }
     setClaimPicksRemaining(game, playerId, limit)
   }
 
-  if (claimed) appendClaimEvent(game, `Объявление контроля: занято клеток ${claimed}`)
+  if (claimed) appendClaimEvent(game, `Захват клеток: ${parts.join('; ')}`)
   if (claimed) applyVictoryAndDefeatChecks(game, mapId)
   return { claimed }
 }
@@ -195,7 +206,7 @@ export function executeClaimPicks(
 
   for (const cell of resolved) claimCell(game, cell, playerId)
   setClaimPicksRemaining(game, playerId, remaining - resolved.length)
-  appendClaimEvent(game, `Объявление контроля: занято клеток ${resolved.length}`)
+  appendClaimEvent(game, `Захват клеток: ${describeClaims(game, playerId, resolved)}`)
 
   if (claimPicksRemaining(game, playerId) === 0) grantRechargeBudgetFor(game, playerId)
   applyVictoryAndDefeatChecks(game, mapId)
@@ -214,7 +225,7 @@ export function autoResolveClaimPicks(
   const taken = eligibleClaimCells(game, playerId).sort(claimPriority).slice(0, remaining)
   for (const cell of taken) claimCell(game, cell, playerId)
   setClaimPicksRemaining(game, playerId, 0)
-  if (taken.length) appendClaimEvent(game, `Объявление контроля автоматически: занято клеток ${taken.length}`)
+  if (taken.length) appendClaimEvent(game, `Захват клеток (выбор игры): ${describeClaims(game, playerId, taken)}`)
 
   grantRechargeBudgetFor(game, playerId)
   // Даже без захвата: это мог быть последний незакрытый выбор, и центры власти пора считать.

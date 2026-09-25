@@ -16,6 +16,7 @@ import { applySiegeTick, siegeAt, siegeLossesOwedBy } from './siege.js'
 import { getBuildableShipsForMarker } from './production.js'
 import { applyTurnEndClaims } from './claim.js'
 import { advanceGameSnapshot } from './turn.js'
+import { applyVictoryAndDefeatChecks } from './victory.js'
 
 function cellAt(game: GameSnapshot, q: number, r: number) {
   const cell = game.cells.find((c) => c.coord.q === q && c.coord.r === r)
@@ -126,7 +127,7 @@ describe('осада: установка', () => {
     expect(game.eventLog.at(-1)?.message).toMatch(/не стал нападать/)
   })
 
-  it('незащищённый чужой центр не переходит при входе — его занимают в конце хода', () => {
+  it('незащищённый чужой центр переходит при входе, как обычная клетка', () => {
     const { map, game } = siegeBoard()
     addShip(game, 0, 0, 'player-1', 'cruiser', 'att-cr1')
     placeMarker(game, 'player-1', 0, 0)
@@ -136,7 +137,36 @@ describe('осада: установка', () => {
     })
     expect(move.errors).toEqual([])
     expect(game.pendingCombat).toBeUndefined()
-    expect(cellAt(game, 1, 0).controlOwnerId).toBe('player-2')
+    expect(cellAt(game, 1, 0).controlOwnerId).toBe('player-1')
+  })
+
+  it('центр, взятый набегом, приносит победу только в начале хода — до этого его можно отбить', () => {
+    const { map, game } = siegeBoard()
+    game.victoryPowerCenters = 2
+    addShip(game, 0, 0, 'player-1', 'cruiser', 'att-cr1')
+    placeMarker(game, 'player-1', 0, 0)
+    applyGameActionOnSnapshot(game, map, 'player-1', 'execute-marker-movement', {
+      from: { q: 0, r: 0 },
+      moves: [{ shipId: 'att-cr1', to: { q: 1, r: 0 } }],
+    })
+    expect(cellAt(game, 1, 0).controlOwnerId).toBe('player-1')
+    expect(game.gameOver).toBeUndefined()
+
+    game.phase = 'planning'
+    applyVictoryAndDefeatChecks(game, map.id)
+    expect(game.gameOver?.winnerId).toBe('player-1')
+  })
+
+  it('нейтральный центр при входе не переходит — его занимают захватом в начале хода', () => {
+    const { map, game } = siegeBoard()
+    cellAt(game, 1, 0).controlOwnerId = null
+    addShip(game, 0, 0, 'player-1', 'cruiser', 'att-cr1')
+    placeMarker(game, 'player-1', 0, 0)
+    applyGameActionOnSnapshot(game, map, 'player-1', 'execute-marker-movement', {
+      from: { q: 0, r: 0 },
+      moves: [{ shipId: 'att-cr1', to: { q: 1, r: 0 } }],
+    })
+    expect(cellAt(game, 1, 0).controlOwnerId).toBeNull()
 
     applyTurnEndClaims(game, map.id)
     expect(cellAt(game, 1, 0).controlOwnerId).toBe('player-1')
@@ -320,6 +350,26 @@ describe('осада: действия сторон', () => {
     expect(cellAt(game, 1, 0).controlOwnerId).toBe('player-1')
     expect(siegeAt(game, { q: 1, r: 0 })).toBeUndefined()
     expect(game.actionMarkers.filter((m) => m.ownerId === 'player-1')).toEqual([])
+  })
+
+  it('подкрепление владельца снимает осаду вместе с гарнизоном; перебрасывает только гарнизон', () => {
+    const { map, game } = establishedSiege(['cruiser'])
+    addShip(game, 1, 1, 'player-2', 'cruiser', 'relief')
+    placeMarker(game, 'player-2', 1, 1)
+    game.activePlayerId = 'player-2'
+
+    const start = applyGameActionOnSnapshot(game, map, 'player-2', 'execute-marker-movement', {
+      from: { q: 1, r: 1 },
+      moves: [{ shipId: 'relief', to: { q: 1, r: 0 } }],
+    })
+    expect(start.errors).toEqual([])
+    expect(game.pendingCombat?.attackerId).toBe('player-2')
+    const preview = buildCombatPreviewFromPending(game)!
+    expect(preview.attacker.ships.map((s) => s.shipId).sort()).toEqual(['gar-0', 'relief'])
+    expect(preview.siegeRerolls).toEqual({ playerId: 'player-2', pool: 1, shipIds: ['gar-0'] })
+
+    const rolled = withRandom(0.01, () => rollCombatRound(preview, {}, {}, () => 0.01))
+    void rolled
   })
 
   it('два маркера на осаждённой клетке: игрок снимает только свой, второй не ставит', () => {
@@ -615,6 +665,6 @@ describe('осада: третий игрок', () => {
     const after = buildCombatPreviewFromPending(game)!
     expect(after.attacker.ships.map((ship) => ship.shipId).sort()).toEqual(['gar-0', 'third-bb1'])
     // Гарнизон на клетке перебрасывает промахи и в чужом бою.
-    expect(after.siegeRerolls).toEqual({ playerId: 'player-2', pool: 1 })
+    expect(after.siegeRerolls).toEqual({ playerId: 'player-2', pool: 1, shipIds: ['gar-0'] })
   })
 })
