@@ -125,7 +125,9 @@ pnpm balance:compare harness/balance/out/base harness/balance/out/try
 разброс доли побед одиночного места при 150–200 партиях — около ±0,15–0,2 в долях «×» на карте
 для шестерых и ±0,1 для четверых.
 
-Замер уровней до и после экономического развития — `baselines/bot-difficulty-economy.md`.
+Замеры уровней — `baselines/bot-difficulty-economy.md`: экономика среднего и сложного (Дуэль, на троих,
+Крест) и оборона против плана у сложного на картах для 4–6 игроков, выжимка чисел —
+`baselines/bot-difficulty-4-6-players.json`.
 
 ## Базовые замеры до правок
 
