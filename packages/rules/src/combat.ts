@@ -1908,6 +1908,7 @@ export function beginOrAwaitCombatContinuation(
 
   // Бой без живых решающих (сдались оба) дожимается сам.
   applyEliminatedContinueDefaults(game)
+  applyOneSidedContinueDefaults(game)
   if (roundReadyToRoll(game)) {
     const auto = finishContinueAfterBothSidesReady(game, rng)
     return {
@@ -2140,6 +2141,23 @@ function applyEliminatedContinueDefaults(game: GameSnapshot): void {
   if (defenderId && isEliminatedPlayer(game, defenderId) && pending.continueDecisions?.attacker === true) {
     pending.continueDecisions = { ...pending.continueDecisions, defender: true }
   }
+}
+
+/**
+ * Одна сторона не может стрелять (авианосец против крейсера), а отступать ещё нельзя — в бою
+ * никто не уничтожен. Решать сторонам нечего: раунды идут сами, цели — по выбору игры, пока
+ * кто-нибудь не погибнет. Дальше — обычное решение «продолжить или отступить».
+ */
+function applyOneSidedContinueDefaults(game: GameSnapshot): void {
+  const pending = game.pendingCombat
+  if (!isAwaitingContinue(pending) || isCombatRetreatAllowed(pending)) return
+  const preview = buildCombatPreviewFromPending(game)
+  if (!preview) return
+  const attackerFire = combatSideFirepower(preview, 'attacker')
+  const defenderFire = combatSideFirepower(preview, 'defender')
+  if ((attackerFire > 0) === (defenderFire > 0)) return
+  if (combatSupportersAwaited(game, preview).length) return
+  pending.continueDecisions = { ...pending.continueDecisions, attacker: true, defender: true }
 }
 
 function finishContinueAfterBothSidesReady(

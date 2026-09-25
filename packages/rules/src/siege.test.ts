@@ -429,17 +429,6 @@ describe('осада: действия сторон', () => {
     expect(siegeAt(game, { q: 1, r: 0 })?.besiegerId).toBe('player-1')
   })
 
-  function withDice<T>(values: number[], fn: () => T): T {
-    const queue = [...values]
-    const original = Math.random
-    Math.random = () => ((queue.shift() ?? 1) - 1) / 6 + 0.01
-    try {
-      return fn()
-    } finally {
-      Math.random = original
-    }
-  }
-
   it('осаждённый не строит в осаждённой клетке', () => {
     const { map, game } = establishedSiege(['destroyer'])
     game.activePlayerId = 'player-2'
@@ -607,6 +596,36 @@ describe('осада: третий игрок', () => {
     expect(after.attacker.ships.map((ship) => ship.shipId).sort()).toEqual(['gar-0', 'third-bb1'])
     // Гарнизон вмешался в чужой бой сам — бонуса крепости нет.
     expect(after.siegeRerolls).toBeUndefined()
+  })
+})
+
+describe('бой, где одна сторона не стреляет', () => {
+  it('крейсер против одинокого авианосца: раунды идут сами, пока авианосец не погибнет', () => {
+    const { map, game } = siegeBoard()
+    const origin = cellAt(game, 1, 0)
+    origin.isPowerCenter = false
+    origin.controlOwnerId = null
+    addShip(game, 1, 0, 'player-1', 'cruiser', 'att-cr')
+    addShip(game, 2, 0, 'player-2', 'carrier', 'def-cv')
+    placeMarker(game, 'player-1', 1, 0)
+
+    // Первый раунд — промахи крейсера; дальше шестёрки. Решений между раундами никто не принимал.
+    const queue = [1, 1]
+    const original = Math.random
+    Math.random = () => ((queue.shift() ?? 6) - 1) / 6 + 0.01
+    let result
+    try {
+      result = applyGameActionOnSnapshot(game, map, 'player-1', 'execute-marker-movement', {
+        from: { q: 1, r: 0 },
+        moves: [{ shipId: 'att-cr', to: { q: 2, r: 0 } }],
+        combatOptions: {},
+      })
+    } finally {
+      Math.random = original
+    }
+    expect(result.errors).toEqual([])
+    expect(game.pendingCombat).toBeUndefined()
+    expect(cellAt(game, 2, 0).ships.map((ship) => ship.id)).toEqual(['att-cr'])
   })
 })
 
