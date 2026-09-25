@@ -12,6 +12,7 @@ import {
 } from './combat.js'
 import { applyGameActionOnSnapshot, getLegalActionsForSnapshot } from './movement.js'
 import { addActionMarker } from './markers.js'
+import { autoDiceTargetsFor } from './combat-targets.js'
 import { applySiegeTick, siegeAt, siegeLossesOwedBy } from './siege.js'
 import { getBuildableShipsForMarker } from './production.js'
 import { applyTurnEndClaims } from './claim.js'
@@ -606,5 +607,35 @@ describe('осада: третий игрок', () => {
     expect(after.attacker.ships.map((ship) => ship.shipId).sort()).toEqual(['gar-0', 'third-bb1'])
     // Гарнизон вмешался в чужой бой сам — бонуса крепости нет.
     expect(after.siegeRerolls).toBeUndefined()
+  })
+})
+
+describe('поддержка третьего игрока', () => {
+  it('выбрал сторону, потом «Готов» с целями — готовность принимается, цели сохраняются', () => {
+    const { map, game } = siegeBoard()
+    addShip(game, 0, 0, 'player-1', 'cruiser', 'att-cr')
+    addShip(game, 1, 0, 'player-2', 'cruiser', 'def-cr')
+    addShip(game, 2, 0, 'player-3', 'cruiser', 'sup-cr')
+    placeMarker(game, 'player-1', 0, 0)
+    applyGameActionOnSnapshot(game, map, 'player-1', 'execute-marker-movement', {
+      from: { q: 0, r: 0 },
+      moves: [{ shipId: 'att-cr', to: { q: 1, r: 0 } }],
+    })
+    expect(game.pendingCombat?.phase).toBe('prep')
+
+    expect(applyGameActionOnSnapshot(game, map, 'player-3', 'update-combat-prep', {
+      ready: false,
+      supportSide: 'attacker',
+    }).errors).toEqual([])
+    const withSide = buildCombatPreviewFromPending(game)!
+    const diceTargets = autoDiceTargetsFor(withSide, 'player-3', {})
+    expect(Object.keys(diceTargets)).toEqual(['sup-cr'])
+
+    const ready = applyGameActionOnSnapshot(game, map, 'player-3', 'update-combat-prep', {
+      ready: true,
+      diceTargets,
+    })
+    expect(ready.errors).toEqual([])
+    expect(combatPrepOf(game.pendingCombat)?.readyBy['player-3']).toBe(true)
   })
 })

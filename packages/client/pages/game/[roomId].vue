@@ -699,10 +699,56 @@ const battleResolutionKey = computed(() =>
   combatResolutionFingerprint(battleResolution.value),
 )
 
+/**
+ * Клетки боёв, в которых вы участвуете: атакуете, защищаетесь или выбрали сторону поддержки.
+ * Итог чужого боя (например, бота с ботом) окно боя не открывает — он коротко виден над картой.
+ */
+const myCombatCells = ref(new Set<string>())
+watch(
+  () => {
+    const pending = pendingCombatState.value
+    const me = playerId.value
+    if (!pending) return null
+    const supportSide = combatPrepState.value?.combatOptions.supportSides?.[me]
+      ?? pending.combatOptions?.supportSides?.[me]
+    const involved = pending.attackerId === me || isCombatDefender(pending, me) || supportSide != null
+    return involved ? pending.cellKey : null
+  },
+  (cellKey) => {
+    if (cellKey) myCombatCells.value.add(cellKey)
+  },
+  { immediate: true },
+)
+
+const resolutionInvolvesMe = computed(() => {
+  const res = battleResolution.value
+  if (!res) return false
+  if (myCombatCells.value.has(`${res.coord.q},${res.coord.r}`)) return true
+  const rounds = res.rounds ?? (res.roundOne ? [res.roundOne] : [])
+  return rounds.some((round) => round.shipRolls.some((roll) => roll.ownerId === playerId.value))
+})
+
+/** Итог чужого боя: окна нет, только уведомление над картой — и только когда бой закончен. */
+function noteForeignCombatResult(key: string) {
+  const res = battleResolution.value
+  if (!res) return
+  dismissedCombatResultKey.value = key
+  if (currentCombatRollsKey.value) dismissedCombatRollsKey.value = currentCombatRollsKey.value
+  const cellKey = `${res.coord.q},${res.coord.r}`
+  if (pendingCombatState.value?.cellKey === cellKey) return
+  const winner = snapshot.value?.players.find((player) => player.id === res.winnerId)?.name ?? null
+  pushStatusToast(
+    'phase',
+    ui.foreignCombat.title(res.coord.q, res.coord.r),
+    ui.foreignCombat.outcome(winner, res.destroyedShipIds.length),
+  )
+}
+
 const roundResultsPendingView = computed(() => {
   if (!combatResultsHydrated.value) return false
   const key = battleResolutionKey.value
   if (key == null || key === dismissedCombatResultKey.value) return false
+  if (!resolutionInvolvesMe.value) return false
   // Тот же раунд уже закрыт (отпечаток меняется после уничтожения — не считаем «не просмотренным»).
   if (
     dismissedCombatRollsKey.value
@@ -851,6 +897,10 @@ watch(
     if (!key || key === prev) return
     // Уже закрывали именно этот итог — не сбрасываем (poll/null→key мерцание).
     if (dismissedCombatResultKey.value === key) return
+    if (!resolutionInvolvesMe.value) {
+      noteForeignCombatResult(key)
+      return
+    }
     // Тот же раунд awaiting-continue: fingerprint меняется после уничтожения — не открывать итог снова.
     if (
       shouldKeepCombatResultDismiss({
@@ -1942,8 +1992,9 @@ async function submitCombatPrepReady(combatOptions: CombatOptions) {
     const pending = pendingCombatState.value
     if (!prep || !pending) return
 
-    const isAttacker = pending.attackerId === playerId.value
-    const sideOptions = isAttacker ? combatOptions.attacker : combatOptions.defender
+    // Окно боя присылает цели только своей стороны: атакующего, защитника или той, которую
+    // игрок поддерживает. Раньше поддерживающий атакующего отправлял цели защитника.
+    const sideOptions = combatOptions.attacker ?? combatOptions.defender
     const targetPriority = sideOptions?.targetPriority
     const diceTargets = sideOptions?.diceTargets
 

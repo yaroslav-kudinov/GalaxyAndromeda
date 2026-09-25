@@ -2457,7 +2457,10 @@ export function updateCombatPrep(
     if (isEliminatedPlayer(game, playerId)) {
       return { errors: ['Выбывший игрок не может поддерживать'] }
     }
-    if (supportSide === undefined && ready && prep.readyBy[playerId] !== true) {
+    // Сторону выбирают отдельным запросом, а «Готов» приходит уже без неё: выбор берём из
+    // подготовки. Раньше готовность с выбранной стороной отклонялась, и бой ждал поддержку.
+    const sideChosen = prep.combatOptions.supportSides?.[playerId] != null
+    if (supportSide === undefined && ready && !sideChosen && prep.readyBy[playerId] !== true) {
       return { errors: ['Сначала выберите сторону поддержки или «не поддерживать»'] }
     }
     if (supportSide !== undefined) {

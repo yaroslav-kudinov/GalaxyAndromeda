@@ -216,6 +216,14 @@ export const uiStringsRu = {
   garrisonChoice: {
     banner: 'Ваш гарнизон стоит на клетке этого боя. Встаньте на сторону одного из противников — тогда он будет биться на клетке — или не вмешивайтесь.',
   },
+  foreignCombat: {
+    title: (q: number, r: number) => `Бой на (${q},${r})`,
+    outcome: (winner: string | null, destroyed: number) =>
+      [
+        winner ? `Победил ${winner}` : 'Победителя нет',
+        destroyed ? `уничтожено кораблей: ${destroyed}` : null,
+      ].filter(Boolean).join(', '),
+  },
   cellMarkers: {
     owners: (names: readonly string[]) =>
       names.length > 1
