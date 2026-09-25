@@ -21,6 +21,7 @@ import {
   gameSnapshotFromMap,
   claimPicksRemaining,
   computeClaimLimit,
+  computeRechargeBudget,
   getShipProductionRegionMin,
   hexKey,
   rechargePicksRemaining,
@@ -117,27 +118,37 @@ const NEIGHBOUR_OFFSETS = [
  * (`SHIP_PRODUCTION_REGION_MIN`). Считаем сами, чтобы не строить полный spatial summary.
  */
 function largestRegionSize(game: GameSnapshot, playerId: string): number {
+  return Math.max(0, ...regionSizes(game, playerId))
+}
+
+/** Размеры всех связных регионов игрока. */
+function regionSizes(game: GameSnapshot, playerId: string): number[] {
+  return regionsOf(game, playerId).map((region) => region.length)
+}
+
+/** Связные регионы игрока — списки ключей клеток. */
+function regionsOf(game: GameSnapshot, playerId: string): string[][] {
   const own = new Set<string>()
   for (const cell of game.cells) {
     if (cell.controlOwnerId === playerId) own.add(hexKey(cell.coord.q, cell.coord.r))
   }
   const seen = new Set<string>()
-  let largest = 0
+  const regions: string[][] = []
   for (const start of own) {
     if (seen.has(start)) continue
-    let size = 0
+    const region: string[] = []
     const stack = [start]
     while (stack.length) {
       const key = stack.pop()!
       if (seen.has(key) || !own.has(key)) continue
       seen.add(key)
-      size += 1
+      region.push(key)
       const { q, r } = parseKey(key)
       for (const [dq, dr] of NEIGHBOUR_OFFSETS) stack.push(hexKey(q + dq, r + dr))
     }
-    if (size > largest) largest = size
+    regions.push(region)
   }
-  return largest
+  return regions
 }
 
 /**
@@ -208,6 +219,23 @@ function sampleTurn(
   for (const playerId of playerIds) {
     const powerCenters = countControlledPowerCenters(game, playerId)
     const cells = controlledCells(game, playerId)
+    const regionList = regionsOf(game, playerId)
+    const regions = regionList.map((region) => region.length)
+    const index = indexCells(game)
+    let stranded = 0
+    for (const region of regionList) {
+      if (region.length >= getShipProductionRegionMin('destroyer')) continue
+      for (const key of region) {
+        for (const token of index.get(key)?.resourceTokens ?? []) if (token.faceUp !== false) stranded += token.value
+      }
+    }
+    let faceDown = 0
+    let tokenCells = 0
+    for (const cell of game.cells) {
+      if (cell.controlOwnerId !== playerId || cell.resourceTokens.length === 0) continue
+      tokenCells += 1
+      for (const token of cell.resourceTokens) if (token.faceUp === false) faceDown += 1
+    }
     byPlayer[playerId] = {
       powerCenters,
       cells,
@@ -215,6 +243,12 @@ function sampleTurn(
       faceUpValue: faceUpValueFor(game, playerId),
       claimLimit: computeClaimLimit(game, playerId),
       claimsMade: Math.max(0, cells - (previousCells[playerId] ?? cells)),
+      largestRegion: Math.max(0, ...regions),
+      productionRegions: regions.filter((size) => size >= getShipProductionRegionMin('destroyer')).length,
+      rechargeBudget: computeRechargeBudget(game, playerId),
+      faceDownTokens: faceDown,
+      tokenCells,
+      strandedValue: stranded,
     }
   }
   return { turn, byPlayer }
@@ -384,7 +418,10 @@ function runGameSeeded(map: MapDefinition, seed: number, options: RunOptions): G
           : {}),
     })
 
-    const tally: SpendTally = { tokenFaceValue: 0, shipCost: 0 }
+    // Траты — у каждого свои: экономику уровней сравниваем по местам.
+    const tallies: Record<string, SpendTally> = Object.fromEntries(
+      playerIds.map((id) => [id, { tokenFaceValue: 0, shipCost: 0, builds: 0, shipsBuilt: 0 }]),
+    )
     const orderSeen: Record<string, number[]> = Object.fromEntries(
       playerIds.map((id) => [id, [] as number[]]),
     )
@@ -564,7 +601,7 @@ function runGameSeeded(map: MapDefinition, seed: number, options: RunOptions): G
       }
       if (!progressed && game.phase === 'planning') progressed = tryPlaceMarker(game, map, active, difficultyOf(active))
       else if (game.phase === 'actions') {
-        progressed = stepActions(game, map, active, tally, attempts, difficultyOf(active))
+        progressed = stepActions(game, map, active, tallies[active]!, attempts, difficultyOf(active))
       }
 
       note(
@@ -602,8 +639,15 @@ function runGameSeeded(map: MapDefinition, seed: number, options: RunOptions): G
       otherHardSeats: playerIds.filter((id) => id !== episode.playerId && difficultyOf(id) === 'hard').length,
       stopped: !(record.winnerId === episode.playerId && winTurn <= episode.turn + 2),
     }))
-    record.tokenFaceValueSpent = tally.tokenFaceValue
-    record.shipCostPaid = tally.shipCost
+    record.tokenFaceValueSpent = Object.values(tallies).reduce((sum, item) => sum + item.tokenFaceValue, 0)
+    record.shipCostPaid = Object.values(tallies).reduce((sum, item) => sum + item.shipCost, 0)
+    record.spendByPlayer = Object.fromEntries(
+      playerIds.map((id) => [id, {
+        tokenFaceValue: tallies[id]!.tokenFaceValue,
+        builds: tallies[id]!.builds ?? 0,
+        shipsBuilt: tallies[id]!.shipsBuilt ?? 0,
+      }]),
+    )
     record.meanOrderPosition = Object.fromEntries(
       playerIds.map((id) => {
         const seen = orderSeen[id] ?? []

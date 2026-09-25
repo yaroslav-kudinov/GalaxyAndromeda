@@ -8,6 +8,11 @@
  * задают веса, с которыми тактический слой ценит клетки, постройки и бои. Поэтому любое
  * решение бота можно разложить на слагаемые и объяснить.
  *
+ * Оба уровня развивают экономику, а не только бегут за центрами (режим `develop`): ценят клетки с
+ * фишками и рост регионов, тратят скопившиеся деньги на корабли и не берут каждый центр в первый
+ * же ход — центр режет бюджет перезарядки, поэтому неоспариваемый центр подождёт, пока
+ * экономика не встанет на ноги.
+ *
  * Оба уровня прежде всего бегут к порогу сами. Высокий отличается тем, что замечает соперника,
  * который вот-вот победит (`NearWinner`), и тогда бросает силы на то, чтобы его остановить;
  * пока такого соперника нет, свою оборону он держит минимальной — она съедает темп.
@@ -23,19 +28,21 @@ import {
   type RegionInfo,
 } from './bot-board.js'
 import { computeClaimLimit } from './claim.js'
+import { computeRechargeBudget } from './resource-recharge.js'
 import { activeDoctrineId, type DoctrineId } from './doctrines.js'
 import { powerCentersCapturedNextTurn } from './siege.js'
 import type { GameSnapshot } from './save-file.js'
 import { SHIP_PRODUCTION_COST, SHIP_PRODUCTION_REGION_MIN } from './ships.js'
-import type { ShipType } from './types.js'
+import { hexKey, type ShipType } from './types.js'
+import { effectiveMoveRange } from './doctrines.js'
 import { victoryThresholdForSnapshot } from './victory.js'
 
 export type SmartDifficulty = 'medium' | 'hard'
 
 /** Стратегические режимы: каждый — вес от 0 до 1, а не выключатель. */
-export type BotMode = 'expand' | 'attack' | 'buildup' | 'defend' | 'siege' | 'finish' | 'deny'
+export type BotMode = 'expand' | 'develop' | 'attack' | 'buildup' | 'defend' | 'siege' | 'finish' | 'deny'
 
-export const BOT_MODES: readonly BotMode[] = ['expand', 'attack', 'buildup', 'defend', 'siege', 'finish', 'deny']
+export const BOT_MODES: readonly BotMode[] = ['expand', 'develop', 'attack', 'buildup', 'defend', 'siege', 'finish', 'deny']
 
 /**
  * Чем уровни различаются — числами и флагами, а не разными алгоритмами: так проще объяснить
@@ -45,6 +52,24 @@ export interface BotProfile {
   difficulty: SmartDifficulty
   /** Доля внимания к обычной обороне своих центров. */
   routineDefense: number
+  /**
+   * Доля внимания к пустому центру, до которого долетает враг: чужой центр без гарнизона
+   * уходит набегом сразу, поэтому хватает одного корабля-пикета, чтобы набег стал боем.
+   */
+  raidDefense: number
+  /**
+   * Вес экономического развития: клетки с фишками, рост регионов, трата денег, бюджет
+   * перезарядки. 0 — бот бежит за центрами, как прежде.
+   */
+  economy: number
+  /** Насколько откладывать неоспариваемый центр ради развития (доля ценности центра). */
+  pacing: number
+  /** Учитывать потерю перезарядки при взятии центра (множитель). */
+  rechargeAware: number
+  /** Скидка на трату денег, которые вернёт простаивающая перезарядка. */
+  reinvest: number
+  /** Насколько дешевле одиночная клетка вдали от своих: деньги с неё пока не потратить. */
+  compactness: number
   /**
    * Доля внимания к обороне, от которой зависит партия: последний центр (выбывание), удар того,
    * кто вот-вот победит, или центр, без которого сорвётся своя победа.
@@ -92,17 +117,23 @@ export const BOT_PROFILES: Record<SmartDifficulty, BotProfile> = {
   medium: {
     difficulty: 'medium',
     routineDefense: 0.15,
+    raidDefense: 0,
+    economy: 1,
+    pacing: 0.35,
+    rechargeAware: 1,
+    reinvest: 0.6,
+    compactness: 0.35,
     criticalDefense: 0.15,
     threatAware: false,
     denyShare: 0,
     smartCombat: false,
     smartProduction: false,
     smartDoctrine: false,
-    smartRecharge: false,
+    smartRecharge: true,
     reserveMarkers: false,
     previewCombat: false,
     buildScale: 1.5,
-    richDiscount: false,
+    richDiscount: true,
     pickets: true,
     holdAware: false,
     lossAversion: 1,
@@ -115,6 +146,12 @@ export const BOT_PROFILES: Record<SmartDifficulty, BotProfile> = {
   hard: {
     difficulty: 'hard',
     routineDefense: 0,
+    raidDefense: 0,
+    economy: 1,
+    pacing: 0.35,
+    rechargeAware: 1,
+    reinvest: 0.6,
+    compactness: 0.35,
     criticalDefense: 1,
     threatAware: true,
     denyShare: 1,
@@ -159,6 +196,26 @@ export interface PlayerView {
   claimLimit: number
   doctrine: DoctrineId
   largestRegion: number
+  /** Своих клеток с фишками ресурсов. */
+  tokenCells: number
+}
+
+/**
+ * Экономика бота: чем он платит за корабли и сколько вернёт перезарядка. Бюджет перезарядки
+ * падает на единицу с каждым центром власти, поэтому лишний центр до срока — это потерянные
+ * фишки каждый следующий ход.
+ */
+export interface EconomyView {
+  /** Бюджет перезарядки на этот ход. */
+  budget: number
+  /** Фишек лицом вниз — их поднимает перезарядка. */
+  faceDown: number
+  /** Средний номинал своих фишек (или 2, если фишек нет). */
+  tokenValue: number
+  /** Деньги лицом вверх в регионах, где можно строить (от трёх клеток). */
+  usableWallet: number
+  /** Деньги лицом вверх в мелких регионах: потратить их нельзя, пока регион не вырастет. */
+  strandedWallet: number
 }
 
 /**
@@ -219,8 +276,9 @@ export interface BotSituation {
   neutralPowerCenters: string[]
   /** Центры, которые сменят хозяина в начале следующего хода: ключ → кто забирает. */
   capturesAhead: Map<string, string>
+  economy: EconomyView
   /** Сколько клеток бот займёт в конце хода, если корабли останутся на местах. */
-  plannedClaims: { powerCenters: number; other: number }
+  plannedClaims: { powerCenters: number; other: number; keys: Set<string> }
   regions: { largest: RegionInfo | null; regionOf: Map<string, number>; list: RegionInfo[] }
 }
 
@@ -245,6 +303,7 @@ function buildViews(game: GameSnapshot, board: BoardIndex): Map<string, PlayerVi
       claimLimit: computeClaimLimit(game, id),
       doctrine: activeDoctrineId(game, id),
       largestRegion: regionsOf(board, id).largest?.size ?? 0,
+      tokenCells: 0,
     })
   }
   for (const [key, cell] of board.cells) {
@@ -252,6 +311,7 @@ function buildViews(game: GameSnapshot, board: BoardIndex): Map<string, PlayerVi
     if (owner) {
       owner.cells += 1
       if (cell.isPowerCenter) owner.powerCenters += 1
+      if (cell.resourceTokens.length > 0) owner.tokenCells += 1
     }
     for (const ship of cell.ships) views.get(ship.ownerId)?.ships.push({ id: ship.id, type: ship.type, key })
   }
@@ -412,17 +472,19 @@ function clamp01(value: number): number {
 }
 
 /** Сколько клеток бот займёт в конце хода, если корабли останутся там, где стоят. */
-function countPlannedClaims(board: BoardIndex, playerId: string): { powerCenters: number; other: number } {
+function countPlannedClaims(board: BoardIndex, playerId: string): { powerCenters: number; other: number; keys: Set<string> } {
   let powerCenters = 0
   let other = 0
+  const keys = new Set<string>()
   for (const cell of board.cells.values()) {
     if (cell.controlOwnerId === playerId) continue
     if (!cell.ships.some((ship) => ship.ownerId === playerId)) continue
     if (cell.ships.some((ship) => ship.ownerId !== playerId)) continue
+    keys.add(hexKey(cell.coord.q, cell.coord.r))
     if (cell.isPowerCenter) powerCenters += 1
     else other += 1
   }
-  return { powerCenters, other }
+  return { powerCenters, other, keys }
 }
 
 /**
@@ -510,7 +572,51 @@ function computeModes(
   // Помеха: только если есть соперник, который вот-вот победит, и уровень на это способен.
   const deny = clamp01((nearWinner?.urgency ?? 0) * profile.denyShare)
 
-  return { expand, attack, buildup, defend, siege, finish, deny }
+  // Развитие: пока партия молода, а экономика слаба — регион мал для крейсеров, клеток с фишками
+  // меньше, чем у соседей, деньги лежат в мелких регионах. К концу партии и перед своей победой
+  // (или чужой, которую надо сорвать) развитие уступает центрам.
+  const rivalTokenCells = situation.rivals.length
+    ? situation.rivals.reduce((sum, rival) => sum + rival.tokenCells, 0) / situation.rivals.length
+    : 0
+  const weakness = (me.largestRegion < SHIP_PRODUCTION_REGION_MIN.cruiser ? 0.25 : 0)
+    + (me.tokenCells < rivalTokenCells ? 0.15 : 0)
+    + (situation.economy.strandedWallet >= 6 ? 0.1 : 0)
+  const develop = clamp01(
+    profile.economy
+      * clamp01(0.75 - Math.max(0, turn - 1) * 0.06 + weakness)
+      * (1 - finish * 0.8)
+      * (1 - deny * 0.7),
+  )
+
+  return { expand, develop, attack, buildup, defend, siege, finish, deny }
+}
+
+function economyOf(game: GameSnapshot, board: BoardIndex, playerId: string, regions: readonly RegionInfo[]): EconomyView {
+  let faceDown = 0
+  let tokens = 0
+  let total = 0
+  for (const cell of board.cells.values()) {
+    if (cell.controlOwnerId !== playerId) continue
+    for (const token of cell.resourceTokens) {
+      tokens += 1
+      total += token.value
+      if (token.faceUp === false) faceDown += 1
+    }
+  }
+  let usableWallet = 0
+  let strandedWallet = 0
+  for (const region of regions) {
+    const wallet = region.credits + region.production
+    if (region.size >= SHIP_PRODUCTION_REGION_MIN.destroyer) usableWallet += wallet
+    else strandedWallet += wallet
+  }
+  return {
+    budget: computeRechargeBudget(game, playerId),
+    faceDown,
+    tokenValue: tokens > 0 ? total / tokens : 2,
+    usableWallet,
+    strandedWallet,
+  }
 }
 
 function dominantMode(modes: Record<BotMode, number>): BotMode {
@@ -538,6 +644,7 @@ export function analyzeSituation(
     claimLimit: 0,
     doctrine: 'none' as DoctrineId,
     largestRegion: 0,
+    tokenCells: 0,
   }
   const capturesAhead = new Map<string, string>()
   for (const capture of powerCentersCapturedNextTurn(game)) {
@@ -577,6 +684,7 @@ export function analyzeSituation(
 
   const threats = computeThreats(game, board, me, rivals, nearWinner)
   const regionsInfo = regionsOf(board, playerId)
+  const economy = economyOf(game, board, playerId, regionsInfo.regions)
 
   const base = {
     playerId,
@@ -594,6 +702,7 @@ export function analyzeSituation(
     threats,
     neutralPowerCenters,
     capturesAhead,
+    economy,
     plannedClaims: countPlannedClaims(board, playerId),
     regions: { largest: regionsInfo.largest, regionOf: regionsInfo.regionOf, list: regionsInfo.regions },
   }
@@ -629,8 +738,12 @@ export function cellGoalValue(situation: BotSituation, key: string): number {
       : 0
     if (owner == null) {
       let value = POWER_CENTER_VALUE * (0.75 + modes.expand * 0.35 + modes.finish * 0.8)
+      // Неоспариваемый центр подождёт, пока экономика встаёт на ноги: каждый центр режет бюджет
+      // перезарядки на фишку за ход, а соперник его всё равно не успеет занять.
+      const calm = isCalmPowerCenter(situation, key)
+      if (calm) value = value * (1 - situation.profile.pacing * modes.develop) - rechargeLoss(situation)
       value += Math.max(snatch, denyContestBonus(situation, key))
-      return value + tokenValue
+      return value + tokenValue + economicValue(situation, key, tokenValue) * 0.5
     }
     const ownerView = situation.views.get(owner)
     let value = POWER_CENTER_VALUE * (0.8 + modes.attack * 0.3 + modes.finish * 0.8)
@@ -646,12 +759,97 @@ export function cellGoalValue(situation: BotSituation, key: string): number {
 
   if (owner === playerId) return 0
   const regionBonus = touchesOwnRegion(situation, key) ? 4 : 0
+  const economic = economicValue(situation, key, tokenValue)
   if (owner == null) {
-    return (6 + tokenValue * 2.2) * (0.5 + modes.expand * 0.6) + regionBonus
+    // Одиночная клетка вдали от своих — деньги с неё не потратить, пока вокруг не вырастет регион.
+    const isolation = regionBonus > 0 || touchesPlannedClaim(situation, key) ? 1 : 1 - situation.profile.compactness * modes.develop
+    return (6 + tokenValue * 2.2) * (0.5 + modes.expand * 0.6) * isolation + regionBonus + economic
   }
   // Чужая клетка без кораблей переходит сразу при входе: это набег на экономику соперника.
   const raid = 5 + tokenValue * 1.6 + (isDenyTarget(situation, owner) ? 8 * modes.deny : 0)
-  return raid * (0.5 + modes.attack * 0.6) + regionBonus
+  return raid * (0.5 + modes.attack * 0.6) + regionBonus + economic * 0.7
+}
+
+/** Пороги региона, открывающие постройку: любые корабли, крейсер, авианосец, линкор. */
+const REGION_STEPS: readonly (readonly [number, number])[] = [
+  [SHIP_PRODUCTION_REGION_MIN.destroyer, 14],
+  [SHIP_PRODUCTION_REGION_MIN.cruiser, 10],
+  [SHIP_PRODUCTION_REGION_MIN.carrier, 12],
+  [SHIP_PRODUCTION_REGION_MIN.battleship, 12],
+]
+
+/**
+ * Экономическая ценность клетки в режиме развития: фишки, которые попадут в кошелёк, где их
+ * можно потратить, рост региона до порога нового класса кораблей и сшивка своих регионов.
+ */
+export function economicValue(situation: BotSituation, key: string, tokenValue: number): number {
+  const develop = situation.modes.develop
+  if (develop <= 0) return 0
+  const touching = new Set<number>()
+  for (const next of situation.board.neighbors.get(key) ?? []) {
+    const region = situation.regions.regionOf.get(next)
+    if (region != null) touching.add(region)
+  }
+  let before = 0
+  let merged = 1
+  // Клетки, которые бот займёт в начале хода, войдут в тот же регион.
+  for (const next of situation.board.neighbors.get(key) ?? []) {
+    if (situation.plannedClaims.keys.has(next)) merged += 1
+  }
+  for (const id of touching) {
+    const size = situation.regions.list[id]?.size ?? 0
+    before = Math.max(before, size)
+    merged += size
+  }
+  let value = 0
+  for (const [size, bonus] of REGION_STEPS) if (before < size && merged >= size) value += bonus
+  if (touching.size >= 2) value += 6
+  // Фишки в регионе от трёх клеток сразу идут в дело; в одиночной клетке — только когда он вырастет.
+  value += tokenValue * (merged >= SHIP_PRODUCTION_REGION_MIN.destroyer ? 2.4 : 1.2)
+  return develop * value
+}
+
+/** Через сколько ходов ближайший корабль игрока долетит до клетки (без учёта препятствий). */
+function turnsToReach(situation: BotSituation, view: PlayerView, dist: Map<string, number>): number {
+  let best = Infinity
+  for (const ship of view.ships) {
+    const d = dist.get(ship.key)
+    if (d == null) continue
+    best = Math.min(best, Math.ceil(d / Math.max(1, effectiveMoveRange(situation.board.game, ship.type, view.id))))
+  }
+  return best
+}
+
+/**
+ * Нейтральный центр, который можно взять позже: ни один соперник не долетит до него раньше,
+ * чем через два хода после бота. Такой центр в режиме развития подождёт — экономика окрепнет,
+ * а бюджет перезарядки пока останется выше. Оспариваемый центр берётся сразу.
+ */
+export function isCalmPowerCenter(situation: BotSituation, key: string): boolean {
+  if (situation.modes.develop <= 0) return false
+  const dist = distancesFrom(situation.board, key)
+  const mine = turnsToReach(situation, situation.me, dist)
+  if (!Number.isFinite(mine)) return false
+  return situation.rivals.every((rival) => turnsToReach(situation, rival, dist) > mine + 2)
+}
+
+/**
+ * Что бот теряет в экономике, взяв ещё один центр: фишку перезарядки за каждый оставшийся ход
+ * (в пределах горизонта), если он тратит деньги и перезарядке есть что поднимать. Перед своей
+ * победой не считается.
+ */
+export function rechargeLoss(situation: BotSituation): number {
+  const { economy, profile, modes, turnsLeft } = situation
+  if (profile.economy <= 0 || economy.budget <= 0 || modes.finish >= 0.99) return 0
+  const spending = Math.min(1, economy.faceDown / Math.max(1, economy.budget))
+  return profile.rechargeAware * profile.economy * spending * economy.tokenValue * Math.min(6, turnsLeft) * 0.6 * (1 - modes.finish)
+}
+
+function touchesPlannedClaim(situation: BotSituation, key: string): boolean {
+  for (const next of situation.board.neighbors.get(key) ?? []) {
+    if (situation.plannedClaims.keys.has(next)) return true
+  }
+  return false
 }
 
 function touchesOwnRegion(situation: BotSituation, key: string): boolean {
@@ -704,5 +902,7 @@ export function defenseValue(situation: BotSituation, key: string): number {
   const base = POWER_CENTER_VALUE * (threat.last ? 2.2 : 1.1)
   const nearWin = situation.modes.finish > 0.5 ? 0.4 : 0
   const likelihood = threat.occupied ? 1 : threat.now > 0 ? 0.6 : 0.25
-  return base * (1 + nearWin) * likelihood * defenseShareFor(situation, threat)
+  // Пустой центр, до которого враг долетает сейчас, уходит набегом без боя.
+  const raid = threat.garrison <= 0 && threat.now > 0 ? situation.profile.raidDefense * 0.6 : 0
+  return base * (1 + nearWin) * likelihood * Math.max(defenseShareFor(situation, threat), raid)
 }

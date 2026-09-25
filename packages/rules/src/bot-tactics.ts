@@ -45,7 +45,7 @@ import { shipHitThreshold } from './combat-hits.js'
 import { MAX_FLEET_SIZE_PER_PLAYER, MAX_SHIPS_PER_CELL, MAX_SHIPS_PER_CELL_PER_PLAYER } from './constants.js'
 import { effectiveMoveRange } from './doctrines.js'
 import { actionMarkerLimitForPlayer } from './marker-pools.js'
-import { canPlaceActionMarkerOnCell } from './markers.js'
+import { actionMarkerSlotFree, canPlaceActionMarkerOnCell } from './markers.js'
 import type { ShipMovePlan } from './movement.js'
 import { computeRechargeBudget, rechargePicksRemaining, type ResourceTokenRef } from './resource-recharge.js'
 import type { GameSnapshot } from './save-file.js'
@@ -158,12 +158,30 @@ function enemyReachStrength(ctx: TacticalContext, key: string, includeOnCell = t
  * победителя, перед своей победой), а обычную оборону оставляет, чтобы не терять темп.
  */
 function garrisonNeedFor(ctx: TacticalContext, key: string): number {
+  const critical = criticalNeedFor(ctx, key)
+  if (critical > 0) return critical
+  // Пустой центр уходит к вошедшему сразу: одного корабля хватает, чтобы набег стал боем.
+  const threat = ctx.situation.threats.get(key)
+  if (ctx.situation.profile.raidDefense > 0 && threat && threat.now > 0) return PICKET_STRENGTH
+  return 0
+}
+
+/** Гарнизон, который уровень держит всерьёз: без пикетов от набега. */
+function criticalNeedFor(ctx: TacticalContext, key: string): number {
   const need = garrisonNeed(ctx.situation, key)
   if (need <= 0) return 0
   const threat = ctx.situation.threats.get(key)
   if (!threat) return 0
-  if (ctx.situation.profile.threatAware) return defenseShareFor(ctx.situation, threat) >= 0.5 ? need : 0
-  return threat.last ? need : 0
+  const { profile } = ctx.situation
+  return (profile.threatAware ? defenseShareFor(ctx.situation, threat) >= 0.5 : threat.last) ? need : 0
+}
+
+/**
+ * Возвращаться ли кораблю на свой пустой центр ради пикета. Полная оборона от набега
+ * (`raidDefense` 1) — да; половинная — только оставлять пикет, уходя, и строить его на месте.
+ */
+function returnsForPicket(ctx: TacticalContext, key: string): boolean {
+  return ctx.situation.profile.raidDefense >= 1 || criticalNeedFor(ctx, key) > 0
 }
 
 function approachGoals(ctx: TacticalContext): ApproachGoal[] {
@@ -175,7 +193,7 @@ function approachGoals(ctx: TacticalContext): ApproachGoal[] {
       if (!cell.isPowerCenter || !situation.profile.threatAware) continue
       const need = garrisonNeedFor(ctx, key)
       const threat = situation.threats.get(key)
-      if (need <= 0 || !threat || threat.garrison >= need) continue
+      if (need <= 0 || !threat || threat.garrison >= need || !returnsForPicket(ctx, key)) continue
       raw.push({ key, value: defenseValue(situation, key) * 0.6, claimOnly: false })
       continue
     }
@@ -522,7 +540,7 @@ export function planMoves(ctx: TacticalContext, markerKey: string, quick: boolea
             const empty = ownAt(key) + extra === 0
             const deficit = need - held
             const add = combatStrength([ship.type]) || PICKET_STRENGTH
-            if (empty && situation.profile.pickets) {
+            if (empty && (situation.profile.pickets || returnsForPicket(ctx, key))) {
               // Пустой центр под угрозой: первый корабль превращает захват в бой.
               gain += defenseValue(situation, key) * 0.7
               note = 'пикет'
@@ -571,7 +589,8 @@ const BUILD_TYPES: readonly ShipType[] = ['destroyer', 'cruiser', 'carrier', 'ba
 
 function shipWorth(ctx: TacticalContext, type: ShipType): number {
   const { modes, me } = ctx.situation
-  const military = 0.85 + 0.35 * Math.max(modes.attack, modes.buildup, modes.defend, modes.deny)
+  // Корабли нужны и для развития: занимать клетки и держать выросшую территорию.
+  const military = 0.85 + 0.35 * Math.max(modes.attack, modes.buildup, modes.defend, modes.deny, modes.develop * 0.6)
   switch (type) {
     case 'destroyer':
       return 4 * 0.95 * military + 2.6 * modes.expand
@@ -646,6 +665,13 @@ export function planBuild(ctx: TacticalContext, markerKey: string): BuildPlan | 
       const wallet = region.credits + region.production
       if (wallet >= 36) moneyCost *= 0.45
       else if (wallet >= 22) moneyCost *= 0.7
+    }
+    // Потраченные фишки вернёт перезарядка следующего хода, если её бюджет простаивает: такие
+    // деньги почти ничего не стоят, а лежащие лицом вверх — не приносят ничего.
+    const spare = Math.max(0, situation.economy.budget - situation.economy.faceDown)
+    if (spare > 0 && situation.profile.economy > 0) {
+      const tokensNeeded = Math.max(1, (shipCost(type) * count) / Math.max(1, situation.economy.tokenValue))
+      moneyCost *= 1 - situation.profile.reinvest * Math.min(1, spare / tokensNeeded)
     }
     if (savingFor && shipCost(type) < shipCost(savingFor) && deficit <= 0) moneyCost = 1.25
     let value = count * (worth * situation.profile.buildScale - shipCost(type) * moneyCost)
@@ -761,7 +787,8 @@ export function chooseMarkerCell(ctx: TacticalContext): HexCoord | null {
   let best: { key: string; score: number } | null = null
   const candidates: string[] = []
   for (const [key, cell] of board.cells) {
-    if (cell.actionMarkerId || !canPlaceActionMarkerOnCell(cell, playerId)) continue
+    // На осаждённой клетке у каждой стороны свой маркер: штурм, вылазка.
+    if (!actionMarkerSlotFree(game, cell, playerId) || !canPlaceActionMarkerOnCell(cell, playerId)) continue
     candidates.push(key)
   }
   // Ничьи — случайно, как у простого бота: иначе зеркальные карты дают перекос по местам.

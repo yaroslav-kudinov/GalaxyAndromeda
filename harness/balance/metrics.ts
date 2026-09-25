@@ -14,6 +14,18 @@ export interface PlayerSample {
   faceUpValue: number
   claimLimit: number
   claimsMade: number
+  /** Наибольший связный регион: открывает классы кораблей. */
+  largestRegion: number
+  /** Регионы, где можно строить (от трёх клеток). */
+  productionRegions: number
+  /** Бюджет перезарядки на этот ход: 0 — фишки не поднимаются. */
+  rechargeBudget: number
+  /** Фишки лицом вниз — ждут перезарядки. */
+  faceDownTokens: number
+  /** Своих клеток с фишками ресурсов. */
+  tokenCells: number
+  /** Номинал фишек лицом вверх в регионах меньше трёх клеток: там строить нельзя. */
+  strandedValue?: number
 }
 
 export interface TurnSample {
@@ -49,6 +61,8 @@ export interface GameRecord {
   firstUnlockTurn: Record<string, number>
   eliminationTurns: { playerId: string; turn: number }[]
   battles: BattleRecord[]
+  /** Траты каждого места: номинал фишек, постройки маркером, построенные корабли. */
+  spendByPlayer?: Record<string, { tokenFaceValue: number; builds: number; shipsBuilt: number }>
   /** Осады: установлено, взято (центр перешёл осаждающему), снято без взятия. */
   sieges: { established: number; captured: number; lifted: number }
   /** Выбранные доктрины по окнам: первый ход окна → доктрина → сколько раз. */
@@ -87,6 +101,111 @@ export interface NearWinSummary {
   episodes: number
   stopped: number
   share: number
+}
+
+/**
+ * Экономика уровня: средние по местам этого уровня. «По ходу» — среднее по всем ходам партии,
+ * «на ходу N» — снимок в конце хода N (партии короче N не входят).
+ */
+export interface EconomySummary {
+  seats: number
+  /** Своих клеток в среднем по ходу и на 5-м ходу. */
+  meanCells: number
+  cellsAtTurn5: number | null
+  /** В конце партии. */
+  cellsAtEnd: number
+  largestRegionAtEnd: number
+  productionRegionsAtEnd: number
+  tokenCellsAtEnd: number
+  /** Центров власти в среднем по ходу и на 3-м и 5-м ходу: видно, насколько бот торопится. */
+  meanPowerCenters: number
+  powerCentersAtTurn3: number | null
+  powerCentersAtTurn5: number | null
+  /** За партию: постройки маркером, корабли, потраченный номинал фишек. */
+  buildsPerGame: number
+  shipsBuiltPerGame: number
+  tokensSpentPerGame: number
+  /** Номинал фишек на ход партии. */
+  tokensSpentPerTurn: number
+  /** Доля ходов с нулевым бюджетом перезарядки и доля «голодных» (ноль при фишках лицом вниз). */
+  budgetZeroShare: number
+  starvedShare: number
+  /** Номинал фишек лицом вверх в конце хода: недотраченные деньги. */
+  meanFaceUpValue: number
+  /** Из них — в регионах, где строить нельзя. */
+  meanStrandedValue: number
+  shipsAtEnd: number
+}
+
+function sampleAt(record: GameRecord, turn: number): TurnSample | undefined {
+  return record.samples.find((sample) => sample.turn === turn)
+}
+
+function summarizeEconomy(records: readonly GameRecord[]): Record<string, EconomySummary> {
+  const buckets: Record<string, Record<string, number[]>> = {}
+  const push = (level: string, key: string, value: number | null | undefined) => {
+    if (value == null || !Number.isFinite(value)) return
+    const bucket = (buckets[level] ??= {})
+    ;(bucket[key] ??= []).push(value)
+  }
+  for (const record of records) {
+    const samples = record.samples.filter((sample) => Object.keys(sample.byPlayer).length > 0)
+    if (samples.length === 0) continue
+    const last = samples.at(-1)!
+    for (const playerId of record.playerIds) {
+      const level = record.seatDifficulty?.[playerId] ?? 'easy'
+      const series = samples.map((sample) => sample.byPlayer[playerId]).filter((item): item is PlayerSample => !!item)
+      if (series.length === 0) continue
+      push(level, 'seats', 1)
+      push(level, 'meanCells', mean(series.map((item) => item.cells)))
+      push(level, 'cellsAtTurn5', sampleAt(record, 5)?.byPlayer[playerId]?.cells)
+      const end = last.byPlayer[playerId]
+      push(level, 'cellsAtEnd', end?.cells)
+      push(level, 'largestRegionAtEnd', end?.largestRegion)
+      push(level, 'productionRegionsAtEnd', end?.productionRegions)
+      push(level, 'tokenCellsAtEnd', end?.tokenCells)
+      push(level, 'shipsAtEnd', end?.ships)
+      push(level, 'meanPowerCenters', mean(series.map((item) => item.powerCenters)))
+      push(level, 'powerCentersAtTurn3', sampleAt(record, 3)?.byPlayer[playerId]?.powerCenters)
+      push(level, 'powerCentersAtTurn5', sampleAt(record, 5)?.byPlayer[playerId]?.powerCenters)
+      const spend = record.spendByPlayer?.[playerId]
+      push(level, 'buildsPerGame', spend?.builds)
+      push(level, 'shipsBuiltPerGame', spend?.shipsBuilt)
+      push(level, 'tokensSpentPerGame', spend?.tokenFaceValue)
+      if (spend) push(level, 'tokensSpentPerTurn', spend.tokenFaceValue / Math.max(1, record.turns))
+      push(level, 'budgetZeroShare', mean(series.map((item) => (item.rechargeBudget <= 0 ? 1 : 0))))
+      push(level, 'starvedShare', mean(series.map((item) => (item.rechargeBudget <= 0 && item.faceDownTokens > 0 ? 1 : 0))))
+      push(level, 'meanFaceUpValue', mean(series.map((item) => item.faceUpValue)))
+      push(level, 'meanStrandedValue', mean(series.map((item) => item.strandedValue ?? 0)))
+    }
+  }
+  const out: Record<string, EconomySummary> = {}
+  for (const [level, bucket] of Object.entries(buckets)) {
+    const avg = (key: string): number => mean(bucket[key] ?? [])
+    const avgOrNull = (key: string): number | null => (bucket[key]?.length ? mean(bucket[key]!) : null)
+    out[level] = {
+      seats: (bucket.seats ?? []).length,
+      meanCells: avg('meanCells'),
+      cellsAtTurn5: avgOrNull('cellsAtTurn5'),
+      cellsAtEnd: avg('cellsAtEnd'),
+      largestRegionAtEnd: avg('largestRegionAtEnd'),
+      productionRegionsAtEnd: avg('productionRegionsAtEnd'),
+      tokenCellsAtEnd: avg('tokenCellsAtEnd'),
+      meanPowerCenters: avg('meanPowerCenters'),
+      powerCentersAtTurn3: avgOrNull('powerCentersAtTurn3'),
+      powerCentersAtTurn5: avgOrNull('powerCentersAtTurn5'),
+      buildsPerGame: avg('buildsPerGame'),
+      shipsBuiltPerGame: avg('shipsBuiltPerGame'),
+      tokensSpentPerGame: avg('tokensSpentPerGame'),
+      tokensSpentPerTurn: avg('tokensSpentPerTurn'),
+      budgetZeroShare: avg('budgetZeroShare'),
+      starvedShare: avg('starvedShare'),
+      meanFaceUpValue: avg('meanFaceUpValue'),
+      meanStrandedValue: avg('meanStrandedValue'),
+      shipsAtEnd: avg('shipsAtEnd'),
+    }
+  }
+  return out
 }
 
 /** Итог уровня сложности в замере: сколько мест он занимал и сколько партий выиграл. */
@@ -261,6 +380,8 @@ export interface Summary {
   }
   /** Победы по уровням сложности ботов. */
   winRateByDifficulty: Record<string, DifficultyResult>
+  /** Экономика по уровням сложности ботов. */
+  economyByDifficulty: Record<string, EconomySummary>
   /** Как часто почти победителя останавливали. */
   nearWins: ReturnType<typeof summarizeNearWins>
   bot: { errors: number; planRejects: number; samples: string[] }
@@ -474,6 +595,7 @@ export function summarize(records: readonly GameRecord[]): Summary {
       amplification: amplifications.length ? mean(amplifications) : null,
     },
     winRateByDifficulty: summarizeDifficulties(ok),
+    economyByDifficulty: summarizeEconomy(ok),
     nearWins: summarizeNearWins(ok),
     bot: {
       errors: records.reduce((sum, record) => sum + (record.botErrors ?? 0), 0),

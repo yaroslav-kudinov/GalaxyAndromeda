@@ -32,7 +32,7 @@ import { hitProbability, shipDice, shipHitThreshold } from './combat-hits.js'
 // ---------------------------------------------------------------------------
 
 /** Главный режим → доктрина: так выбирает средний уровень. */
-const DOCTRINE_FOR_MODE: Record<BotMode, DoctrineId> = {
+const DOCTRINE_FOR_MODE: Record<Exclude<BotMode, 'develop'>, DoctrineId> = {
   expand: 'expansion',
   attack: 'attack',
   siege: 'attack',
@@ -91,8 +91,8 @@ export function scoreDoctrines(game: GameSnapshot, playerId: string): DoctrineSc
   const defenseGain = enemyHits > 0 ? 1 - hitsWith(enemyTypes, 1) / enemyHits : 0
   const fighting = Math.max(modes.attack, modes.deny, modes.finish * 0.8)
   const scores: Record<DoctrineId, number> = {
-    expansion: 1 + claimGain * (0.6 + modes.expand) + modes.finish * 1.2 - 0.6,
-    production: 0.8 + Math.min(2, Math.max(0, headroom)) * (0.6 + modes.buildup),
+    expansion: 1 + claimGain * (0.6 + modes.expand + modes.develop * 0.3) + modes.finish * 1.2 - 0.6,
+    production: 0.8 + Math.min(2, Math.max(0, headroom)) * (0.6 + modes.buildup + modes.develop * 0.5),
     attack: besieged
       ? -10
       : 5 * fighting * Math.min(1.2, situation.fleetRatio) - 1.6 - claimGain * 0.4
@@ -109,6 +109,11 @@ export function pickSmartDoctrine(game: GameSnapshot, playerId: string, difficul
   if (!BOT_PROFILES[difficulty].smartDoctrine) {
     const situation = analyzeSituation(game, playerId, BOT_PROFILES.medium)
     if (besiegedCellKeysOf(game, playerId).length > 0) return 'defense'
+    if (situation.mode === 'develop') {
+      // Развитие: перезарядка не поспевает за тратами — «Производство», иначе — больше захвата.
+      const { faceDown, budget } = situation.economy
+      return faceDown > budget + 1 ? 'production' : 'expansion'
+    }
     return DOCTRINE_FOR_MODE[situation.mode]
   }
   let best: DoctrineScore | null = null

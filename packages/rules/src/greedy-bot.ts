@@ -308,6 +308,18 @@ export function tryPlaceMarker(
 export interface SpendTally {
   tokenFaceValue: number
   shipCost: number
+  /** Сколько раз маркер ушёл на постройку (замер экономики; необязательно). */
+  builds?: number
+  /** Сколько кораблей построено. */
+  shipsBuilt?: number
+}
+
+function recordBuild(tally: SpendTally, spent: number, type: ShipType, count: number): void {
+  const cost = getShipProductionCost(type)
+  tally.tokenFaceValue += Math.max(0, spent)
+  tally.shipCost += (cost.credits + cost.production) * count
+  tally.builds = (tally.builds ?? 0) + 1
+  tally.shipsBuilt = (tally.shipsBuilt ?? 0) + count
 }
 
 function tryBuild(
@@ -337,10 +349,7 @@ function tryBuild(
   })
   if (errors.length) return false
 
-  const spent = before - faceUpValueFor(game, playerId)
-  const cost = getShipProductionCost(best.type)
-  tally.tokenFaceValue += Math.max(0, spent)
-  tally.shipCost += (cost.credits + cost.production) * count
+  recordBuild(tally, before - faceUpValueFor(game, playerId), best.type, count)
   return true
 }
 
@@ -498,11 +507,7 @@ function executeMarkerPlan(
     const before = faceUpValueFor(game, playerId)
     const ships = Array.from({ length: plan.count }, () => ({ type: plan.type, coord: { ...marker.coord } }))
     errors = act(game, map, playerId, 'execute-production', { markerId: marker.id, ships }).errors
-    if (!errors.length) {
-      const cost = getShipProductionCost(plan.type)
-      tally.tokenFaceValue += Math.max(0, before - faceUpValueFor(game, playerId))
-      tally.shipCost += (cost.credits + cost.production) * plan.count
-    }
+    if (!errors.length) recordBuild(tally, before - faceUpValueFor(game, playerId), plan.type, plan.count)
   } else if (plan.kind === 'assault') {
     errors = act(game, map, playerId, 'execute-marker-assault', { from: { ...marker.coord } }).errors
   } else {

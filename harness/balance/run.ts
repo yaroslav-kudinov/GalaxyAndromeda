@@ -270,6 +270,23 @@ function report(mapId: string, summary: Summary, records: readonly GameRecord[])
           + `к справедливой ×${num(result.perSeatVsFair)})`)
       .join(', '))
   }
+  const economy = Object.entries(summary.economyByDifficulty)
+  if (economy.length > 1 || economy.some(([level]) => level !== 'easy')) {
+    lines.push('Экономика по уровням (среднее на место):')
+    for (const [level, item] of economy.sort((a, b) =>
+      BOT_DIFFICULTIES.indexOf(a[0] as BotDifficulty) - BOT_DIFFICULTIES.indexOf(b[0] as BotDifficulty))) {
+      lines.push(
+        `- ${level}: клеток ${num(item.meanCells, 1)} по ходу (ход 5 — ${num(item.cellsAtTurn5, 1)}, конец — ${num(item.cellsAtEnd, 1)}), `
+          + `наибольший регион ${num(item.largestRegionAtEnd, 1)}, регионов от 3 клеток ${num(item.productionRegionsAtEnd, 1)}, `
+          + `клеток с фишками ${num(item.tokenCellsAtEnd, 1)}; центров ${num(item.meanPowerCenters, 2)} по ходу `
+          + `(ход 3 — ${num(item.powerCentersAtTurn3, 2)}, ход 5 — ${num(item.powerCentersAtTurn5, 2)}); `
+          + `построек ${num(item.buildsPerGame, 1)}, кораблей построено ${num(item.shipsBuiltPerGame, 1)}, `
+          + `номинал ${num(item.tokensSpentPerGame, 1)} (${num(item.tokensSpentPerTurn, 2)} за ход); `
+          + `бюджет перезарядки 0 — ${percent(item.budgetZeroShare)} ходов, из них с фишками лицом вниз — ${percent(item.starvedShare)}; `
+          + `деньги лицом вверх ${num(item.meanFaceUpValue, 1)} (в мелких регионах ${num(item.meanStrandedValue, 1)}); кораблей в конце ${num(item.shipsAtEnd, 1)}`,
+      )
+    }
+  }
   const near = summary.nearWins
   if (near.all.episodes > 0) {
     const part = (item: { episodes: number; stopped: number; share: number }) =>
