@@ -68,6 +68,11 @@ export interface BotProfile {
    */
   commitment: number
   /**
+   * Насколько сильнее корабли тянутся к цели плана, чем к прочим целям (доля её ценности).
+   * Для замеров: у высокого 0, см. профиль.
+   */
+  planPull: number
+  /**
    * Вес экономического развития: клетки с фишками, рост регионов, трата денег, бюджет
    * перезарядки. 0 — бот бежит за центрами, как прежде.
    */
@@ -145,6 +150,7 @@ export const BOT_PROFILES: Record<SmartDifficulty, BotProfile> = {
     routineDefense: 0.15,
     raidRiskWeight: 0,
     commitment: 0,
+    planPull: 0,
     economy: 1,
     pacing: 0.35,
     rechargeAware: 1,
@@ -182,6 +188,9 @@ export const BOT_PROFILES: Record<SmartDifficulty, BotProfile> = {
     // (замер 2026-09-25). Теперь высокий взвешивает: оборона против хода по плану.
     raidRiskWeight: 1,
     commitment: 0.35,
+    // Тяга кораблей к цели плана даже в 0,1 собирала их на одну цель и отдавала темп: на Дуэли
+    // сложный против среднего 90 % → 66 % партий (замер 2026-09-25). План держит курс через оборону.
+    planPull: 0,
     economy: 1,
     pacing: 0.35,
     rechargeAware: 1,
@@ -783,16 +792,15 @@ export function isDenyTarget(situation: BotSituation, playerId: string | null | 
 
 /**
  * Ценность клетки как цели: что даст бот, если в конце хода его корабль будет стоять здесь.
- * Бой сюда не входит — его цена считается отдельно, по шансам. Цель плана высокого уровня
- * дороже на `commitment`: бот держит её, пока она не потеряет смысл.
+ * Бой сюда не входит — его цена считается отдельно, по шансам.
+ *
+ * План высокого уровня (`bot-plan.ts`) сюда не входит: он не делает цель ценнее, а только
+ * держит курс кораблей на неё (`approachGoals`) и перевешивает оборону, пока та не станет явно
+ * выгоднее (`planMoves`). Если бы план поднимал саму ценность цели, бот брал бы её раньше
+ * срока — например, спокойный центр, который развитие велит отложить (замер на Дуэли: сложный
+ * против среднего 91 % → 67 % партий).
  */
 export function cellGoalValue(situation: BotSituation, key: string): number {
-  const value = baseCellGoalValue(situation, key)
-  return situation.plan?.target === key ? value * (1 + situation.profile.commitment) : value
-}
-
-/** Ценность клетки как цели без бонуса плана. */
-export function baseCellGoalValue(situation: BotSituation, key: string): number {
   const cell = situation.board.cells.get(key)
   if (!cell) return 0
   const { modes, playerId } = situation

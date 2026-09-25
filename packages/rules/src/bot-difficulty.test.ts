@@ -281,3 +281,61 @@ describe('сложный бот: оборона против плана', () => 
     expect(memory.notes.get('player-1')).toContain('шансы на взятие упали')
   })
 })
+
+/**
+ * Два маркера сложного бота в фазе действий: эсминец у (1,0) может войти в пустой чужой центр
+ * (4,0), но у соперника рядом крейсер и эсминец под маркером — они отобьют центр до начала хода;
+ * эсминец у (0,1) может занять клетки с фишками. Соперник ещё ходит.
+ */
+function patienceBoard() {
+  const map = createEmptyMap('patience', 'Patience')
+  map.cells = []
+  for (let q = 0; q <= 10; q += 1) map.cells.push({ q, r: 0 }, { q, r: 1 })
+  const game = gameSnapshotFromMap(map)
+  game.participatingPlayerIds = ['player-1', 'player-2']
+  game.turnNumber = 4
+  game.victoryPowerCenters = 6
+  game.phase = 'actions'
+  game.activePlayerId = 'player-1'
+  const home = cellAt(game, 0, 0)
+  home.isPowerCenter = true
+  home.controlOwnerId = 'player-1'
+  cellAt(game, 0, 1).controlOwnerId = 'player-1'
+  cellAt(game, 1, 0).controlOwnerId = 'player-1'
+  for (const [q, r] of [[4, 0], [10, 1]] as const) {
+    const cell = cellAt(game, q, r)
+    cell.isPowerCenter = true
+    cell.controlOwnerId = 'player-2'
+  }
+  for (const [q, r] of [[1, 1], [2, 1]] as const) cellAt(game, q, r).resourceTokens = [{ type: 'credits', value: 3 }]
+  addShip(game, 1, 0, 'player-1', 'destroyer', 'p1-raider')
+  addShip(game, 0, 1, 'player-1', 'destroyer', 'p1-settler')
+  addShip(game, 6, 0, 'player-2', 'cruiser', 'p2-c1')
+  addShip(game, 6, 0, 'player-2', 'destroyer', 'p2-d1')
+  const markers = [
+    { id: 'am-raid', ownerId: 'player-1', coord: { q: 1, r: 0 } },
+    { id: 'am-settle', ownerId: 'player-1', coord: { q: 0, r: 1 } },
+    { id: 'am-rival', ownerId: 'player-2', coord: { q: 6, r: 0 } },
+  ]
+  for (const marker of markers) {
+    game.actionMarkers.push({ ...marker, placedInPhase: 'planning' })
+    cellAt(game, marker.coord.q, marker.coord.r).actionMarkerId = marker.id
+  }
+  return { map, game }
+}
+
+describe('сложный бот: терпение', () => {
+  it('центр, который соперник ещё может отбить до начала хода, берёт позже прочих ходов', () => {
+    const { map, game } = patienceBoard()
+    greedyBotStep(game, map, new Set(['player-1']), new Map(), { difficultyByPlayer: { 'player-1': 'hard' }, memory: createBotMemory() })
+    const left = game.actionMarkers.filter((marker) => marker.ownerId === 'player-1').map((marker) => marker.id)
+    expect(left).toEqual(['am-raid'])
+    expect(cellAt(game, 4, 0).controlOwnerId).toBe('player-2')
+  })
+
+  it('средний не ждёт: сразу входит в чужой центр', () => {
+    const { map, game } = patienceBoard()
+    greedyBotStep(game, map, new Set(['player-1']), new Map(), { difficultyByPlayer: { 'player-1': 'medium' } })
+    expect(cellAt(game, 4, 0).controlOwnerId).toBe('player-1')
+  })
+})

@@ -26,7 +26,6 @@ import {
 } from './bot-combat-math.js'
 import {
   analyzeSituation,
-  baseCellGoalValue,
   BOT_PROFILES,
   cellGoalValue,
   defenseShareFor,
@@ -98,7 +97,7 @@ export function createTacticalContext(
     situation.plan = resolvePlan(
       situation,
       memory,
-      (key) => baseCellGoalValue(situation, key),
+      (key) => cellGoalValue(situation, key),
       (id) => isDenyTarget(situation, id),
     )
   }
@@ -190,6 +189,15 @@ function ownStrengthAt(ctx: TacticalContext, key: string, except: ReadonlySet<st
   return combatStrength(ownShipsAt(ctx.board, key, ctx.playerId).filter((ship) => !except.has(ship.id)).map((ship) => ship.type))
 }
 
+/** Перелёт `from` → `to` ведёт к цели плана: на неё саму или ближе к ней. */
+function onPlanCourse(ctx: TacticalContext, from: string, to: string): boolean {
+  const target = ctx.situation.plan?.target
+  if (!target) return false
+  if (to === target) return true
+  const dist = distancesFrom(ctx.board, target)
+  return (dist.get(to) ?? Infinity) < (dist.get(from) ?? Infinity)
+}
+
 function approachGoals(ctx: TacticalContext): ApproachGoal[] {
   if (ctx.goals) return ctx.goals
   const { situation, board, playerId } = ctx
@@ -203,8 +211,10 @@ function approachGoals(ctx: TacticalContext): ApproachGoal[] {
       raw.push({ key, value: defenseValue(situation, key) * 0.6, claimOnly: false })
       continue
     }
-    const value = cellGoalValue(situation, key)
-    if (value < 10) continue
+    const base = cellGoalValue(situation, key)
+    if (base < 10) continue
+    // Курс на цель плана держится из хода в ход: к ней корабли тянутся сильнее, чем к прочим.
+    const value = situation.plan?.target === key ? base * (1 + situation.profile.planPull) : base
     const defended = cell.ships.some((ship) => ship.ownerId !== playerId)
     raw.push({ key, value, claimOnly: !defended && !cell.isPowerCenter })
   }
@@ -565,15 +575,20 @@ export function planMoves(ctx: TacticalContext, markerKey: string, quick: boolea
       let pendingTiming = 0
       // Последний корабль уходит с клетки, которую бот вот-вот займёт, — захват пропадёт. Со
       // своего центра под угрозой — оставляет его набегу: ход должен дать больше, чем стоит риск.
-      const leaveCost = originLeft === 1
-        ? (originPending ? originGoal : guardOrigin ? raidRiskAverted(situation, markerKey, 0, combatStrength([ship.type])) : 0)
+      const exposeRisk = originLeft === 1 && !originPending && guardOrigin
+        ? raidRiskAverted(situation, markerKey, 0, combatStrength([ship.type]))
         : 0
+      const leaveCost = originLeft === 1 && originPending ? originGoal : 0
       for (const [key] of reach.get(ship.id)!) {
         if (isCombatCellFor(board, playerId, key)) continue
         const dest = board.cells.get(key)!
         const extra = incoming.get(key) ?? 0
         if (!hasRoomFor(dest, playerId, extra)) continue
-        let gain = -MOVE_COST - leaveCost
+        // Ход по плану (на цель или ближе к ней, но не на свою клетку) бросает пикет охотнее:
+        // план уступает обороне, только когда та явно выгоднее.
+        let gain = -MOVE_COST - leaveCost - (exposeRisk > 0 && dest.controlOwnerId !== playerId && onPlanCourse(ctx, markerKey, key)
+          ? exposeRisk * (1 - situation.profile.commitment)
+          : exposeRisk)
         let note = ''
         const covered = ownAt(key) + extra > 0
         if (dest.controlOwnerId !== playerId) {
@@ -621,7 +636,9 @@ export function planMoves(ctx: TacticalContext, markerKey: string, quick: boolea
             }
           }
         }
-        gain += APPROACH_WEIGHT * (approachValue(ctx, key, ship.type) - here)
+        // Пикет, снятый с одного угрожаемого центра ради другого, меняет риск на риск: такой
+        // переход решает только разница рисков, а не попутное сближение с целями.
+        if (!(note === 'пикет' && exposeRisk > 0)) gain += APPROACH_WEIGHT * (approachValue(ctx, key, ship.type) - here)
         if (!best || gain > best.gain) best = { ship, key, gain, note: note || 'сближение', timing: pendingTiming }
         pendingTiming = 0
       }
