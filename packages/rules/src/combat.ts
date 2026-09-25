@@ -97,8 +97,8 @@ export interface CombatSidePreview {
   /** Ожидаемые попадания за раунд. */
   expectedHits: number
   /**
-   * Перебросы кубиков за раунд: у осаждённого, дерущегося на своей клетке, — по одному на
-   * каждый корабль гарнизона (ADR 019).
+   * Проходы перебросов за раунд: гарнизон, которого штурмуют на его клетке, перебрасывает все
+   * промахи столько раз, сколько у него кораблей в бою, но не больше двух (ADR 019).
    */
   rerollPool?: number
 }
@@ -112,7 +112,10 @@ export interface CombatPreview {
   attacker: CombatSidePreview
   defender: CombatSidePreview
   supportCandidates?: CombatSupportCandidate[]
-  /** Перебросы гарнизона осаждённой клетки в этом бою: по одному на его корабль в бою. */
+  /**
+   * Перебросы гарнизона, которого штурмуют: `pool` — число проходов (все промахи за проход),
+   * `shipIds` — корабли гарнизона, чьи кубики перебрасываются.
+   */
   siegeRerolls?: { playerId: string; pool: number; shipIds?: string[] }
   notes: string[]
 }
@@ -812,20 +815,22 @@ export function buildCombatPreview(
     assignedDefenderSupport,
   )
 
-  // Гарнизон осаждённой клетки перебрасывает промахи — по одному перебросу на корабль в бою.
-  // Перебросы только у кораблей гарнизона: подкрепление, пришедшее снять осаду, их не получает.
+  // Крепость: гарнизон, которого штурмуют на его клетке, перебрасывает все свои промахи —
+  // столько проходов, сколько у него кораблей в бою, но не больше двух. Тик осады снимает
+  // корабли и ослабляет крепость, поэтому осадить, а потом штурмовать — осмысленный путь.
+  // Бонуса нет, когда гарнизон нападает сам: вылазка, снятие осады подкреплением владельца,
+  // бой третьего игрока с осаждающим.
   const siege = siegeAt(game, coord)
-  const garrisonIds = siege
-    ? new Set(cell.ships.filter((ship) => ship.ownerId === siege.besiegedId).map((ship) => ship.id))
+  const garrisonDefends = !!siege && defenderId === siege.besiegedId && attackerId !== siege.besiegedId
+  const garrisonIds = garrisonDefends
+    ? new Set(cell.ships.filter((ship) => ship.ownerId === siege!.besiegedId).map((ship) => ship.id))
     : new Set<string>()
-  const garrisonShipIds = [...attackerSide.ships, ...defenderSide.ships]
+  const garrisonShipIds = defenderSide.ships
     .filter((ship) => garrisonIds.has(ship.shipId))
     .map((ship) => ship.shipId)
-  const garrisonInBattle = garrisonShipIds.length
+  const garrisonInBattle = Math.min(SIEGE_REROLL_PASSES_MAX, garrisonShipIds.length)
   const withPool = (side: CombatSidePreview): CombatSidePreview =>
-    siege && garrisonInBattle && side.ships.some((ship) => ship.ownerId === siege.besiegedId)
-      ? { ...side, rerollPool: garrisonInBattle }
-      : side
+    garrisonInBattle && side.role === 'defender' ? { ...side, rerollPool: garrisonInBattle } : side
 
   return {
     coord,
@@ -1102,25 +1107,24 @@ export function rerollRolledDie(
   return []
 }
 
+/** Больше двух проходов перебросов у гарнизона не бывает: иначе крупный гарнизон не промахивается. */
+export const SIEGE_REROLL_PASSES_MAX = 2
+
 /**
- * Перебросы за игрока: сначала каждый промах по одному разу — так больше попаданий в сумме,
- * — потом, если перебросы остались, снова по кругу. Самые точные кубики — первыми.
+ * Перебросы гарнизона: за проход перебрасываются все его промахи; проходов — `rerolls.left`.
+ * Перебросить промах всегда выгодно, выбирать нечего, поэтому это делает игра.
  */
 export function autoRerollMisses(rolled: RolledCombatRound, roll: () => number): void {
   if (!rolled.rerolls) return
-  let progressed = true
-  while (rolled.rerolls.left > 0 && progressed) {
-    progressed = false
-    const order = rolled.dice
-      .map((die, index) => ({ die, index }))
-      .filter(({ die }) => canRerollDie(die))
-      .sort((a, b) => a.die.threshold - b.die.threshold || a.index - b.index)
-    for (const { index } of order) {
-      if (rolled.rerolls.left <= 0) break
-      rerollRolledDie(rolled, index, roll)
-      progressed = true
+  while (rolled.rerolls.left > 0 && rolled.dice.some(canRerollDie)) {
+    for (const die of rolled.dice) {
+      if (!canRerollDie(die)) continue
+      die.history.push(die.value)
+      die.value = roll()
     }
+    rolled.rerolls.left -= 1
   }
+  rolled.rerolls.left = 0
 }
 
 /** Подсчёт раунда по брошенным кубикам: попадания обеих сторон применяются одновременно. */
@@ -1347,9 +1351,9 @@ function resolutionFromRound(
  * Один раунд боя на клетке. Не перемещает корабли — возвращает уничтоженные с обеих сторон,
  * накопленный урон выживших и исход, если бой им решился.
  *
- * Если в бою гарнизон осаждённой клетки и передан `pause`, после броска раунд встаёт:
- * `pendingCombat` переходит в `awaiting-rerolls`, осаждённый перебрасывает промахи сам
- * (`rerollCombatDie`, `finishCombatRerolls`), а результат возвращается с `paused`.
+ * Гарнизон, которого штурмуют, перебрасывает промахи сразу, без паузы (`autoRerollMisses`).
+ * Раунд в `awaiting-rerolls` бывает только в сохранениях прежней версии — его закрывает
+ * `finishCombatRerolls`. Параметр `_pause` оставлен ради прежних вызовов.
  *
  * @param damageByShipId — урон, накопленный в предыдущих раундах этого же боя
  */
@@ -1363,7 +1367,7 @@ export function resolveCombatAtCell(
   previewOverride?: CombatPreview,
   damageByShipId: Readonly<Record<string, number>> = {},
   roundNumber = 1,
-  pause?: RoundPauseContext,
+  _pause?: RoundPauseContext,
 ): CombatResolutionResult {
   const preview =
     previewOverride
@@ -1399,33 +1403,6 @@ export function resolveCombatAtCell(
   }
 
   const rolled = rollRoundDice(preview, damageByShipId, options, rng, game.scriptedDiceValue)
-  if (pause && rerollsAvailable(rolled) && !isEliminatedPlayer(game, rolled.rerolls!.playerId)) {
-    game.pendingCombat = {
-      cellKey: hexKey(coord.q, coord.r),
-      attackerId,
-      defenderIds: defenderIdsOnCell(game, coord, attackerId),
-      roundNumber,
-      phase: 'awaiting-rerolls',
-      trigger: pause.trigger,
-      continuation: pause.continuation,
-      ...(pause.combatOptions ? { combatOptions: pause.combatOptions } : {}),
-      shipsDestroyedInCombat: pause.shipsDestroyedInCombat ?? false,
-      damageByShipId: { ...damageByShipId },
-      rolledRound: rolled,
-    }
-    pushCombatEvent(game, `Раунд ${roundNumber}: осаждённый перебрасывает промахи`)
-    return {
-      coord,
-      winnerId: null,
-      attackerWon: false,
-      log: [{ step: 'dice-roll', message: 'Осаждённый перебрасывает промахи' }],
-      destroyedShipIds: [],
-      damageByShipId: { ...damageByShipId },
-      paused: true,
-      stub: false,
-    }
-  }
-
   autoRerollMisses(rolled, () => rollDice(1, MAX_DIE_VALUE, rng, game.scriptedDiceValue)[0]!)
   const round = scoreRolledRound(preview, damageByShipId, rolled)
   return resolutionFromRound(coord, preview, round, roundNumber)
@@ -1931,6 +1908,7 @@ export function beginOrAwaitCombatContinuation(
 
   // Бой без живых решающих (сдались оба) дожимается сам.
   applyEliminatedContinueDefaults(game)
+  applyOneSidedContinueDefaults(game)
   if (roundReadyToRoll(game)) {
     const auto = finishContinueAfterBothSidesReady(game, rng)
     return {
@@ -2163,6 +2141,23 @@ function applyEliminatedContinueDefaults(game: GameSnapshot): void {
   if (defenderId && isEliminatedPlayer(game, defenderId) && pending.continueDecisions?.attacker === true) {
     pending.continueDecisions = { ...pending.continueDecisions, defender: true }
   }
+}
+
+/**
+ * Одна сторона не может стрелять (авианосец против крейсера), а отступать ещё нельзя — в бою
+ * никто не уничтожен. Решать сторонам нечего: раунды идут сами, цели — по выбору игры, пока
+ * кто-нибудь не погибнет. Дальше — обычное решение «продолжить или отступить».
+ */
+function applyOneSidedContinueDefaults(game: GameSnapshot): void {
+  const pending = game.pendingCombat
+  if (!isAwaitingContinue(pending) || isCombatRetreatAllowed(pending)) return
+  const preview = buildCombatPreviewFromPending(game)
+  if (!preview) return
+  const attackerFire = combatSideFirepower(preview, 'attacker')
+  const defenderFire = combatSideFirepower(preview, 'defender')
+  if ((attackerFire > 0) === (defenderFire > 0)) return
+  if (combatSupportersAwaited(game, preview).length) return
+  pending.continueDecisions = { ...pending.continueDecisions, attacker: true, defender: true }
 }
 
 function finishContinueAfterBothSidesReady(
@@ -2480,7 +2475,10 @@ export function updateCombatPrep(
     if (isEliminatedPlayer(game, playerId)) {
       return { errors: ['Выбывший игрок не может поддерживать'] }
     }
-    if (supportSide === undefined && ready && prep.readyBy[playerId] !== true) {
+    // Сторону выбирают отдельным запросом, а «Готов» приходит уже без неё: выбор берём из
+    // подготовки. Раньше готовность с выбранной стороной отклонялась, и бой ждал поддержку.
+    const sideChosen = prep.combatOptions.supportSides?.[playerId] != null
+    if (supportSide === undefined && ready && !sideChosen && prep.readyBy[playerId] !== true) {
       return { errors: ['Сначала выберите сторону поддержки или «не поддерживать»'] }
     }
     if (supportSide !== undefined) {

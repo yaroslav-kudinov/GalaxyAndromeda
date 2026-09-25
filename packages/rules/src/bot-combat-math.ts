@@ -72,11 +72,10 @@ function sideStrength(side: CombatSidePreview): number {
   let hull = 0
   for (const ship of side.ships) hull += Math.max(0, ship.hull - ship.damage)
   let hits = side.expectedHits
-  // Перебросы гарнизона: каждый промах получает второй шанс, пока хватает перебросов.
+  // Крепость: гарнизон перебрасывает все промахи, `rerollPool` проходов.
   if (side.rerollPool && side.diceTotal > 0) {
-    const perDie = hits / side.diceTotal
-    const misses = side.diceTotal - hits
-    hits += Math.min(side.rerollPool, misses) * perDie
+    const perDie = Math.min(1, hits / side.diceTotal)
+    hits = side.diceTotal * (1 - (1 - perDie) ** (side.rerollPool + 1))
   }
   return hits * hull
 }
