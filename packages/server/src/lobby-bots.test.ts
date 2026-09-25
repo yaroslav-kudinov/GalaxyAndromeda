@@ -159,4 +159,24 @@ describe('боты в лобби', () => {
       assert.equal(room.combatResultHold, undefined)
     })
   })
+  it('хозяин выбирает сложность каждого бота', () => {
+    const room = lobbyWithBots()
+    const hard = rooms.addLobbyBot(room.id, 'player-1', 'player-2', 'hard')
+    assert.ok(hard.ok)
+    assert.equal(rooms.lobbyBotDifficulty(room, 'player-2'), 'hard')
+    // Без выбора — средний.
+    assert.ok(rooms.addLobbyBot(room.id, 'player-1', 'player-3').ok)
+    assert.equal(rooms.lobbyBotDifficulty(room, 'player-3'), 'medium')
+
+    assert.ok(rooms.setLobbyBotDifficulty(room.id, 'player-1', 'player-3', 'easy').ok)
+    assert.equal(rooms.lobbyBotDifficulty(room, 'player-3'), 'easy')
+    assert.equal(rooms.setLobbyBotDifficulty(room.id, 'player-1', 'player-3', 'insane').ok, false)
+    assert.equal(rooms.setLobbyBotDifficulty(room.id, 'player-1', 'player-1', 'easy').ok, false, 'это человек')
+
+    assert.ok(rooms.removeLobbyBot(room.id, 'player-1', 'player-2').ok)
+    assert.equal(room.botDifficulty?.['player-2'], undefined)
+
+    assert.ok(rooms.startRoom(room.id, 'player-1').ok)
+    assert.equal(rooms.setLobbyBotDifficulty(room.id, 'player-1', 'player-3', 'hard').ok, false, 'после старта не меняется')
+  })
 })

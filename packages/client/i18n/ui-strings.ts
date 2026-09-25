@@ -42,6 +42,13 @@ export const uiStringsRu = {
     addBot: 'Посадить бота',
     removeBot: 'Убрать бота',
     freeSeat: 'свободно',
+    botLevelLabel: 'Сложность бота',
+    botLevel: { easy: 'Лёгкий', medium: 'Средний', hard: 'Сложный' } as Record<'easy' | 'medium' | 'hard', string>,
+    botLevelHint: {
+      easy: 'Играет прямолинейно: занимает ближайшее и нападает, когда сильнее.',
+      medium: 'Меняет планы по обстановке — расширяется, копит силы, атакует. Свои центры власти почти не защищает.',
+      hard: 'Играет на победу: защищает свои центры власти, мешает лидеру и добивает партию.',
+    } as Record<'easy' | 'medium' | 'hard', string>,
   },
   chat: {
     title: 'Чат',
@@ -83,6 +90,8 @@ export const uiStringsRu = {
     inRoom: 'в комнате',
     awaited: 'ждём игрока',
     bot: 'бот',
+    botWithLevel: (level: 'easy' | 'medium' | 'hard') =>
+      `бот · ${{ easy: 'лёгкий', medium: 'средний', hard: 'сложный' }[level]}`,
   },
   coach: {
     badge: 'Обучение',
@@ -137,6 +146,48 @@ export const uiStringsRu = {
     supportReady: 'Готов',
     assaultBlocked: 'Штурм невозможен: ни одна сторона не может стрелять. Можно только осадить.',
   },
+  battleField: {
+    supportLine: 'поддержка',
+    bombardLine: 'обстрел',
+    round: (n: number) => `Раунд ${n}`,
+    hits: (n: number) => `попаданий ${n}`,
+    destroyed: 'уничтожен',
+    noFire: 'не стреляет',
+    stats: (dice: number, threshold: number) => `${dice}к · ${threshold}+`,
+    expected: (value: string) => `≈ ${value}`,
+    likelyKill: 'хватит добить',
+    diceFree: (free: number, total: number) => `Свободно кубиков: ${free} из ${total}`,
+    allAssigned: 'Все кубики назначены',
+    hint:
+      'Щёлкните по вражескому кораблю — ему уйдёт свободный кубик: выбранный или самый точный. Щелчок по кубику на цели возвращает его, правый щелчок по цели снимает один кубик.',
+    auto: 'Авто',
+    autoHint: 'Распределить, как предложила бы игра: сначала добивать подбитые и самые опасные',
+    clear: 'Снять все',
+    dieGroup: (threshold: number, count: number) => (count > 1 ? `${threshold}+ ×${count}` : `${threshold}+`),
+    dieTarget: (target: string) => `→ ${target}`,
+    dieFree: 'свободен',
+    returnDie: (threshold: number) => `Кубик ${threshold}+ — щёлкните, чтобы вернуть`,
+    dieTitle: (threshold: number, target: string) =>
+      target
+        ? `Кубик ${threshold}+ → ${target}. Щёлкните, чтобы вернуть`
+        : `Кубик ${threshold}+: щёлкните, затем выберите цель — или сразу щёлкните по цели`,
+    rolledTitle: (value: number, threshold: number, hit: boolean, target: string) =>
+      `${value} (нужно ${threshold}+)${target ? ` → ${target}` : ''}: ${hit ? 'попадание' : 'промах'}`,
+    shipTitle: (
+      name: string,
+      owner: string,
+      damage: number,
+      hull: number,
+      dice: number,
+      threshold: number | null,
+      distance: number,
+    ) =>
+      `${name} · ${owner}. Попаданий ${damage} из ${hull}. `
+      + (dice && threshold != null ? `Кубиков: ${dice}, попадает на ${threshold}+` : 'Не стреляет')
+      + (distance > 0 ? `, стреляет с расстояния ${distance}` : ''),
+    ready: 'готов',
+    notReady: 'ждём',
+  },
   combatRerolls: {
     heading: (round: number) => `Раунд ${round}: перебросы гарнизона`,
     left: (count: number) => `Перебросов: ${count}`,
@@ -165,11 +216,15 @@ export const uiStringsRu = {
   garrisonChoice: {
     banner: 'Ваш гарнизон стоит на клетке этого боя. Встаньте на сторону одного из противников — тогда он будет биться на клетке — или не вмешивайтесь.',
   },
+  siegeMark: {
+    note: (besieger: string, besieged: string, garrison: number) =>
+      `Осада: ${besieger} осаждает центр игрока ${besieged}. В гарнизоне ${garrison} ${pluralRu(garrison, 'корабль', 'корабля', 'кораблей')}: в начале каждого хода гарнизон теряет корабль, а когда кораблей не останется, центр перейдёт к осаждающему. Гарнизон может напасть на осаждающих или отступить.`,
+  },
   captureAhead: {
     siege: (name: string) =>
       `В начале следующего хода перейдёт к игроку ${name}: у гарнизона остался последний корабль, осада его снимет.`,
     claim: (name: string) =>
-      `В начале следующего хода может перейти к игроку ${name}: на центре только его корабли, он займёт центр в счёт лимита захвата.`,
+      `В начале следующего хода может перейти к игроку ${name}: на нейтральном центре только его корабли, он займёт центр в счёт лимита захвата.`,
   },
   planningDecisions: {
     heading: 'Нужно решить',

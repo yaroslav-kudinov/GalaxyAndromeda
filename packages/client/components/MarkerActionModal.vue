@@ -10,6 +10,7 @@ import type {
 } from '@galaxy/rules'
 import {
   SHIP_LABELS,
+  actionMarkerOf,
   autoAllocateTokens,
   buildCombatPreview,
   isBattleUnresolvable,
@@ -127,12 +128,10 @@ function shipRangeLabel(
   return `ход ${opt.moveRange}`
 }
 
-const markerId = computed(() => {
-  const cell = props.snapshot.cells.find(
-    (c) => c.coord.q === props.source.q && c.coord.r === props.source.r,
-  )
-  return cell?.actionMarkerId ?? null
-})
+/** Свой маркер: на осаждённой клетке рядом может стоять маркер гарнизона или осаждающего. */
+const markerId = computed(
+  () => actionMarkerOf(props.snapshot, props.source, props.playerId)?.id ?? null,
+)
 
 const actionMarker = computed(() =>
   markerId.value

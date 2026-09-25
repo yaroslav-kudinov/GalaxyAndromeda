@@ -1,8 +1,6 @@
 <script setup lang="ts">
 import type {
-  CombatDieRoll,
   CombatOptions,
-  CombatParticipant,
   CombatPreview,
   CombatResolutionResult,
   CombatRoundResult,
@@ -70,6 +68,7 @@ const emit = defineEmits<{
 }>()
 
 const tt = useUiStrings().combatTargets
+const bf = useUiStrings().battleField
 const garrisonText = useUiStrings().garrisonChoice
 
 const {
@@ -152,13 +151,6 @@ const roundResult = computed((): CombatRoundResult | null => {
 
 const allRolls = computed((): ShipCombatRollLog[] => roundResult.value?.shipRolls ?? [])
 
-const attackerShips = computed(() => (isBombardment.value ? [] : props.preview.attacker.ships))
-const defenderShips = computed(() => props.preview.defender.ships)
-const attackerSupportShips = computed(() => props.preview.attacker.supportingShips)
-const defenderSupportShips = computed(() =>
-  isBombardment.value ? [] : props.preview.defender.supportingShips,
-)
-
 /** Типы кораблей по id — чтобы подписать цели кубиков, в том числе уже уничтоженные. */
 const shipTypeById = computed(() => {
   const map = new Map<string, ShipType>()
@@ -214,18 +206,6 @@ watch(
   { immediate: true },
 )
 
-function sideHits(side: 'attacker' | 'defender', revealedOnly: number): number {
-  return allRolls.value
-    .slice(0, revealedOnly)
-    .filter((r) => r.side === side)
-    .reduce((sum, r) => sum + r.hits, 0)
-}
-
-const attackerRunningHits = computed(() => sideHits('attacker', revealedCount.value))
-const defenderRunningHits = computed(() => sideHits('defender', revealedCount.value))
-const finalAttackerHits = computed(() => roundResult.value?.attackerHits ?? 0)
-const finalDefenderHits = computed(() => roundResult.value?.defenderHits ?? 0)
-
 function startRevealAnimation() {
   revealedCount.value = 0
   animationDone.value = false
@@ -257,38 +237,23 @@ function playerColor(id: string): string {
   return props.snapshot.players.find((p) => p.id === id)?.color ?? '#94a3b8'
 }
 
+/** Цвета игроков для поля боя. */
+const playerColors = computed(() =>
+  Object.fromEntries(props.snapshot.players.map((player) => [player.id, player.color])),
+)
+
+/** Готовность сторон в подготовке — пометкой у имени на средней линии поля. */
+const prepSideBadges = computed(() => {
+  if (!isOnlinePrep.value) return {}
+  const badge = (on: boolean | undefined) => ({ text: on ? bf.ready : bf.notReady, on: !!on })
+  return isBombardment.value
+    ? { attacker: badge(props.attackerReady) }
+    : { attacker: badge(props.attackerReady), defender: badge(props.defenderReady) }
+})
+
 /** CSS-переменная цвета игрока для колонок, бросков и карточек поддержки */
 function sideColorVars(playerId: string): { '--side-color': string } {
   return { '--side-color': playerColor(playerId) }
-}
-
-function rollLabel(entry: ShipCombatRollLog): string {
-  const name = SHIP_LABELS[entry.shipType]
-  if (entry.distance > 0) {
-    return isBombardment.value ? `${name} · с ${entry.distance} кл.` : `Поддержка · ${name} · ${entry.distance} кл.`
-  }
-  return name
-}
-
-function dieTitle(die: CombatDieRoll): string {
-  const target = die.targetShipId ? shipTypeById.value.get(die.targetShipId) : null
-  const targetLabel = target ? SHIP_LABELS[target] : 'нет цели'
-  return `${die.value} (нужно ${die.threshold}+) → ${targetLabel}: ${die.hit ? 'попадание' : 'промах'}`
-}
-
-function dieTargetShort(die: CombatDieRoll): string {
-  const target = die.targetShipId ? shipTypeById.value.get(die.targetShipId) : null
-  return target ? SHIP_LABELS[target].slice(0, 3) : '—'
-}
-
-/** Кубики, порог и прочность корабля одной строкой. */
-function shipStatsLabel(ship: Pick<CombatParticipant, 'dice' | 'threshold'>): string {
-  if (!ship.dice || ship.threshold == null) return 'не стреляет'
-  return `${ship.dice}к · ${ship.threshold}+`
-}
-
-function hullPips(ship: Pick<CombatParticipant, 'hull' | 'damage'>): boolean[] {
-  return Array.from({ length: ship.hull }, (_, i) => i < ship.hull - ship.damage)
 }
 
 const battleOver = computed(() => !props.snapshot.pendingCombat || props.snapshot.pendingCombat.phase === 'prep')
@@ -338,18 +303,10 @@ const showModalContinueActions = computed(
     && props.continueDecisionRole != null,
 )
 
-function isLocalFleet(side: 'attacker' | 'defender'): boolean {
-  const owner = side === 'attacker' ? props.preview.attackerId : props.preview.defenderId
-  return owner === props.localPlayerId
-}
-
 const prepOdds = computed(() => estimateBattleOutcome(props.preview, { samples: 200 }))
 
 /** Игрок стреляет в этом бою — ему выбирать цели. */
 const localFiringSide = computed(() => combatSideOfPlayer(props.preview, props.localPlayerId))
-const localEnemyId = computed(() =>
-  localFiringSide.value === 'attacker' ? props.preview.defenderId : props.preview.attackerId,
-)
 
 /** Цели первого раунда. Начинаем с предложения игры; состав боя поменялся — предлагаем заново. */
 const prepTargets = ref<Record<string, string[]>>({})
@@ -489,15 +446,16 @@ onUnmounted(() => {
             <p v-else-if="!supportSide" class="observer-hint">
               Выберите сторону или «Не поддерживать» — без вашего ответа бой не начнётся.
             </p>
-            <CombatTargetsPanel
-              v-if="showPrepTargets && supportSide"
-              v-model="prepTargets"
+            <BattleField
+              v-model:targets="prepTargets"
               :preview="preview"
-              :player-id="localPlayerId"
-              :player-color="playerColor(localPlayerId)"
-              :enemy-color="playerColor(localEnemyId)"
+              :local-player-id="localPlayerId"
+              :player-colors="playerColors"
+              :player-names="playerNames"
               :round-number="1"
-              :disabled="selfReady || resolving"
+              :side-badges="prepSideBadges"
+              :editable="showPrepTargets && !!supportSide && !selfReady && !resolving"
+              :show-dice="showPrepTargets && !!supportSide"
             />
           </template>
           <template v-else>
@@ -516,82 +474,17 @@ onUnmounted(() => {
             а гарнизон будет терять по кораблю в начале каждого хода.
           </p>
 
-          <div class="fleet-arena">
-            <section
-              v-for="side in (['attacker', 'defender'] as const)"
-              :key="side"
-              class="fleet-col"
-              :style="sideColorVars(side === 'attacker' ? preview.attackerId : preview.defenderId)"
-              :class="{ 'fleet-col--mine': isLocalFleet(side) }"
-            >
-              <header class="fleet-col-head">
-                <span
-                  class="fleet-swatch"
-                  :style="{ background: playerColor(side === 'attacker' ? preview.attackerId : preview.defenderId) }"
-                />
-                <div class="fleet-col-titles">
-                  <strong>{{ side === 'attacker' ? (isBombardment ? 'Обстрел' : 'Атака') : 'Защита' }}</strong>
-                  <span>{{ playerLabel(side === 'attacker' ? preview.attackerId : preview.defenderId) }}</span>
-                </div>
-                <span
-                  v-if="isOnlinePrep && (side === 'attacker' || !isBombardment)"
-                  class="ready-pill"
-                  :class="{ 'ready-pill--on': side === 'attacker' ? attackerReady : defenderReady }"
-                  :title="(side === 'attacker' ? attackerReady : defenderReady) ? 'Готов' : 'Не готов'"
-                />
-              </header>
-              <div
-                v-if="(side === 'attacker' ? attackerShips : defenderShips).length
-                  || (side === 'attacker' ? attackerSupportShips : defenderSupportShips).length"
-                class="ship-cards"
-              >
-                <div
-                  v-for="ship in (side === 'attacker' ? attackerShips : defenderShips)"
-                  :key="ship.shipId"
-                  class="ship-card"
-                  :class="{ 'ship-card--mine': isLocalFleet(side) }"
-                  :title="`${SHIP_LABELS[ship.type]}: ${shipStatsLabel(ship)}, прочность ${ship.hull}`
-                    + (ship.bonusDice ? `, от авианосца +${ship.bonusDice}к` : '')"
-                >
-                  <svg class="ship-card-glyph" viewBox="-14 -14 28 28" aria-hidden="true">
-                    <ShipGlyph :type="ship.type" :player-color="playerColor(ship.ownerId)" :scale="0.9" />
-                  </svg>
-                  <span class="ship-card-meta">
-                    <span class="meta-dice">{{ shipStatsLabel(ship) }}</span>
-                  </span>
-                  <span class="hull-pips" aria-hidden="true">
-                    <span
-                      v-for="(alive, pi) in hullPips(ship)"
-                      :key="pi"
-                      class="hull-pip"
-                      :class="{ 'hull-pip--lost': !alive }"
-                    />
-                  </span>
-                  <span v-if="ship.bonusDice" class="bonus-badge">+{{ ship.bonusDice }}</span>
-                </div>
-                <div
-                  v-for="sup in (side === 'attacker' ? attackerSupportShips : defenderSupportShips)"
-                  :key="'sup-' + sup.shipId"
-                  class="ship-card ship-card--support"
-                  :style="sideColorVars(sup.ownerId)"
-                  :title="`${isBombardment ? 'Обстрел' : 'Поддержка'} · ${playerLabel(sup.ownerId)} · (${sup.fromCoord.q}, ${sup.fromCoord.r}), ${sup.distance} кл.`"
-                >
-                  <svg class="ship-card-glyph" viewBox="-14 -14 28 28" aria-hidden="true">
-                    <ShipGlyph :type="sup.type" :player-color="playerColor(sup.ownerId)" :scale="0.9" />
-                  </svg>
-                  <span class="support-tag">{{ isBombardment ? 'обстрел' : 'поддержка' }}</span>
-                  <span class="ship-card-meta">
-                    <span class="meta-dice">{{ sup.dice }}к · {{ sup.threshold }}+</span>
-                  </span>
-                </div>
-              </div>
-              <p v-else class="fleet-empty">Нет кораблей</p>
-              <p class="fleet-firepower">
-                {{ (side === 'attacker' ? preview.attacker : preview.defender).diceTotal }} кубиков ·
-                ожидаемо {{ (side === 'attacker' ? preview.attacker : preview.defender).expectedHits.toFixed(1) }} попад.
-              </p>
-            </section>
-          </div>
+          <BattleField
+            v-model:targets="prepTargets"
+            :preview="preview"
+            :local-player-id="localPlayerId"
+            :player-colors="playerColors"
+            :player-names="playerNames"
+            :round-number="1"
+            :side-badges="prepSideBadges"
+            :editable="showPrepTargets && !selfReady && !resolving && prepPhase !== 'countdown'"
+            :show-dice="showPrepTargets"
+          />
 
           <div v-if="!isDefenderObserver" class="prep-outlook">
             <p class="prep-odds" title="Симуляция боя до конца, без отступлений">
@@ -603,17 +496,6 @@ onUnmounted(() => {
               </span>
             </p>
           </div>
-
-          <CombatTargetsPanel
-            v-if="showPrepTargets"
-            v-model="prepTargets"
-            :preview="preview"
-            :player-id="localPlayerId"
-            :player-color="playerColor(localPlayerId)"
-            :enemy-color="playerColor(localEnemyId)"
-            :round-number="1"
-            :disabled="selfReady || resolving || prepPhase === 'countdown'"
-          />
 
           <p v-if="prepPhase === 'countdown' && countdownDisplay != null" class="countdown-banner">
             {{ countdownDisplay || '…' }}
@@ -650,68 +532,22 @@ onUnmounted(() => {
             Кубики крутятся…
           </p>
 
-          <section class="totals-bar">
-            <div class="total-side" :style="sideColorVars(preview.attackerId)">
-              <span class="total-label">
-                {{ isBombardment ? 'Обстрел' : 'Атакующий' }} · {{ playerLabel(preview.attackerId) }} · попаданий
-              </span>
-              <span class="total-value">{{ animationDone ? finalAttackerHits : attackerRunningHits }}</span>
-            </div>
-            <template v-if="!isBombardment">
-              <span class="total-vs">vs</span>
-              <div class="total-side" :style="sideColorVars(preview.defenderId)">
-                <span class="total-label">Защитник · {{ playerLabel(preview.defenderId) }} · попаданий</span>
-                <span class="total-value">{{ animationDone ? finalDefenderHits : defenderRunningHits }}</span>
-              </div>
-            </template>
-            <div v-else class="total-side total-side--passive" :style="sideColorVars(preview.defenderId)">
-              <span class="total-label">Защитник · {{ playerLabel(preview.defenderId) }}</span>
-              <span class="total-value muted">не отвечает</span>
-            </div>
-          </section>
-
-          <CombatTargetsPanel
-            v-if="showModalContinueActions && localFiringSide && roundTargets"
-            :model-value="roundTargets"
+          <BattleField
+            :targets="roundTargets ?? {}"
             :preview="preview"
-            :player-id="localPlayerId"
-            :player-color="playerColor(localPlayerId)"
-            :enemy-color="playerColor(localEnemyId)"
-            :round-number="pendingRound"
+            :local-player-id="localPlayerId"
+            :player-colors="playerColors"
+            :player-names="playerNames"
+            :round-number="showModalContinueActions ? pendingRound : (resolution?.rounds?.length ?? 1)"
+            :rolls="allRolls"
+            :revealed="animationDone ? allRolls.length : revealedCount"
+            :damage-after-round="resolution?.damageByShipId ?? {}"
+            :destroyed-ship-ids="resolution?.destroyedShipIds ?? []"
             :damage-by-ship-id="pendingDamage"
-            :disabled="resolving"
-            @update:model-value="emit('update:roundTargets', $event)"
+            :editable="showModalContinueActions && !!localFiringSide && !!roundTargets && !resolving"
+            :show-dice="showModalContinueActions && !!localFiringSide && !!roundTargets"
+            @update:targets="emit('update:roundTargets', $event)"
           />
-
-          <section class="roll-log" aria-live="polite">
-            <ul class="roll-list">
-              <li
-                v-for="(entry, i) in allRolls"
-                :key="entry.shipId + '-' + i"
-                class="roll-entry"
-                :style="sideColorVars(entry.ownerId)"
-                :class="{
-                  'roll-entry--visible': i < revealedCount || animationDone,
-                  'roll-entry--support': entry.distance > 0,
-                }"
-              >
-                <span class="roll-label">{{ rollLabel(entry) }}</span>
-                <span class="roll-dice">
-                  <span
-                    v-for="(d, di) in entry.dice"
-                    :key="di"
-                    class="die"
-                    :class="d.hit ? 'die--hit' : 'die--miss'"
-                    :title="dieTitle(d)"
-                  >
-                    {{ d.value }}
-                    <span class="die-target">{{ dieTargetShort(d) }}</span>
-                  </span>
-                </span>
-                <span class="roll-sum">{{ entry.hits }} попад.</span>
-              </li>
-            </ul>
-          </section>
         </template>
       </div>
 
@@ -884,8 +720,8 @@ onUnmounted(() => {
   box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
 }
 .battle-modal--results {
-  width: min(100%, 560px);
-  max-height: min(86vh, 680px);
+  width: min(100%, 720px);
+  max-height: min(90vh, 780px);
 }
 .battle-head {
   display: flex;
@@ -923,159 +759,10 @@ onUnmounted(() => {
   overflow-y: auto;
   padding: 0.75rem 1rem;
 }
-.pre-phase h3,
-.roll-log h3,
-.post-phase h3,
-.destruction-phase h3 {
+.pre-phase h3 {
   margin: 0 0 0.4rem;
   font-size: 0.82rem;
   color: #94a3b8;
-}
-.hint {
-  margin: 0 0 0.65rem;
-  font-size: 0.76rem;
-  color: #94a3b8;
-  line-height: 1.35;
-}
-.hint.muted {
-  color: #64748b;
-}
-.fleet-arena {
-  display: grid;
-  grid-template-columns: 1fr auto 1fr;
-  gap: 0.55rem;
-  align-items: stretch;
-  margin-bottom: 0.55rem;
-}
-.fleet-col {
-  padding: 0.55rem;
-  border-radius: 10px;
-  border: 1px solid color-mix(in srgb, var(--side-color, #94a3b8) 35%, transparent);
-  background: color-mix(in srgb, var(--side-color, #94a3b8) 22%, rgba(15, 23, 42, 0.92));
-  min-width: 0;
-  transition: border-color 0.2s, box-shadow 0.2s;
-}
-.fleet-col--target {
-  box-shadow: inset 0 0 0 1px rgba(251, 191, 36, 0.35);
-}
-.fleet-col--mine {
-  opacity: 0.95;
-}
-.fleet-col-head {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-  margin-bottom: 0.5rem;
-}
-.fleet-swatch {
-  width: 0.65rem;
-  height: 0.65rem;
-  border-radius: 999px;
-  flex-shrink: 0;
-  box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.6);
-}
-.fleet-col-titles {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  flex: 1;
-}
-.fleet-col-titles strong {
-  font-size: 0.72rem;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: #cbd5e1;
-}
-.fleet-col-titles span {
-  font-size: 0.78rem;
-  color: #e2e8f0;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.ready-pill {
-  width: 0.55rem;
-  height: 0.55rem;
-  border-radius: 999px;
-  background: #64748b;
-  flex-shrink: 0;
-}
-.ready-pill--on {
-  background: #4ade80;
-  box-shadow: 0 0 8px rgba(74, 222, 128, 0.55);
-}
-.fleet-vs {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 0.7rem;
-  font-weight: 800;
-  letter-spacing: 0.12em;
-  color: #64748b;
-  padding-top: 1.6rem;
-}
-.ship-cards {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.4rem;
-}
-.ship-card {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 0.15rem;
-  width: 4.4rem;
-  padding: 0.4rem 0.25rem 0.35rem;
-  border-radius: 8px;
-  border: 1px solid rgba(148, 163, 184, 0.35);
-  background: rgba(2, 6, 23, 0.45);
-  color: inherit;
-  cursor: default;
-  transition: transform 0.15s, border-color 0.15s, background 0.15s, opacity 0.15s;
-}
-.ship-card:disabled {
-  opacity: 1;
-}
-.ship-card--support {
-  border-color: color-mix(in srgb, var(--side-color, #a78bfa) 55%, transparent);
-  background: color-mix(in srgb, var(--side-color, #a78bfa) 20%, rgba(2, 6, 23, 0.45));
-}
-.support-tag {
-  font-size: 0.55rem;
-  font-weight: 700;
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
-  color: color-mix(in srgb, var(--side-color, #ddd6fe) 70%, #fff);
-}
-.ship-card-glyph {
-  width: 2.4rem;
-  height: 2.4rem;
-  overflow: visible;
-}
-.ship-card-count {
-  position: absolute;
-  top: 0.2rem;
-  right: 0.25rem;
-  font-size: 0.65rem;
-  font-weight: 700;
-  color: #f8fafc;
-  background: rgba(15, 23, 42, 0.85);
-  border-radius: 4px;
-  padding: 0 0.2rem;
-}
-.ship-card-meta {
-  display: flex;
-  gap: 0.25rem;
-  font-size: 0.62rem;
-  color: #94a3b8;
-  font-variant-numeric: tabular-nums;
-}
-.meta-dice { color: #fbbf24; }
-.fleet-empty {
-  margin: 0.35rem 0 0;
-  font-size: 0.72rem;
-  color: #64748b;
 }
 .prep-outlook {
   margin: 0 0 0.55rem;
@@ -1097,55 +784,15 @@ onUnmounted(() => {
   font-size: 0.7rem;
   color: #94a3b8;
 }
-.prep-odds-dice {
-  font-weight: 700;
-  color: #e2e8f0;
-  font-variant-numeric: tabular-nums;
-}
-.prep-odds-edge {
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
-  color: color-mix(in srgb, var(--side-color, #cbd5e1) 72%, #fff);
-}
 .prep-odds-pct {
   font-variant-numeric: tabular-nums;
   color: #64748b;
 }
-.totals-bar {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.75rem;
-  margin-bottom: 0.75rem;
-  padding: 0.5rem;
-  border-radius: 8px;
-  background: rgba(0, 0, 0, 0.3);
-}
-.total-side {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  min-width: 5rem;
-}
-.total-label {
-  font-size: 0.68rem;
-  color: #94a3b8;
-}
-.total-value {
-  font-size: 1.4rem;
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
-  color: color-mix(in srgb, var(--side-color, #94a3b8) 78%, #fff);
-}
-.total-vs {
-  font-size: 0.75rem;
-  color: #64748b;
-}
 .outcome-hero {
   display: grid;
-  gap: 0.35rem;
-  margin: 0 0 0.75rem;
-  padding: 0.7rem 0.8rem 0.75rem;
+  gap: 0.25rem;
+  margin: 0 0 0.5rem;
+  padding: 0.45rem 0.7rem 0.5rem;
   border-radius: 12px;
   border: 1px solid rgba(148, 163, 184, 0.4);
   background: rgba(51, 65, 85, 0.35);
@@ -1153,7 +800,8 @@ onUnmounted(() => {
 }
 .outcome-hero__label {
   margin: 0;
-  font-size: clamp(1.7rem, 4.5vw, 2.45rem);
+  /* Итог — заголовком, но поле боя под ним должно помещаться без прокрутки. */
+  font-size: clamp(1.15rem, 3vw, 1.5rem);
   font-weight: 800;
   letter-spacing: 0.04em;
   line-height: 1.05;
@@ -1203,60 +851,6 @@ onUnmounted(() => {
   color: #94a3b8;
   font-weight: 600;
 }
-.roll-list {
-  margin: 0 0 0.65rem;
-  padding: 0;
-  list-style: none;
-}
-.roll-entry {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 0.35rem;
-  padding: 0.35rem 0.45rem;
-  margin-bottom: 0.25rem;
-  border-radius: 6px;
-  font-size: 0.8rem;
-  opacity: 0;
-  transform: translateY(4px);
-  transition: opacity 0.25s, transform 0.25s;
-  background: color-mix(in srgb, var(--side-color, #94a3b8) 20%, rgba(15, 23, 42, 0.88));
-  border-left: 3px solid var(--side-color, #94a3b8);
-}
-.roll-entry--support {
-  font-style: italic;
-}
-.roll-entry--visible {
-  opacity: 1;
-  transform: translateY(0);
-}
-.roll-label {
-  min-width: 9rem;
-  color: #e2e8f0;
-}
-.roll-dice {
-  display: inline-flex;
-  gap: 0.25rem;
-}
-.die {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 1.5rem;
-  height: 1.5rem;
-  border-radius: 4px;
-  background: #1e293b;
-  border: 1px solid #475569;
-  font-weight: 700;
-  font-size: 0.85rem;
-  color: #fbbf24;
-  font-variant-numeric: tabular-nums;
-}
-.roll-sum {
-  margin-left: auto;
-  font-weight: 600;
-  color: #cbd5e1;
-}
 .battle-foot {
   padding: 0.65rem 1rem;
   border-top: 1px solid #334155;
@@ -1294,15 +888,6 @@ onUnmounted(() => {
 .btn-secondary:disabled {
   opacity: 0.6;
   cursor: wait;
-}
-.ready-badge {
-  margin: 0 0 0.35rem;
-  font-size: 0.72rem;
-  color: #94a3b8;
-}
-.ready-badge--on {
-  color: #86efac;
-  font-weight: 600;
 }
 .countdown-banner {
   margin: 0.75rem 0 0;
@@ -1374,61 +959,5 @@ onUnmounted(() => {
   font-size: 0.8rem;
   color: #fca5a5;
   align-self: center;
-}
-
-.fleet-firepower {
-  margin: 0.4rem 0 0;
-  font-size: 0.7rem;
-  color: #94a3b8;
-  font-variant-numeric: tabular-nums;
-}
-.hull-pips {
-  display: inline-flex;
-  gap: 0.15rem;
-}
-.hull-pip {
-  width: 0.45rem;
-  height: 0.45rem;
-  border-radius: 50%;
-  background: #4ade80;
-}
-.hull-pip--lost {
-  background: #7f1d1d;
-}
-.bonus-badge {
-  position: absolute;
-  top: 0.2rem;
-  right: 0.25rem;
-  font-size: 0.58rem;
-  font-weight: 800;
-  color: #0f172a;
-  background: #a78bfa;
-  border-radius: 3px;
-  padding: 0 0.2rem;
-  line-height: 1.2;
-}
-.die {
-  position: relative;
-}
-.die--hit {
-  border-color: #4ade80;
-  color: #bbf7d0;
-  background: rgba(20, 83, 45, 0.55);
-}
-.die--miss {
-  opacity: 0.55;
-}
-.die-target {
-  position: absolute;
-  bottom: -0.85rem;
-  left: 50%;
-  transform: translateX(-50%);
-  font-size: 0.5rem;
-  font-weight: 600;
-  color: #94a3b8;
-  white-space: nowrap;
-}
-.roll-entry {
-  padding-bottom: 0.9rem;
 }
 </style>

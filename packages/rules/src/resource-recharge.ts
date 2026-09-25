@@ -219,8 +219,24 @@ export function autoResolveAllRechargePicks(game: GameSnapshot): void {
 }
 
 /** Текст для игрока: сколько фишек можно поднять в этом ходу. */
-export function formatRechargeBudgetHint(budget: number, owed: number): string {
+/** Из чего сложился бюджет перезарядки — чтобы игрок видел, почему он такой. */
+export function explainRechargeBudget(game: GameSnapshot, ownerId: string): string {
+  const threshold = victoryThresholdForSnapshot(game)
+  let powerCenters = 0
+  for (const cell of game.cells) {
+    if (cell.isPowerCenter && cell.controlOwnerId === ownerId) powerCenters += 1
+  }
+  const doctrine = doctrineRechargeModifier(game, ownerId)
+  const doctrinePart = doctrine > 0 ? ` + ${doctrine} за доктрину` : doctrine < 0 ? ` − ${-doctrine} за доктрину` : ''
+  return `порог победы ${threshold} − 1 − центров власти ${powerCenters}${doctrinePart}`
+}
+
+export function formatRechargeBudgetHint(budget: number, owed: number, explanation?: string): string {
   if (owed > 0) return `Перезарядка: выберите фишки, осталось ${owed}`
-  if (budget <= 0) return 'Перезарядка недоступна: слишком много центров власти'
+  if (budget <= 0) {
+    return explanation
+      ? `Перезарядки в этот ход нет: бюджет ${explanation} — не больше нуля`
+      : 'Перезарядка недоступна: слишком много центров власти'
+  }
   return `Перезарядка: до ${budget} фишек за ход`
 }

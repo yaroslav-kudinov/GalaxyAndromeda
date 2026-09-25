@@ -640,7 +640,7 @@ function syncMarkerRefs(
   }
   for (const marker of actionMarkers) {
     const cell = cellByKey.get(hexKey(marker.coord.q, marker.coord.r))
-    if (cell) cell.actionMarkerId = marker.id
+    if (cell && !cell.actionMarkerId) cell.actionMarkerId = marker.id
   }
   for (const marker of productionMarkers) {
     const cell = cellByKey.get(hexKey(marker.coord.q, marker.coord.r))
@@ -690,13 +690,15 @@ export function validateGameSnapshot(game: GameSnapshot, map: MapDefinition): st
     }
   }
 
-  const actionByCell = new Map<string, string>()
+  // На клетке по маркеру на игрока: второй бывает только там, где стоят корабли обоих (осада).
+  const actionByCell = new Set<string>()
   const actionByPlayer = new Map<string, number>()
 
   for (const marker of game.actionMarkers) {
     const key = hexKey(marker.coord.q, marker.coord.r)
-    if (actionByCell.has(key)) errors.push(`${key}: multiple action markers`)
-    actionByCell.set(key, marker.ownerId)
+    const ownKey = `${key}/${marker.ownerId}`
+    if (actionByCell.has(ownKey)) errors.push(`${key}: multiple action markers`)
+    actionByCell.add(ownKey)
 
     const count = (actionByPlayer.get(marker.ownerId) ?? 0) + 1
     actionByPlayer.set(marker.ownerId, count)

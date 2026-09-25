@@ -144,6 +144,15 @@ function targetShort(id: string | null): string {
         :style="{ '--owner': playerColor(ship.ownerId) }"
         :title="t.shipTitle(shipName(ship.type), ship.before, ship.now, ship.hull)"
       >
+        <BattleShipSprite
+          class="cr-sprite"
+          :type="ship.type"
+          :color="playerColor(ship.ownerId)"
+          :hull="ship.hull"
+          :damage="ship.before + ship.now"
+          :destroyed="ship.destroyed"
+          :width="24"
+        />
         <span class="cr-ship-name">{{ shipLabelById.get(ship.id)?.full ?? shipName(ship.type) }}</span>
         <span class="cr-pips" aria-hidden="true">
           <span v-for="(pip, i) in ship.pips" :key="i" class="cr-pip" :class="`cr-pip--${pip}`" />

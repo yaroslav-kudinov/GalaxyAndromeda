@@ -1,4 +1,4 @@
-import type { GameObservation, GalaxySaveFile, MapDefinition } from '@galaxy/rules'
+import type { BotDifficulty, GameObservation, GalaxySaveFile, MapDefinition } from '@galaxy/rules'
 import { debugLog } from './useDebugLog'
 
 const API_BASE = '/api'
@@ -109,7 +109,7 @@ export interface RoomBootstrap {
   /** Места, за которые ходит сервер. */
   botPlayerIds?: string[]
   availablePlayerIds?: string[]
-  players: { id: string; name: string; color: string; joined?: boolean; bot?: boolean }[]
+  players: { id: string; name: string; color: string; joined?: boolean; bot?: boolean; botDifficulty?: BotDifficulty }[]
 }
 
 export interface JoinResult {
@@ -124,6 +124,7 @@ export interface LobbyPlayerEntry {
   joined: boolean
   active: boolean
   bot?: boolean
+  botDifficulty?: BotDifficulty
 }
 
 export interface LobbyListEntry {
@@ -270,10 +271,24 @@ export async function addRoomBot(
   roomId: string,
   playerId: string,
   preferredPlayerId?: string,
+  difficulty?: BotDifficulty,
 ): Promise<{ ok: true; botPlayerId: string }> {
   return apiFetch(`/rooms/${roomId}/bots`, {
     method: 'POST',
-    body: JSON.stringify({ playerId, preferredPlayerId }),
+    body: JSON.stringify({ playerId, preferredPlayerId, difficulty }),
+  })
+}
+
+/** Хозяин лобби меняет сложность бота. */
+export async function setRoomBotDifficulty(
+  roomId: string,
+  playerId: string,
+  botPlayerId: string,
+  difficulty: BotDifficulty,
+): Promise<{ ok: true; botPlayerId: string }> {
+  return apiFetch(`/rooms/${roomId}/bots/difficulty`, {
+    method: 'POST',
+    body: JSON.stringify({ playerId, botPlayerId, difficulty }),
   })
 }
 

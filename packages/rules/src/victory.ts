@@ -225,13 +225,21 @@ export function checkDefeat(state: GameState): string[] {
  * клетки, а другой ещё выбирает, первый может победить центром, который второй в тот же момент
  * у него отбирает. Поэтому центры власти считаются только после захватов всех.
  */
-export function turnClaimsUnsettled(game: GameSnapshot): boolean {
-  const remaining = new Set(
+function remainingPlayerIds(game: GameSnapshot): Set<string> {
+  return new Set(
     game.players
       .filter((player) => !player.eliminated
         && (!game.participatingPlayerIds?.length || game.participatingPlayerIds.includes(player.id)))
       .map((player) => player.id),
   )
+}
+
+function activePlayerCount(game: GameSnapshot): number {
+  return remainingPlayerIds(game).size
+}
+
+export function turnClaimsUnsettled(game: GameSnapshot): boolean {
+  const remaining = remainingPlayerIds(game)
   // Последний оставшийся побеждает сразу: оспаривать его захват некому.
   if (remaining.size <= 1) return false
   return Object.entries(game.claimPicksRemainingByPlayer ?? {})
@@ -248,6 +256,12 @@ export function applyVictoryAndDefeatChecks(
   // Ни победу, ни выбывание до конца захватов хода не проверяем: последний закрывший выбор
   // клеток вызовет проверку сам (`executeClaimPicks`, `autoResolveClaimPicks`).
   if (turnClaimsUnsettled(game)) {
+    return { eliminated: [], gameOver: null }
+  }
+  // Центры власти считаются только в начале хода, после тика осад и всех захватов: чужой
+  // центр переходит к вошедшему посреди хода, и до начала следующего его можно отбить.
+  // Исключение — в партии остался один игрок (остальные сдались): ждать некого.
+  if (game.phase !== 'planning' && activePlayerCount(game) > 1) {
     return { eliminated: [], gameOver: null }
   }
 
