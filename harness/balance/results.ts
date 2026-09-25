@@ -47,11 +47,15 @@ export const pct = (value: number | null | undefined, digits = 0): string =>
 export const num = (value: number | null | undefined, digits = 1): string =>
   value == null || !Number.isFinite(value) ? '—' : value.toFixed(digits)
 
-/** «побед на место (×к справедливой доле)» для уровня или пусто, если уровня в замере нет. */
+/**
+ * «побед на место ×к справедливой доле · центров по ходу» для уровня или пусто, если уровня в
+ * замере нет. Центров в среднем по ходу — менее шумная мера силы, чем доля побед.
+ */
 export function winCell(summary: Summary | undefined, level: string): string {
   const result = summary?.winRateByDifficulty?.[level]
   if (!result) return ''
-  return `${pct(result.winsPerSeat)} ×${num(result.perSeatVsFair, 2)}`
+  const centers = summary?.economyByDifficulty?.[level]?.meanPowerCenters
+  return `${pct(result.winsPerSeat)} ×${num(result.perSeatVsFair, 2)} · ${num(centers, 2)}`
 }
 
 export type Section = 'wins' | 'behavior' | 'economy' | 'near'
@@ -60,7 +64,7 @@ export const ALL_SECTIONS: readonly Section[] = ['wins', 'behavior', 'near', 'ec
 
 function winsTable(entries: readonly ResultEntry[]): string[] {
   const lines = [
-    `| замер | партий | ходов | ошибок / сбоев | ${LEVELS.map((level) => `${level}: побед на место ×к справедливой`).join(' | ')} |`,
+    `| замер | партий | ходов | ошибок / сбоев | ${LEVELS.map((level) => `${level}: побед на место ×к справедливой · центров по ходу`).join(' | ')} |`,
     `|---|---|---|---|${LEVELS.map(() => '---').join('|')}|`,
   ]
   for (const entry of entries) {
@@ -88,14 +92,18 @@ function behaviorTable(entries: readonly ResultEntry[]): string[] {
 
 function nearTable(entries: readonly ResultEntry[]): string[] {
   const lines = [
-    '| замер | почти победитель | эпизодов | остановлен | из них раньше победил другой |',
-    '|---|---|---|---|---|',
+    '| замер | уровень | эпизодов «почти победитель» | остановлен | из них раньше победил другой | побед по порогу | из них с порога | рывком |',
+    '|---|---|---|---|---|---|---|---|',
   ]
   for (const entry of entries) {
     for (const level of LEVELS) {
       const item = entry.summary.nearWins?.byLevel?.[level]
-      if (!item?.episodes) continue
-      lines.push(`| ${entry.name} | ${level} | ${item.episodes} | ${pct(item.share)} | ${item.otherWon ?? '—'} |`)
+      const path = entry.summary.winPaths?.[level]
+      if (!item?.episodes && !path) continue
+      lines.push(
+        `| ${entry.name} | ${level} | ${item?.episodes ?? 0} | ${pct(item?.share)} | ${item?.otherWon ?? '—'} `
+          + `| ${path?.wins ?? 0} | ${path?.fromBrink ?? 0} | ${path?.surge ?? 0} |`,
+      )
     }
   }
   return lines
@@ -126,7 +134,7 @@ export function renderTables(entries: readonly ResultEntry[], sections: readonly
   const titles: Record<Section, string> = {
     wins: '## Победы по уровням',
     behavior: '## Поведение по уровням (на место за партию; открытые центры — за ход)',
-    near: '## Почти победитель: остановлен ли в ближайшие два хода',
+    near: '## Почти победитель: остановлен ли в ближайшие два хода; как взяты победы по порогу',
     economy: '## Экономика по уровням (среднее на место)',
   }
   const render: Record<Section, (list: readonly ResultEntry[]) => string[]> = {

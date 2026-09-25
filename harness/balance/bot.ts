@@ -448,6 +448,7 @@ function runGameSeeded(map: MapDefinition, seed: number, options: RunOptions): G
     }
 
     const threshold = victoryThresholdForSnapshot(game)
+    record.threshold = threshold
     const behavior = createBehaviorTracker(game, playerIds, threshold)
 
     const closeTurn = () => {
@@ -651,6 +652,9 @@ function runGameSeeded(map: MapDefinition, seed: number, options: RunOptions): G
       otherWon: !!record.winnerId && record.winnerId !== episode.playerId && winTurn <= episode.turn + 2,
     }))
     record.behavior = behavior.result()
+    if (record.winnerId && record.reason === 'power_centers') {
+      record.winnerCentersBefore = behavior.centersAtLastActionsStart(record.winnerId)
+    }
     record.tokenFaceValueSpent = Object.values(tallies).reduce((sum, item) => sum + item.tokenFaceValue, 0)
     record.shipCostPaid = Object.values(tallies).reduce((sum, item) => sum + item.shipCost, 0)
     record.spendByPlayer = Object.fromEntries(

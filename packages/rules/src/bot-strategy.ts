@@ -87,6 +87,8 @@ export interface BotProfile {
   criticalDefense: number
   /** Видит ли бот, кто из врагов долетит до его центров в этот ход. */
   threatAware: boolean
+  /** В шаге от порога держит все свои центры как важные: иначе шаг до победы съедают набеги. */
+  brinkDefense: boolean
   /** Вес помехи сопернику, который вот-вот победит. 0 — бот в чужую победу не вмешивается. */
   denyShare: number
   /** Шансы боя, выбор штурма или осады, отступление и поддержка — по расчёту, а не по правилу. */
@@ -99,6 +101,12 @@ export interface BotProfile {
   smartRecharge: boolean
   /** Придерживает маркер рядом с угрожаемым центром до поздних кругов — на ответный удар. */
   reserveMarkers: boolean
+  /**
+   * Терпение: взятие центра, который соперник с маркером рядом ещё может отбить до начала хода,
+   * бот исполняет позже прочих ходов — когда маркеры соперников кончатся. Доля риска, которую
+   * бот рассчитывает вернуть, подождав; 0 — берёт сразу.
+   */
+  patience: number
   /** Шансы боя по превью движка (поддержка, авианосцы, доктрины), а не по голой силе кораблей. */
   previewCombat: boolean
   /** Во сколько раз бот ценит постройку относительно перелёта. */
@@ -119,6 +127,14 @@ export interface BotProfile {
   defenseDoctrineBonus: number
   /** Тревога, когда соперник в двух центрах от порога: 0 — ждать, пока останется один. */
   denyEarly: number
+  /**
+   * Помеха в партии на троих и больше — по расчёту, а не каждому: в двух центрах от порога
+   * мешать только единоличному лидеру (кто-то в двух центрах от порога есть почти всегда), а
+   * пока его может остановить и другой сосед — вполсилы: тот, кто останавливает лидера, платит
+   * за это темпом, а выигрывают остальные. Когда лидер доберёт порог захватами следующего хода,
+   * мешать надо в полную силу — это последний шанс.
+   */
+  denyFocus: boolean
   /** Множитель тревоги к концу партии, когда по лимиту ходов победил бы соперник. */
   denyAtLimit: number
 }
@@ -136,6 +152,7 @@ export const BOT_PROFILES: Record<SmartDifficulty, BotProfile> = {
     compactness: 0.35,
     criticalDefense: 0.15,
     threatAware: false,
+    brinkDefense: false,
     denyShare: 0,
     smartCombat: false,
     smartProduction: false,
@@ -144,6 +161,7 @@ export const BOT_PROFILES: Record<SmartDifficulty, BotProfile> = {
     // у среднего они сокращали отрыв высокого на карте для четверых (замер 2026-09-25).
     smartRecharge: false,
     reserveMarkers: false,
+    patience: 0,
     previewCombat: false,
     buildScale: 1.5,
     richDiscount: false,
@@ -154,6 +172,7 @@ export const BOT_PROFILES: Record<SmartDifficulty, BotProfile> = {
     attackDoctrineBonus: 0,
     defenseDoctrineBonus: 0,
     denyEarly: 0,
+    denyFocus: false,
     denyAtLimit: 0,
   },
   hard: {
@@ -170,12 +189,14 @@ export const BOT_PROFILES: Record<SmartDifficulty, BotProfile> = {
     compactness: 0.35,
     criticalDefense: 1,
     threatAware: true,
+    brinkDefense: true,
     denyShare: 1,
     smartCombat: true,
     smartProduction: true,
     smartDoctrine: true,
     smartRecharge: true,
     reserveMarkers: true,
+    patience: 0.8,
     previewCombat: true,
     buildScale: 3,
     richDiscount: true,
@@ -186,6 +207,7 @@ export const BOT_PROFILES: Record<SmartDifficulty, BotProfile> = {
     attackDoctrineBonus: 4,
     defenseDoctrineBonus: 6,
     denyEarly: 0.5,
+    denyFocus: true,
     denyAtLimit: 1,
   },
 }
@@ -421,8 +443,11 @@ function findNearWinner(
       urgency = 0.85
       reason = `до порога один центр (${rival.projected} из ${threshold})`
     } else if (rival.projected >= threshold - 2) {
-      urgency = profile.denyEarly
-      reason = `до порога два центра (${rival.projected} из ${threshold})`
+      const leads = rival.projected > bestOthers(rival.id)
+      if (!profile.denyFocus || rivals.length <= 1 || leads) {
+        urgency = profile.denyEarly
+        reason = `до порога два центра (${rival.projected} из ${threshold})`
+      }
     }
     // К концу партии побеждает больший счёт: ведущего по центрам тоже надо остановить.
     if (turnsLeft <= 2 && rival.projected > bestOthers(rival.id)) {
@@ -436,6 +461,17 @@ function findNearWinner(
     if (!best || urgency > best.urgency
       || (urgency === best.urgency && rival.potential > (rivals.find((view) => view.id === best!.id)?.potential ?? 0))) {
       best = { id: rival.id, urgency, reason, reachablePowerCenters: reachable }
+    }
+  }
+  if (best && profile.denyFocus && best.urgency < 1 && rivals.length >= 2) {
+    // Его может остановить и другой сосед: пусть темпом платит тот, помеха — вполсилы.
+    const target = best
+    const targetCenters = [...board.cells].filter(([, cell]) => cell.isPowerCenter && cell.controlOwnerId === target.id).map(([key]) => key)
+    const othersReach = rivals.some((rival) => rival.id !== target.id
+      && targetCenters.some((key) => reachingStrength(board, rival, key, rivalMovableCells(game, rival.id)) > 0))
+    if (othersReach) {
+      best.urgency *= 0.5
+      best.reason += '; его может остановить и другой сосед'
     }
   }
   if (best) {
@@ -534,10 +570,12 @@ export function shipCost(type: ShipType): number {
 /**
  * Оборона от этой угрозы важна для партии: потеря последнего центра — выбывание, центр в руках
  * того, кто вот-вот победит, может стать его победным, а свой центр перед собственной победой
- * держать надо до захватов следующего хода.
+ * держать надо до захватов следующего хода. С `brinkDefense` своя победа начинается раньше: в
+ * шаге от порога каждый потерянный центр отодвигает её на ход.
  */
-export function isCriticalThreat(situation: Pick<BotSituation, 'me' | 'threshold'>, threat: PowerCenterThreat): boolean {
-  return threat.last || threat.byNearWinner || situation.me.projected >= situation.threshold
+export function isCriticalThreat(situation: Pick<BotSituation, 'me' | 'threshold' | 'profile'>, threat: PowerCenterThreat): boolean {
+  const ownWin = situation.profile.brinkDefense ? situation.threshold - 1 : situation.threshold
+  return threat.last || threat.byNearWinner || situation.me.projected >= ownWin
 }
 
 /** Доля внимания к обороне этого центра: полная для важной обороны, иначе — обычная. */

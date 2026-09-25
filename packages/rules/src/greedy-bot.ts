@@ -582,7 +582,9 @@ function stepActionsSmart(
       const plan = tried >= MAX_MARKER_ATTEMPTS ? null : planMarker(ctx, key, !ctx.situation.profile.previewCombat)
       const reserve = reserveValueOf(ctx, key)
       const value = plan?.value ?? -Infinity
-      return { marker, plan, reserve, tried, score: value - (rivalsStillAct ? reserve : 0) }
+      // Терпение: центр, который соперник ещё может отбить до начала хода, — позже прочих ходов.
+      const wait = rivalsStillAct && plan?.kind === 'move' ? ctx.situation.profile.patience * plan.timing : 0
+      return { marker, plan, reserve, tried, score: value - (rivalsStillAct ? reserve : 0) - wait }
     })
   }, () => null)
   if (!evaluated) return stepActionsEasy(game, map, playerId, tally, attempts)

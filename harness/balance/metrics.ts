@@ -80,6 +80,13 @@ export interface GameRecord {
    * `stopped` — он не победил в ближайшие два хода.
    */
   nearWins?: NearWinEpisode[]
+  /**
+   * Победа по порогу: сколько центров было у победителя в начале последней фазы действий. На один
+   * меньше порога — дожал с порога; меньше — рывок в один ход.
+   */
+  winnerCentersBefore?: number
+  /** Порог победы в этой партии. */
+  threshold?: number
   /** Поведение каждого места: набеги, штурмы, отбитые центры, открытые центры (`behavior.ts`). */
   behavior?: Record<string, BehaviorCounters>
   /** Сбои оценки среднего и высокого уровня (заменены решением простого бота). */
@@ -375,6 +382,11 @@ export interface Summary {
   claimUtilisationAt3Plus: number | null
   meanEliminationTurn: number | null
   victoryReasons: Record<string, number>
+  /**
+   * Победы по порогу по уровню победителя: сколько из них с порога (на один центр меньше в начале
+   * последней фазы действий) и сколько рывком (на два и больше).
+   */
+  winPaths: Record<string, { wins: number; fromBrink: number; surge: number }>
   battles: {
     perGame: number
     bombardmentsPerGame: number
@@ -473,11 +485,18 @@ export interface BehaviorSummary {
   neutralClaims: number
   lostToRaids: number
   lostToStorms: number
+  /** Взятые набегом или штурмом и удержанные до начала следующего хода. */
+  takesHeld: number
   retaken: number
   lossesHeld: number
   nearWinnerTakes: number
   /** Своих центров без кораблей под ударом врага с маркером — в среднем за ход. */
   exposedPerTurn: number
+  /** Ходов «на пороге» (на один центр меньше порога) на место за партию. */
+  brinkTurns: number
+  /** За ход на пороге: центров взято и удержано, центров потеряно. */
+  brinkTakesPerTurn: number
+  brinkLossesPerTurn: number
 }
 
 /** Подписи счётчиков поведения для отчётов: поле, подпись, знаков после запятой. */
@@ -489,10 +508,14 @@ export const BEHAVIOR_LABELS: readonly (readonly [Exclude<keyof BehaviorSummary,
   ['neutralClaims', 'нейтральных занято', 2],
   ['lostToRaids', 'потеряно набегом', 2],
   ['lostToStorms', 'потеряно штурмом', 2],
+  ['takesHeld', 'взятых удержано к началу хода', 2],
   ['retaken', 'отбито до начала хода', 2],
   ['lossesHeld', 'потерь к началу хода', 2],
   ['nearWinnerTakes', 'отнято у почти победителя', 2],
   ['exposedPerTurn', 'открытых центров за ход', 2],
+  ['brinkTurns', 'ходов на пороге', 2],
+  ['brinkTakesPerTurn', 'на пороге: взято за ход', 2],
+  ['brinkLossesPerTurn', 'на пороге: потеряно за ход', 2],
 ]
 
 function summarizeBehavior(records: readonly GameRecord[]): Record<string, BehaviorSummary> {
@@ -502,7 +525,8 @@ function summarizeBehavior(records: readonly GameRecord[]): Record<string, Behav
       const level = record.seatDifficulty?.[playerId] ?? 'easy'
       const sum = (sums[level] ??= {
         seats: 0, turns: 0, raids: 0, storms: 0, besiegedStorms: 0, siegeCaptures: 0, neutralClaims: 0,
-        lostToRaids: 0, lostToStorms: 0, retaken: 0, lossesHeld: 0, nearWinnerTakes: 0, exposedPcTurns: 0,
+        lostToRaids: 0, lostToStorms: 0, takesHeld: 0, retaken: 0, lossesHeld: 0, nearWinnerTakes: 0, exposedPcTurns: 0,
+        brinkTurns: 0, brinkTakes: 0, brinkLosses: 0,
       })
       sum.seats += 1
       for (const key of Object.keys(counters) as (keyof BehaviorCounters)[]) sum[key] += counters[key]
@@ -520,10 +544,14 @@ function summarizeBehavior(records: readonly GameRecord[]): Record<string, Behav
       neutralClaims: perSeat(sum.neutralClaims),
       lostToRaids: perSeat(sum.lostToRaids),
       lostToStorms: perSeat(sum.lostToStorms),
+      takesHeld: perSeat(sum.takesHeld),
       retaken: perSeat(sum.retaken),
       lossesHeld: perSeat(sum.lossesHeld),
       nearWinnerTakes: perSeat(sum.nearWinnerTakes),
       exposedPerTurn: sum.turns ? sum.exposedPcTurns / sum.turns : 0,
+      brinkTurns: perSeat(sum.brinkTurns),
+      brinkTakesPerTurn: sum.brinkTurns ? sum.brinkTakes / sum.brinkTurns : 0,
+      brinkLossesPerTurn: sum.brinkTurns ? sum.brinkLosses / sum.brinkTurns : 0,
     }
   }
   return out
@@ -645,6 +673,19 @@ export function summarize(records: readonly GameRecord[]): Summary {
     claimUtilisationAt3Plus: claimShares.length ? mean(claimShares) : null,
     meanEliminationTurn: eliminationTurns.length ? mean(eliminationTurns) : null,
     victoryReasons,
+    winPaths: (() => {
+      const out: Record<string, { wins: number; fromBrink: number; surge: number }> = {}
+      for (const record of ok) {
+        if (record.winnerCentersBefore == null || !record.winnerId) continue
+        const level = record.seatDifficulty?.[record.winnerId] ?? 'easy'
+        const entry = (out[level] ??= { wins: 0, fromBrink: 0, surge: 0 })
+        const threshold = record.threshold ?? 6
+        entry.wins += 1
+        if (record.winnerCentersBefore >= threshold - 1) entry.fromBrink += 1
+        else entry.surge += 1
+      }
+      return out
+    })(),
     battles: {
       perGame: ok.length ? fights.length / ok.length : 0,
       bombardmentsPerGame: ok.length ? (allBattles.length - fights.length) / ok.length : 0,

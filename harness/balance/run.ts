@@ -180,6 +180,12 @@ function report(mapId: string, summary: Summary, records: readonly GameRecord[])
           .join(', '),
     )
   }
+  const paths = Object.entries(summary.winPaths ?? {})
+  if (paths.length) {
+    lines.push('Победы по порогу: ' + paths
+      .map(([level, item]) => `${level} — ${item.wins}, из них с порога ${item.fromBrink}, рывком ${item.surge}`)
+      .join('; '))
+  }
   lines.push('Исходы: ' + (Object.entries(summary.victoryReasons)
     .map(([reason, n]) => `${reason} ${n}`).join(', ') || '—'))
   const levels = Object.entries(summary.winRateByDifficulty)

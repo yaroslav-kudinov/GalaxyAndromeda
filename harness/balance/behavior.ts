@@ -36,6 +36,8 @@ export interface BehaviorCounters {
   /** Свои центры, потерянные в фазе действий: набегом и штурмом. */
   lostToRaids: number
   lostToStorms: number
+  /** Взятые набегом или штурмом и оставшиеся у места к началу следующего хода. */
+  takesHeld: number
   /** Потерянные в фазе действий и отбитые самим местом до начала следующего хода. */
   retaken: number
   /** Потерянные в фазе действий и так и оставшиеся у врага к началу следующего хода. */
@@ -47,6 +49,14 @@ export interface BehaviorCounters {
    * под маркером, — сумма за партию; делить на `turns`.
    */
   exposedPcTurns: number
+  /**
+   * Ходы «на пороге»: в начале фазы действий у места на один центр меньше порога. За такие ходы —
+   * сколько центров место взяло и удержало к началу следующего хода и сколько потеряло (в фазе
+   * действий и осадой в начале хода). Видно, чем кончается шаг до победы.
+   */
+  brinkTurns: number
+  brinkTakes: number
+  brinkLosses: number
 }
 
 export function emptyCounters(): BehaviorCounters {
@@ -59,10 +69,14 @@ export function emptyCounters(): BehaviorCounters {
     neutralClaims: 0,
     lostToRaids: 0,
     lostToStorms: 0,
+    takesHeld: 0,
     retaken: 0,
     lossesHeld: 0,
     nearWinnerTakes: 0,
     exposedPcTurns: 0,
+    brinkTurns: 0,
+    brinkTakes: 0,
+    brinkLosses: 0,
   }
 }
 
@@ -80,6 +94,8 @@ export interface BehaviorTracker {
   /** Начало нового хода: центры, потерянные в прошлой фазе действий, решены. */
   onTurnStart(game: GameSnapshot): void
   result(): Record<string, BehaviorCounters>
+  /** Сколько центров было у игрока в начале последней фазы действий. */
+  centersAtLastActionsStart(playerId: string): number
 }
 
 export function createBehaviorTracker(game: GameSnapshot, playerIds: readonly string[], threshold: number): BehaviorTracker {
@@ -96,6 +112,11 @@ export function createBehaviorTracker(game: GameSnapshot, playerIds: readonly st
   let ownedAtActionsStart = new Map<string, string>()
   /** Центры, которые их хозяин потерял в этой фазе действий. */
   const lostThisTurn = new Set<string>()
+  /** Кто последним взял центр набегом или штурмом в этой фазе действий. */
+  const takenThisTurn = new Map<string, string>()
+  /** Места «на пороге» в этой фазе действий. */
+  let brink = new Set<string>()
+  let lastCenters = new Map<string, number>()
 
   const snapshot = (current: GameSnapshot) => {
     const next = new Map<string, PcState>()
@@ -139,6 +160,7 @@ export function createBehaviorTracker(game: GameSnapshot, playerIds: readonly st
           const siegeStorm = prevSieges[key] === owner
           const original = ownedAtActionsStart.get(key)
           bump(owner, before.garrison ? 'storms' : 'raids')
+          takenThisTurn.set(key, owner)
           if (before.garrison && siegeStorm) bump(owner, 'besiegedStorms')
           if (loser === original) {
             bump(loser, before.garrison ? 'lostToStorms' : 'lostToRaids')
@@ -148,6 +170,7 @@ export function createBehaviorTracker(game: GameSnapshot, playerIds: readonly st
           continue
         }
         if (!owner) continue
+        if (prevSieges[key] === owner && loser && brink.has(loser)) bump(loser, 'brinkLosses')
         if (prevSieges[key] === owner) bump(owner, 'siegeCaptures')
         else if (!loser) bump(owner, 'neutralClaims')
       }
@@ -174,9 +197,15 @@ export function createBehaviorTracker(game: GameSnapshot, playerIds: readonly st
       }
       for (const id of active) bump(id, 'turns')
       ownedAtActionsStart = new Map()
+      const centers = new Map<string, number>()
       for (const [key, cell] of board.cells) {
-        if (cell.isPowerCenter && cell.controlOwnerId) ownedAtActionsStart.set(key, cell.controlOwnerId)
+        if (!cell.isPowerCenter || !cell.controlOwnerId) continue
+        ownedAtActionsStart.set(key, cell.controlOwnerId)
+        centers.set(cell.controlOwnerId, (centers.get(cell.controlOwnerId) ?? 0) + 1)
       }
+      brink = new Set([...active].filter((id) => (centers.get(id) ?? 0) >= threshold - 1))
+      lastCenters = centers
+      for (const id of brink) bump(id, 'brinkTurns')
       for (const [key, cell] of board.cells) {
         const owner = cell.controlOwnerId
         if (!cell.isPowerCenter || !owner || !active.has(owner)) continue
@@ -190,14 +219,28 @@ export function createBehaviorTracker(game: GameSnapshot, playerIds: readonly st
       for (const key of lostThisTurn) {
         const original = ownedAtActionsStart.get(key)!
         const cell = current.cells.find((candidate) => hexKey(candidate.coord.q, candidate.coord.r) === key)
-        if (cell?.controlOwnerId !== original) bump(original, 'lossesHeld')
+        if (cell?.controlOwnerId === original) continue
+        bump(original, 'lossesHeld')
+        if (brink.has(original)) bump(original, 'brinkLosses')
       }
       lostThisTurn.clear()
+      for (const [key, taker] of takenThisTurn) {
+        const cell = current.cells.find((candidate) => hexKey(candidate.coord.q, candidate.coord.r) === key)
+        if (cell?.controlOwnerId !== taker) continue
+        bump(taker, 'takesHeld')
+        if (brink.has(taker)) bump(taker, 'brinkTakes')
+      }
+      takenThisTurn.clear()
       ownedAtActionsStart = new Map()
+      brink = new Set()
     },
 
     result() {
       return counters
+    },
+
+    centersAtLastActionsStart(playerId) {
+      return lastCenters.get(playerId) ?? 0
     },
   }
 }

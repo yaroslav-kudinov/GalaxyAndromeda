@@ -259,6 +259,8 @@ export interface CombatOption {
   siege: boolean
   estimate: BattleEstimate | null
   reason: string
+  /** Сколько ценности съедает риск, что взятый центр отобьют до начала хода (см. `MovePlan`). */
+  timing: number
 }
 
 /** Кто в бою на клетке будет защищаться против бота — с учётом чужой осады. */
@@ -291,8 +293,25 @@ function holdSafety(ctx: TacticalContext, key: string, arriving: number): number
   return 1 - 0.6 * risk
 }
 
-/** Во что обойдётся бою ставка: ценность клетки для бота, если он её выиграет. */
-function combatStake(ctx: TacticalContext, key: string, arriving: number): number {
+/**
+ * Во что обойдётся бою ставка: ценность клетки для бота, если он её выиграет. `timing` — часть
+ * ставки, которую съедает риск, что центр отобьют до начала хода: она уходит, если подождать,
+ * пока у соперников кончатся маркеры рядом.
+ */
+function combatStake(ctx: TacticalContext, key: string, arriving: number): { stake: number; timing: number } {
+  const cell = ctx.board.cells.get(key)
+  if (cell?.isPowerCenter && cell.controlOwnerId !== ctx.playerId) {
+    const siege = ctx.game.sieges?.[key]
+    if (!(siege && siege.besiegerId !== ctx.playerId && siege.besiegedId !== ctx.playerId)) {
+      const full = cellGoalValue(ctx.situation, key)
+      const stake = full * holdSafety(ctx, key, arriving)
+      return { stake, timing: full - stake }
+    }
+  }
+  return { stake: combatStakeValue(ctx, key), timing: 0 }
+}
+
+function combatStakeValue(ctx: TacticalContext, key: string): number {
   const cell = ctx.board.cells.get(key)
   if (!cell) return 0
   const siege = ctx.game.sieges?.[key]
@@ -308,7 +327,7 @@ function combatStake(ctx: TacticalContext, key: string, arriving: number): numbe
       const deny = isDenyTarget(ctx.situation, siege.besiegerId) ? POWER_CENTER_VALUE * 1.1 * ctx.situation.modes.deny : 0
       return cellGoalValue(ctx.situation, key) * 0.25 + deny
     }
-    return cellGoalValue(ctx.situation, key) * holdSafety(ctx, key, arriving)
+    return cellGoalValue(ctx.situation, key)
   }
   return cellGoalValue(ctx.situation, key)
 }
@@ -369,7 +388,7 @@ export function evaluateCombatTarget(
   }
 
   // После боя на клетке останется примерно половина силы атакующих — ею и держать.
-  const stake = combatStake(ctx, key, combatStrength(attackerTypes) * 0.6)
+  const { stake, timing } = combatStake(ctx, key, combatStrength(attackerTypes) * 0.6)
   const kill = killWeight(ctx, defenders[0]?.ownerId)
   const finishing = situation.modes.finish >= 0.99 || situation.modes.deny >= 0.8
   const lossWeight = (finishing ? 0.65 : 1) * situation.profile.lossAversion
@@ -384,7 +403,7 @@ export function evaluateCombatTarget(
     // Штурм стоит флота, осада — только времени. Когда время не поджимает, бот высокого уровня
     // штурмует лишь то, что не взять осадой.
     if (besiegeable && !finishing) value *= situation.profile.assaultBias
-    best = { key, attackers, value, siege: false, estimate, reason: 'штурм' }
+    best = { key, attackers, value, siege: false, estimate, reason: 'штурм', timing: estimate.winChance * timing }
   }
 
   if (besiegeable) {
@@ -423,7 +442,7 @@ function siegeOption(
   const holdChance = Math.min(1, 0.55 + 0.25 * hold)
   const tiedUp = 0.06 * fleetValue(attackers.map((ship) => ship.type)) * turnsNeeded
   const value = stake * 0.85 ** turnsNeeded * holdChance - tiedUp
-  return { key, attackers, value, siege: true, estimate: assault, reason: 'осада' }
+  return { key, attackers, value, siege: true, estimate: assault, reason: 'осада', timing: 0 }
 }
 
 // ---------------------------------------------------------------------------
@@ -435,6 +454,12 @@ export interface MovePlan {
   value: number
   combat: CombatOption | null
   reason: string
+  /**
+   * Часть оценки, которую съедает риск, что взятые центры отобьют до начала хода: соперник с
+   * маркером рядом ещё может войти. Подождав, пока его маркеры кончатся, бот вернёт эту часть —
+   * высокий уровень поэтому исполняет такие ходы позже прочих (`patience`).
+   */
+  timing: number
 }
 
 /**
@@ -512,6 +537,7 @@ export function planMoves(ctx: TacticalContext, markerKey: string, quick: boolea
   const moves: ShipMovePlan[] = []
   const reasons: string[] = []
   let value = 0
+  let timing = 0
   const moving = new Set<string>()
   if (combat) {
     for (const ship of combat.attackers) {
@@ -519,6 +545,7 @@ export function planMoves(ctx: TacticalContext, markerKey: string, quick: boolea
       moving.add(ship.id)
     }
     value += combat.value
+    timing += combat.timing
     reasons.push(`${combat.reason} ${combat.key}`)
   }
 
@@ -532,9 +559,10 @@ export function planMoves(ctx: TacticalContext, markerKey: string, quick: boolea
 
   const remaining = free.filter((ship) => !moving.has(ship.id))
   while (remaining.length > 0) {
-    let best: { ship: ShipUnit; key: string; gain: number; note: string } | null = null
+    let best: { ship: ShipUnit; key: string; gain: number; note: string; timing: number } | null = null
     for (const ship of remaining) {
       const here = approachValue(ctx, markerKey, ship.type)
+      let pendingTiming = 0
       // Последний корабль уходит с клетки, которую бот вот-вот займёт, — захват пропадёт. Со
       // своего центра под угрозой — оставляет его набегу: ход должен дать больше, чем стоит риск.
       const leaveCost = originLeft === 1
@@ -553,7 +581,11 @@ export function planMoves(ctx: TacticalContext, markerKey: string, quick: boolea
             let goal = cellGoalValue(situation, key)
             const needsClaim = dest.controlOwnerId == null || dest.isPowerCenter
             if (needsClaim && !dest.isPowerCenter && claimSlots <= 0) goal *= OVER_LIMIT_CLAIM_SHARE
-            if (dest.isPowerCenter) goal *= holdSafety(ctx, key, combatStrength([ship.type]))
+            if (dest.isPowerCenter) {
+              const safe = goal * holdSafety(ctx, key, combatStrength([ship.type]))
+              pendingTiming = goal - safe
+              goal = safe
+            }
             gain += goal
             note = dest.isPowerCenter ? 'центр' : dest.controlOwnerId ? 'набег' : 'захват'
           } else if (dest.isPowerCenter && situation.profile.threatAware) {
@@ -590,7 +622,8 @@ export function planMoves(ctx: TacticalContext, markerKey: string, quick: boolea
           }
         }
         gain += APPROACH_WEIGHT * (approachValue(ctx, key, ship.type) - here)
-        if (!best || gain > best.gain) best = { ship, key, gain, note: note || 'сближение' }
+        if (!best || gain > best.gain) best = { ship, key, gain, note: note || 'сближение', timing: pendingTiming }
+        pendingTiming = 0
       }
     }
     if (!best || best.gain <= 0.5) break
@@ -604,6 +637,7 @@ export function planMoves(ctx: TacticalContext, markerKey: string, quick: boolea
       claimSlots -= 1
     }
     value += best.gain
+    timing += best.timing
     reasons.push(`${best.note} ${best.key}`)
   }
 
@@ -613,7 +647,7 @@ export function planMoves(ctx: TacticalContext, markerKey: string, quick: boolea
       : `центр ${markerKey} без пикета: ход выгоднее обороны (риск набега ${raidRisk(situation, markerKey, 0).toFixed(0)})`)
   }
   if (moves.length === 0) return null
-  return { moves, value, combat, reason: reasons.join(', ') }
+  return { moves, value, combat, reason: reasons.join(', '), timing }
 }
 
 // ---------------------------------------------------------------------------
@@ -791,7 +825,7 @@ export function planSharedCell(ctx: TacticalContext, markerKey: string): Assault
 // ---------------------------------------------------------------------------
 
 export type MarkerPlan =
-  | { kind: 'move'; value: number; reason: string; moves: ShipMovePlan[]; combat: CombatOption | null }
+  | { kind: 'move'; value: number; reason: string; moves: ShipMovePlan[]; combat: CombatOption | null; timing: number }
   | { kind: 'build'; value: number; reason: string; type: ShipType; count: number }
   | { kind: 'assault'; value: number; reason: string }
 
@@ -801,7 +835,7 @@ export function planMarker(ctx: TacticalContext, markerKey: string, quick: boole
   if (shared) best = { kind: 'assault', value: shared.value, reason: shared.reason }
   const move = planMoves(ctx, markerKey, quick)
   if (move && (!best || move.value > best.value)) {
-    best = { kind: 'move', value: move.value, reason: move.reason, moves: move.moves, combat: move.combat }
+    best = { kind: 'move', value: move.value, reason: move.reason, moves: move.moves, combat: move.combat, timing: move.timing }
   }
   const build = planBuild(ctx, markerKey)
   if (build && (!best || build.value > best.value)) {

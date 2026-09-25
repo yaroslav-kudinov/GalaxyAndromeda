@@ -32,7 +32,7 @@ const onlyAfter = [...after.keys()].filter((name) => !before.has(name))
 const arrow = (a: string, b: string) => (a || b ? `${a || '—'} → ${b || '—'}` : '')
 const lines: string[] = []
 
-lines.push('## Победы по уровням: побед на место ×к справедливой доле, было → стало')
+lines.push('## Победы по уровням: побед на место ×к справедливой доле · центров в среднем по ходу, было → стало')
 lines.push('')
 lines.push(`| замер | партий | ходов | ${LEVELS.join(' | ')} |`)
 lines.push(`|---|---|---|${LEVELS.map(() => '---').join('|')}|`)

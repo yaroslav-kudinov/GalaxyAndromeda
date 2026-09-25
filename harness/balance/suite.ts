@@ -12,7 +12,8 @@
  * - `--label` — имя прогона: каталог `<out>/<label>` (обязателен);
  * - `--map` — карты и выборки каталога (`@4+` — все опубликованные на 4–6 игроков, по умолчанию);
  * - `--configs` — раскладки через пробел или «;»: `solo:hard` (одно место сложного среди
- *   средних — замер «против человека»), `all:medium` (все места одного уровня),
+ *   средних), `among:hard` (одно место среднего среди сложных — «человек» за столом сложных
+ *   ботов), `all:medium` (все места одного уровня),
  *   `h2h:hard,medium` (лоб в лоб), `mix:player-1=hard` (места поимённо). По умолчанию —
  *   `solo:easy solo:hard all:medium h2h:hard,medium`;
  * - `--games`, `--seed` — партий на пару и сид (сид партии домешивается из карты, поэтому
@@ -48,6 +49,8 @@ function configFlags(config: string): { flags: string[]; name: string } {
   switch (kind) {
     case 'solo':
       return { flags: ['--solo', value], name: `solo-${value}` }
+    case 'among':
+      return { flags: ['--solo', 'medium', '--difficulty', value], name: `among-${value}` }
     case 'all':
       return { flags: ['--difficulty', value], name: `all-${value}` }
     case 'h2h':
@@ -55,7 +58,7 @@ function configFlags(config: string): { flags: string[]; name: string } {
     case 'mix':
       return { flags: ['--mix', value, '--rotate', '--difficulty', 'medium'], name: `mix-${value.replace(/[=,]/g, '-')}` }
     default:
-      throw new Error(`Неизвестный вид раскладки «${kind}»: есть solo, all, h2h, mix`)
+      throw new Error(`Неизвестный вид раскладки «${kind}»: есть solo, among, all, h2h, mix`)
   }
 }
 

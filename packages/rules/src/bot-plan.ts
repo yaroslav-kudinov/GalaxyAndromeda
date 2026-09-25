@@ -9,8 +9,9 @@
  * `bot-strategy.ts`).
  *
  * План бросается, когда он потерял смысл: цель взята или занята своим кораблём, обесценилась,
- * стала недостижимой, шансы на её взятие рухнули, к ней нет продвижения три хода, или нашлась
- * цель заметно выгоднее. Всё это — слова в журнале решений (`setBotTraceListener`).
+ * стала недостижимой, шансы на её взятие рухнули, к ней нет продвижения три хода. Раз в ход (в
+ * первом решении хода) план ещё сравнивается с другими целями и уступает цели, которая выгоднее
+ * в `SWITCH_MARGIN` раз. Всё это — слова в журнале решений (`setBotTraceListener`).
  *
  * Память живёт вне снимка партии: сервер держит её рядом со счётчиком попыток маркеров
  * (`GreedyBotOptions.memory`), харнесс — на партию. Без памяти бот играет без плана, как раньше:
@@ -36,6 +37,11 @@ export interface BotPlan {
   /** Лучшее (наименьшее) число ходов до цели за время плана и ход, когда оно улучшилось. */
   bestEta: number
   progressTurn: number
+  /**
+   * Ход, в который план последний раз сравнивался с другими целями. Сравнение — раз в ход, в
+   * первом решении хода: посреди хода ценности целей скачут от каждого перелёта, и бот метался бы.
+   */
+  comparedTurn: number
 }
 
 export interface BotMemory {
@@ -199,8 +205,11 @@ export function resolvePlan(
       if (turn - plan.progressTurn >= STALL_TURNS) {
         drop = 'нет продвижения к цели'
         memory.dropped.set(playerId, { target: plan.target, turn })
-      } else if (best && best.key !== plan.target && best.score > current.score * SWITCH_MARGIN) {
-        drop = `нашлась цель заметно выгоднее (${best.key})`
+      } else if (plan.comparedTurn !== turn) {
+        plan.comparedTurn = turn
+        if (best && best.key !== plan.target && best.score > current.score * SWITCH_MARGIN) {
+          drop = `нашлась цель заметно выгоднее (${best.key})`
+        }
       }
     }
     if (drop) {
@@ -223,6 +232,7 @@ export function resolvePlan(
         value: pick.value,
         bestEta: pick.eta,
         progressTurn: turn,
+        comparedTurn: turn,
       }
       memory.plans.set(playerId, plan)
       appendNote(memory, playerId, `новый план: ${describePlan(plan)}`)
