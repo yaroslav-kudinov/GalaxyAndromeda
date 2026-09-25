@@ -129,11 +129,13 @@ export const BOT_PROFILES: Record<SmartDifficulty, BotProfile> = {
     smartCombat: false,
     smartProduction: false,
     smartDoctrine: false,
-    smartRecharge: true,
+    // Точный выбор фишек перезарядки и скидка на толстый кошелёк — умения высокого уровня:
+    // у среднего они сокращали отрыв высокого на карте для четверых (замер 2026-09-25).
+    smartRecharge: false,
     reserveMarkers: false,
     previewCombat: false,
     buildScale: 1.5,
-    richDiscount: true,
+    richDiscount: false,
     pickets: true,
     holdAware: false,
     lossAversion: 1,
@@ -146,6 +148,8 @@ export const BOT_PROFILES: Record<SmartDifficulty, BotProfile> = {
   hard: {
     difficulty: 'hard',
     routineDefense: 0,
+    // Пикеты на всех центрах, до которых долетает враг, в партиях ботов стоили темпа дороже
+    // отбитых набегов (замер 2026-09-25); важные центры высокий держит через criticalDefense.
     raidDefense: 0,
     economy: 1,
     pacing: 0.35,

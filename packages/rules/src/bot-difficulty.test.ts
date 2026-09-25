@@ -146,7 +146,7 @@ describe('уровни ботов: экономика', () => {
     expect(cellGoalValue(contested, '3,0')).toBeGreaterThan(calmValue)
   })
 
-  it('без экономики (лёгкий профиль развития) центр не откладывается', () => {
+  it('без экономического развития центр не откладывается', () => {
     const { game } = stripBoard()
     cellAt(game, 3, 0).isPowerCenter = true
     const profile = { ...BOT_PROFILES.medium, economy: 0 }
