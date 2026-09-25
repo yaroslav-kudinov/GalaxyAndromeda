@@ -16,6 +16,8 @@ export interface BoardShipView extends StartingShipDef {
 export interface BoardCellView extends Omit<MapCellDefinition, 'startingShips'> {
   startingShips?: BoardShipView[]
   actionMarker?: boolean
+  /** Слоты игроков, чьи маркеры действия стоят на клетке (на осаждённой их может быть два). */
+  actionMarkerPlayers?: number[]
   /** Центр власти в осаде: слот осаждающего игрока. */
   besiegedBy?: number | null
 }
@@ -39,6 +41,7 @@ export function runtimeCellToBoardCell(
   cell: RuntimeCellState,
   players: PlayerState[],
   besiegerId?: string | null,
+  markerOwnerIds: readonly string[] = [],
 ): BoardCellView {
   const token = cell.resourceTokens[0]
   return {
@@ -54,17 +57,27 @@ export function runtimeCellToBoardCell(
       player: playerSlotFromId(players, ship.ownerId) ?? 1,
     })),
     actionMarker: !!cell.actionMarkerId,
+    actionMarkerPlayers: markerOwnerIds
+      .map((ownerId) => playerSlotFromId(players, ownerId))
+      .filter((slot): slot is number => slot != null),
   }
 }
 
 export function snapshotToBoardCells(snapshot: GameSnapshot): BoardCellView[] {
-  return snapshot.cells.map((cell) =>
-    runtimeCellToBoardCell(
+  const markerOwners = new Map<string, string[]>()
+  for (const marker of snapshot.actionMarkers) {
+    const key = `${marker.coord.q},${marker.coord.r}`
+    markerOwners.set(key, [...(markerOwners.get(key) ?? []), marker.ownerId])
+  }
+  return snapshot.cells.map((cell) => {
+    const key = `${cell.coord.q},${cell.coord.r}`
+    return runtimeCellToBoardCell(
       cell,
       snapshot.players,
-      snapshot.sieges?.[`${cell.coord.q},${cell.coord.r}`]?.besiegerId,
-    ),
-  )
+      snapshot.sieges?.[key]?.besiegerId,
+      markerOwners.get(key) ?? [],
+    )
+  })
 }
 
 export function mapCellsToBoardCells(cells: MapCellDefinition[]): BoardCellView[] {

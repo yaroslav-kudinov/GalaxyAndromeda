@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { MapCellDefinition } from '@galaxy/rules'
 import { getCellResourceToken } from '@galaxy/rules'
+import { markerPaletteForSlot } from '~/utils/marker-colors'
 import { resourceTokenGlyphScale } from '~/utils/board-glyphs'
 import { TOKEN_CHIP_RADIUS } from '~/utils/resource-token-pips'
 import { cellOverviewLines } from '~/utils/cell-display'
@@ -14,6 +15,8 @@ const props = defineProps<{
   showResource: boolean
   showPowerCenter: boolean
   showActionMarker: boolean
+  /** Слоты владельцев маркеров действия: значок каждого — в цвете игрока. */
+  actionMarkerPlayers?: number[]
   actionMarkerAvailable?: boolean
   /** Фишку на этой клетке можно выбрать для оплаты постройки */
   tokenPickable?: boolean
@@ -29,6 +32,12 @@ const labelSize = computed(() => s.value * 0.24)
 const badgeR = computed(() => s.value * 0.11)
 const tokenScale = computed(() => resourceTokenGlyphScale(s.value))
 const tokenLocalScale = computed(() => tokenScale.value / Math.max(0.01, props.contentScale))
+
+/**
+ * Цвета значка маркера. Один владелец — светлый тон его цвета; два (осада) — тот же кружок,
+ * разрезанный по вертикали: слева первый, справа второй. Без владельца (редактор) — жёлтый.
+ */
+const markerHalves = computed(() => (props.actionMarkerPlayers ?? []).slice(0, 2).map(markerPaletteForSlot))
 
 const tokenPickRingR = computed(() => (TOKEN_CHIP_RADIUS + 3.4) * tokenLocalScale.value)
 
@@ -74,12 +83,37 @@ const contentTopY = computed(() => {
     </g>
 
     <g v-if="showActionMarker" :transform="`translate(${-s * 0.38}, ${contentTopY - s * 0.04})`">
-      <circle
-        class="marker-badge marker-badge--action"
-        :class="{ 'marker-badge--available': actionMarkerAvailable }"
-        :r="badgeR"
-      />
-      <text class="marker-badge-label" :font-size="labelSize * 0.75">A</text>
+      <g class="marker-badge-wrap" :class="{ 'marker-badge--available': actionMarkerAvailable }">
+        <template v-if="markerHalves.length === 2">
+          <circle
+            class="marker-badge-half"
+            clip-path="url(#marker-half-left)"
+            :style="{ fill: markerHalves[0]!.fill }"
+            :r="badgeR"
+          />
+          <circle
+            class="marker-badge-half"
+            clip-path="url(#marker-half-right)"
+            :style="{ fill: markerHalves[1]!.fill }"
+            :r="badgeR"
+          />
+          <line class="marker-badge-split" :x1="0" :y1="-badgeR" :x2="0" :y2="badgeR" />
+          <circle class="marker-badge marker-badge--outline" :r="badgeR" />
+          <text class="marker-badge-label" :font-size="labelSize * 0.75">A</text>
+        </template>
+        <template v-else-if="markerHalves.length === 1">
+          <circle
+            class="marker-badge"
+            :style="{ fill: markerHalves[0]!.fill, stroke: markerHalves[0]!.ink }"
+            :r="badgeR"
+          />
+          <text class="marker-badge-label" :style="{ fill: markerHalves[0]!.ink }" :font-size="labelSize * 0.75">A</text>
+        </template>
+        <template v-else>
+          <circle class="marker-badge marker-badge--action" :r="badgeR" />
+          <text class="marker-badge-label" :font-size="labelSize * 0.75">A</text>
+        </template>
+      </g>
     </g>
   </g>
 </template>
@@ -146,5 +180,16 @@ const contentTopY = computed(() => {
   text-anchor: middle;
   dominant-baseline: middle;
   font-weight: 800;
+}
+/* Осада: один кружок, разрезанный по вертикали на цвета двух владельцев маркеров. */
+.marker-badge-half {
+  stroke: none;
+}
+.marker-badge--outline {
+  fill: none;
+}
+.marker-badge-split {
+  stroke: #0f172a;
+  stroke-width: 1.2;
 }
 </style>
