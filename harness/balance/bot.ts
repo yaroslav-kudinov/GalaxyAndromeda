@@ -37,12 +37,14 @@ import type {
   ShipType,
 } from '../../packages/rules/src/index.js'
 import {
+  createBotMemory,
   faceUpValueFor,
   indexCells,
   parseKey,
   pickDoctrine,
   setBotErrorListener,
   settleClaimPicks,
+  withBotMemory,
   settleRechargePicks,
   stepActions,
   stepCombat,
@@ -51,6 +53,7 @@ import {
   type MarkerAttempts,
   type SpendTally,
 } from '../../packages/rules/src/index.js'
+import { createBehaviorTracker } from './behavior.js'
 import type { BattleRecord, GameRecord, PlayerSample, TurnSample } from './metrics.js'
 import { withSeededRandom } from './rng.js'
 
@@ -348,7 +351,8 @@ export function runGame(map: MapDefinition, seed: number, options: RunOptions): 
     }
   })
   try {
-    const record = runGameSeeded(map, seed, options)
+    // Память ботов — на партию, как у сервера на комнату: план высокого уровня живёт в ней.
+    const record = withBotMemory(createBotMemory(), () => runGameSeeded(map, seed, options))
     record.botErrors = botIssues.errors
     record.botPlanRejects = botIssues.rejects
     if (botIssues.samples.length) record.botIssueSamples = botIssues.samples
@@ -443,7 +447,12 @@ function runGameSeeded(map: MapDefinition, seed: number, options: RunOptions): G
       if (trail.length > 24) trail.shift()
     }
 
+    const threshold = victoryThresholdForSnapshot(game)
+    record.threshold = threshold
+    const behavior = createBehaviorTracker(game, playerIds, threshold)
+
     const closeTurn = () => {
+      behavior.onTurnStart(game)
       const sample = sampleTurn(game, playerIds, currentTurn, previousCells)
       record.samples.push(sample)
       // Класс считается открытым, когда наибольший регион дорос до порога,
@@ -473,13 +482,13 @@ function runGameSeeded(map: MapDefinition, seed: number, options: RunOptions): G
 
     // Почти победитель: в начале фазы действий у игрока на один центр меньше порога. Эпизод
     // заводится заново, если игрок откатился и снова подошёл к порогу.
-    const threshold = victoryThresholdForSnapshot(game)
     const nearWinArmed = new Set(playerIds)
     const openEpisodes: { playerId: string; turn: number }[] = []
     let nearWinCheckedTurn = 0
     const checkNearWinners = () => {
       if (game.phase !== 'actions' || nearWinCheckedTurn === game.turnNumber) return
       nearWinCheckedTurn = game.turnNumber
+      behavior.onActionsStart(game)
       for (const playerId of playerIds) {
         const powerCenters = countControlledPowerCenters(game, playerId)
         if (powerCenters < threshold - 1) {
@@ -506,6 +515,7 @@ function runGameSeeded(map: MapDefinition, seed: number, options: RunOptions): G
 
     while (steps-- > 0) {
       watchSieges()
+      behavior.observe(game)
       if (game.gameOver) break
       if (game.turnNumber > options.maxTurns) {
         record.hitTurnCap = true
@@ -625,6 +635,7 @@ function runGameSeeded(map: MapDefinition, seed: number, options: RunOptions): G
       record.error = `Исчерпан лимит шагов | ${trail.join(' ; ')}`
     }
 
+    behavior.observe(game)
     closeTurn()
     record.turns = Math.max(1, record.samples.at(-1)?.turn ?? game.turnNumber)
     record.winnerId = game.gameOver?.winnerId ?? null
@@ -638,7 +649,12 @@ function runGameSeeded(map: MapDefinition, seed: number, options: RunOptions): G
       level: difficultyOf(episode.playerId),
       otherHardSeats: playerIds.filter((id) => id !== episode.playerId && difficultyOf(id) === 'hard').length,
       stopped: !(record.winnerId === episode.playerId && winTurn <= episode.turn + 2),
+      otherWon: !!record.winnerId && record.winnerId !== episode.playerId && winTurn <= episode.turn + 2,
     }))
+    record.behavior = behavior.result()
+    if (record.winnerId && record.reason === 'power_centers') {
+      record.winnerCentersBefore = behavior.centersAtLastActionsStart(record.winnerId)
+    }
     record.tokenFaceValueSpent = Object.values(tallies).reduce((sum, item) => sum + item.tokenFaceValue, 0)
     record.shipCostPaid = Object.values(tallies).reduce((sum, item) => sum + item.shipCost, 0)
     record.spendByPlayer = Object.fromEntries(

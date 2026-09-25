@@ -19,3 +19,5 @@ coverage/
 .dev-rooms/
 # Временные баг-репорты сервера (TTL 60 дней)
 .bug-reports/
+# Результаты прогонов харнесса баланса (pnpm balance:suite); выжимки для истории — в harness/balance/baselines
+harness/balance/out/

@@ -2,8 +2,8 @@
 /**
  * Замер скорости бота лобби: сколько занимает один вызов `planGreedyBotAction`.
  *
- *   pnpm tsx harness/balance/timing.ts --map reference-six-13 --games 3
- *   pnpm tsx harness/balance/timing.ts --map reference-six-13 --games 3 --difficulty hard
+ *   pnpm balance:timing --map six-point-path --games 3
+ *   pnpm balance:timing --map six-point-path --games 3 --difficulty hard
  *
  * Партия идёт так же, как в лобби сервера: на каждом шаге бот планирует одно действие на копии
  * состояния, действие применяется, и так до конца партии. Если ботам делать нечего, шаг
@@ -11,26 +11,22 @@
  * замеряются все три уровня по очереди, все места — одного уровня.
  */
 
-import { readFileSync } from 'node:fs'
-import { dirname, resolve } from 'node:path'
 import { performance } from 'node:perf_hooks'
-import { fileURLToPath } from 'node:url'
 
 import {
   applyGameActionOnSnapshot,
   beginMatchForParticipants,
   BOT_DIFFICULTIES,
+  createBotMemory,
   gameSnapshotFromMap,
   isBotDifficulty,
-  normalizeMapDefinition,
   planGreedyBotAction,
   type BotDifficulty,
   type MarkerAttempts,
 } from '../../packages/rules/src/index.js'
 import { seatIdsOf } from './bot.js'
+import { loadMap } from './maps.js'
 import { mixSeed, withSeededRandom } from './rng.js'
-
-const HERE = dirname(fileURLToPath(import.meta.url))
 
 function flag(name: string, fallback: string): string {
   const index = process.argv.indexOf(`--${name}`)
@@ -53,9 +49,9 @@ interface TimingResult {
 }
 
 function measure(mapName: string, games: number, seed: number, difficulty: BotDifficulty): TimingResult {
-  const map = normalizeMapDefinition(JSON.parse(readFileSync(resolve(HERE, 'maps', `${mapName}.json`), 'utf8')))
+  const map = loadMap(mapName)
   const seats = seatIdsOf(map)
-  const options = { difficultyByPlayer: Object.fromEntries(seats.map((seat) => [seat, difficulty])) }
+  const difficultyByPlayer = Object.fromEntries(seats.map((seat) => [seat, difficulty]))
   const times: number[] = []
   const turns: number[] = []
   let finished = 0
@@ -65,6 +61,8 @@ function measure(mapName: string, games: number, seed: number, difficulty: BotDi
       beginMatchForParticipants(game, map.id, seats)
       const bots = new Set(seats)
       const attempts: MarkerAttempts = new Map()
+      // Как на сервере: память ботов живёт вместе с партией.
+      const options = { difficultyByPlayer, memory: createBotMemory() }
       let turn = game.turnNumber
       // Как на сервере: номер хода сменился — счётчики попыток маркеров обнуляются.
       for (let step = 0; step < 40_000 && !game.gameOver; step += 1) {
@@ -99,7 +97,7 @@ function measure(mapName: string, games: number, seed: number, difficulty: BotDi
 }
 
 function main(): void {
-  const mapName = flag('map', 'reference-six-13')
+  const mapName = flag('map', 'six-point-path')
   const games = Math.max(1, Number(flag('games', '3')))
   const seed = Number(flag('seed', '1'))
   const raw = flag('difficulty', '')

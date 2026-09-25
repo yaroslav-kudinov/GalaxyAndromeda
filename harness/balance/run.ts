@@ -7,44 +7,27 @@
  *   pnpm balance --map reference-duel --games 80 --difficulty hard
  *   pnpm balance --map reference-duel --games 80 --mix "player-1=hard,player-2=easy" --rotate
  *   pnpm balance --map reference-six-13 --games 80 --h2h hard,easy
+ *   pnpm balance --map @4+ --games 150 --seed 41 --solo hard      # одно место сложного среди средних
+ *
+ * `--map` понимает выборки каталога `maps/bundled/manifest.json`: `@published`, `@4+`, `@4`.
  *
  * Пишет JSON со сводкой и печатает её человекочитаемо. Базовые замеры снимаются до любой
  * правки правил: без них все последующие числа — угадайка.
  */
 
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
+import { writeFileSync, mkdirSync } from 'node:fs'
 import type { BotDifficulty, DoctrineId } from '../../packages/rules/src/index.js'
-import { dirname, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { resolve } from 'node:path'
 
-import { BOT_DIFFICULTIES, DOCTRINES, isBotDifficulty, normalizeMapDefinition } from '../../packages/rules/src/index.js'
-import type { MapDefinition } from '../../packages/rules/src/index.js'
-import { BOT_PROFILES } from '../../packages/rules/src/bot-strategy.js'
+import { BOT_DIFFICULTIES } from '../../packages/rules/src/index.js'
 import { DEFAULT_RUN_OPTIONS, runGame, seatIdsOf } from './bot.js'
 import type { RunOptions } from './bot.js'
-import { summarize } from './metrics.js'
+import { loadMap, REPO_ROOT, resolveMapNames } from './maps.js'
+import { summarize, BEHAVIOR_LABELS } from './metrics.js'
 import type { GameRecord, Summary } from './metrics.js'
 import { mixSeed } from './rng.js'
-
-const HERE = dirname(fileURLToPath(import.meta.url))
-const REPO_ROOT = resolve(HERE, '../..')
-
-/**
- * Как рассадить уровни ботов по местам.
- *
- * - `all` — один уровень на всех местах (`--difficulty`);
- * - `mix` — уровни по местам из `--mix`, остальным — `--difficulty`; с `--rotate` раскладка
- *   сдвигается на место от партии к партии;
- * - `h2h` — уровни из `--h2h` чередуются по местам и сдвигаются от партии к партии: за серию
- *   каждый уровень сидит на каждом месте поровну, и преимущество места гасится.
- */
-interface SeatingPlan {
-  kind: 'all' | 'mix' | 'h2h'
-  base: BotDifficulty
-  mix: Record<string, BotDifficulty>
-  rotate: boolean
-  levels: BotDifficulty[]
-}
+import { parseSeating, seatDifficultyFor, type SeatingPlan } from './seating.js'
+import { applyBotTuning, applyDoctrineTuning } from './tuning.js'
 
 interface Args {
   maps: string[]
@@ -54,50 +37,6 @@ interface Args {
   out: string | null
   label: string | null
   seating: SeatingPlan
-}
-
-function parseLevel(raw: string, flag: string): BotDifficulty {
-  const value = raw.trim()
-  if (!isBotDifficulty(value)) {
-    throw new Error(`--${flag}: неизвестный уровень «${value}» (есть: ${BOT_DIFFICULTIES.join(', ')})`)
-  }
-  return value
-}
-
-function parseSeating(flags: Map<string, string>): SeatingPlan {
-  const base = flags.has('difficulty') ? parseLevel(flags.get('difficulty')!, 'difficulty') : 'easy'
-  const mix: Record<string, BotDifficulty> = {}
-  for (const entry of (flags.get('mix') ?? '').split(',').map((part) => part.trim()).filter(Boolean)) {
-    const [seat, level] = entry.split('=')
-    if (!seat || !level) throw new Error(`--mix: не понял «${entry}», нужно место=уровень`)
-    mix[seat.trim()] = parseLevel(level, 'mix')
-  }
-  const levels = (flags.get('h2h') ?? '').split(',').map((part) => part.trim()).filter(Boolean)
-    .map((level) => parseLevel(level, 'h2h'))
-  if (levels.length === 1) throw new Error('--h2h: нужно хотя бы два уровня через запятую')
-  const kind = levels.length ? 'h2h' : Object.keys(mix).length ? 'mix' : 'all'
-  return { kind, base, mix, rotate: flags.has('rotate'), levels }
-}
-
-/** Уровни по местам для партии номер `gameIndex`. */
-function seatDifficultyFor(plan: SeatingPlan, seats: readonly string[], gameIndex: number): Record<string, BotDifficulty> {
-  const out: Record<string, BotDifficulty> = {}
-  if (plan.kind === 'h2h') {
-    seats.forEach((seat, index) => {
-      out[seat] = plan.levels[(index + gameIndex) % plan.levels.length]!
-    })
-    return out
-  }
-  if (plan.kind === 'mix') {
-    const assigned = seats.map((seat) => plan.mix[seat] ?? plan.base)
-    seats.forEach((seat, index) => {
-      const shift = plan.rotate ? gameIndex % seats.length : 0
-      out[seat] = assigned[(index - shift + seats.length) % seats.length]!
-    })
-    return out
-  }
-  for (const seat of seats) out[seat] = plan.base
-  return out
 }
 
 function parseArgs(argv: readonly string[]): Args {
@@ -117,7 +56,7 @@ function parseArgs(argv: readonly string[]): Args {
   }
 
   return {
-    maps: (flags.get('map') ?? 'duel').split(',').map((s) => s.trim()).filter(Boolean),
+    maps: resolveMapNames(flags.get('map') ?? 'duel'),
     games: Math.max(1, Math.floor(number('games', 50))),
     seed: Math.floor(number('seed', 1)),
     options: {
@@ -144,23 +83,6 @@ function parseArgs(argv: readonly string[]): Args {
     label: flags.get('label') ?? null,
     seating: parseSeating(flags),
   }
-}
-
-function loadMap(name: string): MapDefinition {
-  const candidates = [
-    resolve(HERE, 'maps', `${name}.json`),
-    resolve(REPO_ROOT, 'maps/bundled', `${name}.json`),
-    resolve(REPO_ROOT, 'maps', `${name}.json`),
-    resolve(process.cwd(), name),
-  ]
-  for (const path of candidates) {
-    try {
-      return normalizeMapDefinition(JSON.parse(readFileSync(path, 'utf8')))
-    } catch {
-      continue
-    }
-  }
-  throw new Error(`Карта не найдена: ${name} (искал в harness/balance/maps, maps/bundled, maps и по прямому пути)`)
 }
 
 function percent(value: number | null | undefined): string {
@@ -258,6 +180,12 @@ function report(mapId: string, summary: Summary, records: readonly GameRecord[])
           .join(', '),
     )
   }
+  const paths = Object.entries(summary.winPaths ?? {})
+  if (paths.length) {
+    lines.push('Победы по порогу: ' + paths
+      .map(([level, item]) => `${level} — ${item.wins}, из них с порога ${item.fromBrink}, рывком ${item.surge}`)
+      .join('; '))
+  }
   lines.push('Исходы: ' + (Object.entries(summary.victoryReasons)
     .map(([reason, n]) => `${reason} ${n}`).join(', ') || '—'))
   const levels = Object.entries(summary.winRateByDifficulty)
@@ -265,7 +193,7 @@ function report(mapId: string, summary: Summary, records: readonly GameRecord[])
     lines.push('Победы по уровням ботов: ' + levels
       .sort((a, b) => BOT_DIFFICULTIES.indexOf(a[0] as BotDifficulty) - BOT_DIFFICULTIES.indexOf(b[0] as BotDifficulty))
       .map(([level, result]) =>
-        `${level} ${percent(result.winRate)} (${result.wins} из ${summary.games - summary.errors}, `
+        `${level} ${percent(result.winRate)} (${result.wins} из ${result.decided} партий с его участием, `
           + `при равной силе ${percent(result.fairShare)}; на место ${percent(result.winsPerSeat)}, `
           + `к справедливой ×${num(result.perSeatVsFair)})`)
       .join(', '))
@@ -287,10 +215,20 @@ function report(mapId: string, summary: Summary, records: readonly GameRecord[])
       )
     }
   }
+  const behavior = Object.entries(summary.behaviorByDifficulty)
+  if (behavior.length > 1 || behavior.some(([level]) => level !== 'easy')) {
+    lines.push('Поведение по уровням (на место за партию; открытые центры — за ход):')
+    for (const [level, item] of behavior.sort((a, b) =>
+      BOT_DIFFICULTIES.indexOf(a[0] as BotDifficulty) - BOT_DIFFICULTIES.indexOf(b[0] as BotDifficulty))) {
+      lines.push(`- ${level}: ` + BEHAVIOR_LABELS
+        .map(([key, label, digits]) => `${label} ${num(item[key], digits)}`)
+        .join(', '))
+    }
+  }
   const near = summary.nearWins
   if (near.all.episodes > 0) {
-    const part = (item: { episodes: number; stopped: number; share: number }) =>
-      `${percent(item.share)} (${item.stopped} из ${item.episodes})`
+    const part = (item: { episodes: number; stopped: number; share: number; otherWon: number }) =>
+      `${percent(item.share)} (${item.stopped} из ${item.episodes}; из них раньше победил другой — ${item.otherWon})`
     lines.push(
       `Почти победителя остановили: ${part(near.all)}; `
         + Object.entries(near.byLevel).map(([level, item]) => `он ${level} — ${part(item)}`).join(', ')
@@ -311,44 +249,6 @@ function report(mapId: string, summary: Summary, records: readonly GameRecord[])
     lines.push(`Ошибки (${errors.length}): ${unique.join(' | ')}`)
   }
   return lines.join('\n')
-}
-
-/**
- * Подбор чисел доктрин без правки правил: `--tune maneuvers.claimLimit=-2,attack.claimLimit=-1`.
- * Меняет таблицу только в этом процессе.
- */
-function applyDoctrineTuning(raw: string | undefined): void {
-  if (!raw) return
-  for (const entry of raw.split(',').map((part) => part.trim()).filter(Boolean)) {
-    // Значение — число, true/false или список классов через «|».
-    const match = entry.match(/^(\w+)\.(\w+)=([\w|-]+)$/)
-    const doctrine = match && DOCTRINES.find((candidate) => candidate.id === match[1])
-    if (!match || !doctrine) throw new Error(`Не понял настройку доктрины: ${entry}`)
-    const raw = match[3]!
-    const value = raw === 'true'
-      ? true
-      : raw === 'false'
-        ? false
-        : /^-?\d+$/.test(raw)
-          ? Number(raw)
-          : raw.split('|')
-    ;(doctrine as unknown as Record<string, unknown>)[match[2]!] = value
-  }
-}
-
-/**
- * Подбор поведения ботов без правки кода: `--botTune hard.defenseShare=0.5,hard.reserveMarkers=false`.
- * Меняет профиль уровня только в этом процессе — чтобы замерить вклад каждой черты.
- */
-function applyBotTuning(raw: string | undefined): void {
-  if (!raw) return
-  for (const entry of raw.split(',').map((part) => part.trim()).filter(Boolean)) {
-    const match = entry.match(/^(medium|hard)\.(\w+)=([\w.-]+)$/)
-    const profile = match ? BOT_PROFILES[match[1] as 'medium' | 'hard'] : null
-    if (!match || !profile || !(match[2]! in profile)) throw new Error(`Не понял настройку бота: ${entry}`)
-    const value = match[3] === 'true' ? true : match[3] === 'false' ? false : Number(match[3])
-    ;(profile as unknown as Record<string, unknown>)[match[2]!] = value
-  }
 }
 
 function main(): void {

@@ -3,13 +3,17 @@ import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import {
+  createBotMemory,
   greedyBotStep,
   setBotErrorListener,
+  withBotMemory,
   tryPlaceMarker,
   type BotDifficulty,
   type MarkerAttempts,
 } from './greedy-bot.js'
-import { analyzeSituation, BOT_PROFILES, cellGoalValue, economicValue, isCalmPowerCenter } from './bot-strategy.js'
+import { analyzeSituation, BOT_PROFILES, cellGoalValue, economicValue, isCalmPowerCenter, raidRisk } from './bot-strategy.js'
+import { resolvePlan } from './bot-plan.js'
+import { createTacticalContext, planMoves } from './bot-tactics.js'
 import { beginMatchForParticipants } from './match-start.js'
 import { applyGameActionOnSnapshot } from './movement.js'
 import { createEmptyMap } from './map.js'
@@ -54,13 +58,15 @@ function playOut(name: string, levels: readonly BotDifficulty[], seed: number) {
     const { map, game, seats } = bundled(name)
     const difficultyByPlayer = Object.fromEntries(seats.map((seat, index) => [seat, levels[index % levels.length]!]))
     const attempts: MarkerAttempts = new Map()
+    // Память ботов на партию — как у сервера на комнату.
+    const memory = createBotMemory()
     const errors: string[] = []
     setBotErrorListener((error, where) => errors.push(`${where}: ${error instanceof Error ? error.message : String(error)}`))
     try {
       let stuck = 0
       for (let step = 0; step < 40_000 && !game.gameOver; step += 1) {
         const before = JSON.stringify([game.turnNumber, game.phase, game.activePlayerId, game.actionMarkers.length, game.pendingCombat?.phase])
-        greedyBotStep(game, map, new Set(seats), attempts, { difficultyByPlayer })
+        greedyBotStep(game, map, new Set(seats), attempts, { difficultyByPlayer, memory })
         const after = JSON.stringify([game.turnNumber, game.phase, game.activePlayerId, game.actionMarkers.length, game.pendingCombat?.phase])
         stuck = before === after ? stuck + 1 : 0
         // Сервер снимает зависший бой одних ботов; здесь то же самое.
@@ -185,5 +191,151 @@ describe('уровни ботов: осада', () => {
     expect(tryPlaceMarker(game, map, 'player-1', 'medium')).toBe(true)
     const mine = game.actionMarkers.filter((marker) => marker.ownerId === 'player-1')
     expect(mine.map((marker) => marker.coord)).toContainEqual({ q: 1, r: 0 })
+  })
+})
+
+/**
+ * Сложный бот держит свой центр (0,0) одним эсминцем; второй центр (0,1) — рядом, так что
+ * (0,0) не последний. Вражеский эсминец под маркером стоит в (3,0) и долетает до (0,0) в этот
+ * ход: уйди эсминец — центр уйдёт набегом без боя. Фаза действий.
+ */
+function raidBoard(withNeutralCenter: boolean) {
+  const map = createEmptyMap('raid', 'Raid')
+  map.cells = []
+  for (let q = 0; q <= 10; q += 1) map.cells.push({ q, r: 0 }, { q, r: 1 })
+  const game = gameSnapshotFromMap(map)
+  game.participatingPlayerIds = ['player-1', 'player-2']
+  game.turnNumber = 4
+  game.victoryPowerCenters = 6
+  game.phase = 'actions'
+  game.activePlayerId = 'player-1'
+  for (const [q, r] of [[0, 0], [0, 1]] as const) {
+    const cell = cellAt(game, q, r)
+    cell.isPowerCenter = true
+    cell.controlOwnerId = 'player-1'
+  }
+  cellAt(game, 1, 1).controlOwnerId = 'player-1'
+  const rivalHome = cellAt(game, 10, 1)
+  rivalHome.isPowerCenter = true
+  rivalHome.controlOwnerId = 'player-2'
+  for (const [q, r] of [[1, 0], [2, 0], [3, 1]] as const) cellAt(game, q, r).resourceTokens = [{ type: 'credits', value: 2 }]
+  if (withNeutralCenter) cellAt(game, 2, 1).isPowerCenter = true
+  addShip(game, 0, 0, 'player-1', 'destroyer', 'p1-d1')
+  addShip(game, 3, 0, 'player-2', 'destroyer', 'p2-d1')
+  game.actionMarkers.push(
+    { id: 'am-p1', ownerId: 'player-1', coord: { q: 0, r: 0 }, placedInPhase: 'planning' },
+    { id: 'am-p2', ownerId: 'player-2', coord: { q: 3, r: 0 }, placedInPhase: 'planning' },
+  )
+  cellAt(game, 0, 0).actionMarkerId = 'am-p1'
+  cellAt(game, 3, 0).actionMarkerId = 'am-p2'
+  return { map, game }
+}
+
+describe('сложный бот: оборона против плана', () => {
+  it('оставляет пикет, когда уход даёт меньше, чем стоит набег на центр', () => {
+    const { map, game } = raidBoard(false)
+    withBotMemory(createBotMemory(), () => {
+      const hard = createTacticalContext(game, map, 'player-1', 'hard')
+      // Уйти пустым — почти наверняка отдать центр; пикет превращает набег в бой.
+      expect(raidRisk(hard.situation, '0,0', 0)).toBeGreaterThan(50)
+      expect(planMoves(hard, '0,0', true)).toBeNull()
+    })
+    // Средний набег не взвешивает: эсминец уходит занимать клетки с фишками.
+    const medium = createTacticalContext(game, map, 'player-1', 'medium')
+    expect(raidRisk(medium.situation, '0,0', 0)).toBe(0)
+    const move = planMoves(medium, '0,0', true)
+    expect(move?.moves.map((item) => item.shipId)).toContain('p1-d1')
+  })
+
+  it('уходит по плану, когда цель плана дороже обороны, и говорит об этом', () => {
+    const { map, game } = raidBoard(true)
+    withBotMemory(createBotMemory(), () => {
+      const hard = createTacticalContext(game, map, 'player-1', 'hard')
+      expect(hard.situation.plan?.target).toBe('2,1')
+      const move = planMoves(hard, '0,0', true)
+      expect(move?.moves).toEqual([{ shipId: 'p1-d1', to: { q: 2, r: 1 } }])
+      expect(move?.reason).toContain('ход выгоднее обороны')
+    })
+  })
+
+  it('держит план, пока другая цель не станет заметно выгоднее, и бросает его, когда шансы упали', () => {
+    const { game } = stripBoard()
+    cellAt(game, 3, 0).isPowerCenter = true
+    cellAt(game, 6, 1).isPowerCenter = true
+    const memory = createBotMemory()
+    const plan = () => {
+      const situation = analyzeSituation(game, 'player-1', BOT_PROFILES.hard)
+      return resolvePlan(situation, memory, (key) => cellGoalValue(situation, key), () => false)
+    }
+    expect(plan()?.target).toBe('3,0')
+    // Дальняя цель подорожала, но не настолько, чтобы бросать ближнюю.
+    cellAt(game, 6, 1).resourceTokens = [{ type: 'production', value: 5 }]
+    game.turnNumber = 2
+    expect(plan()?.target).toBe('3,0')
+    // Цель заняли и поставили гарнизон, против которого своих сил мало, — план брошен.
+    const target = cellAt(game, 3, 0)
+    target.controlOwnerId = 'player-2'
+    for (let i = 0; i < 3; i += 1) addShip(game, 3, 0, 'player-2', 'battleship', `p2-b${i}`)
+    game.turnNumber = 3
+    expect(plan()?.target).toBe('6,1')
+    expect(memory.notes.get('player-1')).toContain('шансы на взятие упали')
+  })
+})
+
+/**
+ * Два маркера сложного бота в фазе действий: эсминец у (1,0) может войти в пустой чужой центр
+ * (4,0), но у соперника рядом крейсер и эсминец под маркером — они отобьют центр до начала хода;
+ * эсминец у (0,1) может занять клетки с фишками. Соперник ещё ходит.
+ */
+function patienceBoard() {
+  const map = createEmptyMap('patience', 'Patience')
+  map.cells = []
+  for (let q = 0; q <= 10; q += 1) map.cells.push({ q, r: 0 }, { q, r: 1 })
+  const game = gameSnapshotFromMap(map)
+  game.participatingPlayerIds = ['player-1', 'player-2']
+  game.turnNumber = 4
+  game.victoryPowerCenters = 6
+  game.phase = 'actions'
+  game.activePlayerId = 'player-1'
+  const home = cellAt(game, 0, 0)
+  home.isPowerCenter = true
+  home.controlOwnerId = 'player-1'
+  cellAt(game, 0, 1).controlOwnerId = 'player-1'
+  cellAt(game, 1, 0).controlOwnerId = 'player-1'
+  for (const [q, r] of [[4, 0], [10, 1]] as const) {
+    const cell = cellAt(game, q, r)
+    cell.isPowerCenter = true
+    cell.controlOwnerId = 'player-2'
+  }
+  for (const [q, r] of [[1, 1], [2, 1]] as const) cellAt(game, q, r).resourceTokens = [{ type: 'credits', value: 3 }]
+  addShip(game, 1, 0, 'player-1', 'destroyer', 'p1-raider')
+  addShip(game, 0, 1, 'player-1', 'destroyer', 'p1-settler')
+  addShip(game, 6, 0, 'player-2', 'cruiser', 'p2-c1')
+  addShip(game, 6, 0, 'player-2', 'destroyer', 'p2-d1')
+  const markers = [
+    { id: 'am-raid', ownerId: 'player-1', coord: { q: 1, r: 0 } },
+    { id: 'am-settle', ownerId: 'player-1', coord: { q: 0, r: 1 } },
+    { id: 'am-rival', ownerId: 'player-2', coord: { q: 6, r: 0 } },
+  ]
+  for (const marker of markers) {
+    game.actionMarkers.push({ ...marker, placedInPhase: 'planning' })
+    cellAt(game, marker.coord.q, marker.coord.r).actionMarkerId = marker.id
+  }
+  return { map, game }
+}
+
+describe('сложный бот: терпение', () => {
+  it('центр, который соперник ещё может отбить до начала хода, берёт позже прочих ходов', () => {
+    const { map, game } = patienceBoard()
+    greedyBotStep(game, map, new Set(['player-1']), new Map(), { difficultyByPlayer: { 'player-1': 'hard' }, memory: createBotMemory() })
+    const left = game.actionMarkers.filter((marker) => marker.ownerId === 'player-1').map((marker) => marker.id)
+    expect(left).toEqual(['am-raid'])
+    expect(cellAt(game, 4, 0).controlOwnerId).toBe('player-2')
+  })
+
+  it('средний не ждёт: сразу входит в чужой центр', () => {
+    const { map, game } = patienceBoard()
+    greedyBotStep(game, map, new Set(['player-1']), new Map(), { difficultyByPlayer: { 'player-1': 'medium' } })
+    expect(cellAt(game, 4, 0).controlOwnerId).toBe('player-1')
   })
 })

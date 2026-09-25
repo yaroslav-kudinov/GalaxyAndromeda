@@ -106,7 +106,12 @@ export function scoreDoctrines(game: GameSnapshot, playerId: string): DoctrineSc
 }
 
 export function pickSmartDoctrine(game: GameSnapshot, playerId: string, difficulty: SmartDifficulty): DoctrineId {
-  if (!BOT_PROFILES[difficulty].smartDoctrine) {
+  // Пока главное — развитие, доктрину выбирает то же экономическое правило, что у среднего:
+  // взвешенная оценка недооценивала «Производство» в партиях на 4–6 игроков (замер 2026-09-25:
+  // одно место сложного среди средних ×1,32 → ×1,59 к справедливой доле в среднем по трём картам).
+  const developing = BOT_PROFILES[difficulty].smartDoctrine
+    && analyzeSituation(game, playerId, BOT_PROFILES[difficulty]).mode === 'develop'
+  if (!BOT_PROFILES[difficulty].smartDoctrine || developing) {
     const situation = analyzeSituation(game, playerId, BOT_PROFILES.medium)
     if (besiegedCellKeysOf(game, playerId).length > 0) return 'defense'
     if (situation.mode === 'develop') {

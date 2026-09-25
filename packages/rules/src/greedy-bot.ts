@@ -6,8 +6,10 @@
  * (`bot-strategy.ts`, `bot-tactics.ts`, `bot-decisions.ts`): оба развивают экономику (клетки с
  * фишками, связные регионы, трата денег, бюджет перезарядки) и бегут к своим центрам власти;
  * средний свою оборону почти не держит и в чужую победу не вмешивается, высокий вдобавок держит
- * важные центры, мешает тому, кто вот-вот победит, и расчётливо ведёт бой. Уровень задаётся для
- * каждого бота отдельно; в правилах по умолчанию — лёгкий (лобби сервера ставит средний).
+ * важные центры, мешает тому, кто вот-вот победит, и расчётливо ведёт бой. Высокий держит план —
+ * цель, к которой идёт из хода в ход (`bot-plan.ts`), — и защищает прочие центры от набега, только
+ * когда это выгоднее хода по плану. Уровень задаётся для каждого бота отдельно; в правилах по
+ * умолчанию — лёгкий (лобби сервера ставит средний).
  *
  * Боевые решения движок принимает вне очереди хода, поэтому бот отвечает за всех участников
  * боя, а не только за активного игрока.
@@ -47,6 +49,7 @@ import {
   reserveValueOf,
   type MarkerPlan,
 } from './bot-tactics.js'
+import { currentBotMemory, describePlan, takePlanNotes, withBotMemory, type BotMemory } from './bot-plan.js'
 import {
   hardKeepFighting,
   hardPrepDecision,
@@ -56,6 +59,7 @@ import {
 } from './bot-decisions.js'
 
 export { combatStrength }
+export { createBotMemory, describePlan, withBotMemory, type BotMemory, type BotPlan, type BotPlanKind } from './bot-plan.js'
 
 /** Уровень сложности бота. */
 export type BotDifficulty = 'easy' | 'medium' | 'hard'
@@ -65,6 +69,12 @@ export const BOT_DIFFICULTIES: readonly BotDifficulty[] = ['easy', 'medium', 'ha
 export interface GreedyBotOptions {
   /** Сложность каждого бота; не указан — 'easy'. */
   difficultyByPlayer?: Readonly<Record<string, BotDifficulty>>
+  /**
+   * Память ботов на партию: план высокого уровня (`createBotMemory`). Держит её тот, кто водит
+   * ботов, — сервер рядом со счётчиком попыток маркеров, харнесс на партию. Без памяти высокий
+   * уровень играет без плана.
+   */
+  memory?: BotMemory
 }
 
 export function isBotDifficulty(value: unknown): value is BotDifficulty {
@@ -129,6 +139,12 @@ export function setBotTraceListener(listener: BotTraceListener | null): void {
 
 function trace(playerId: string, text: () => string): void {
   if (botTraceListener) botTraceListener(playerId, text())
+}
+
+/** Смены плана высокого уровня — в журнал решений (и из памяти, чтобы не копились). */
+function tracePlanNotes(game: GameSnapshot, playerId: string): void {
+  const note = takePlanNotes(currentBotMemory(), playerId)
+  if (note) trace(playerId, () => `ход ${game.turnNumber}: ${note}`)
 }
 
 /**
@@ -279,7 +295,11 @@ export function tryPlaceMarker(
   if (difficulty !== 'easy') {
     const coord = safeEval(
       'marker',
-      () => chooseMarkerCell(createTacticalContext(game, map, playerId, difficulty)),
+      () => {
+        const ctx = createTacticalContext(game, map, playerId, difficulty)
+        tracePlanNotes(game, playerId)
+        return chooseMarkerCell(ctx)
+      },
       () => null,
     )
     if (coord) {
@@ -548,10 +568,13 @@ function stepActionsSmart(
   let modeNote = ''
   const evaluated = safeEval('actions', () => {
     const ctx = createTacticalContext(game, map, playerId, difficulty)
+    tracePlanNotes(game, playerId)
     if (botTraceListener) {
       const target = ctx.situation.nearWinner
+      const plan = ctx.situation.plan
       modeNote = describeModes(ctx.situation.modes)
         + (target && ctx.situation.modes.deny > 0 ? `; мешаю ${target.id}: ${target.reason}` : '')
+        + (plan ? `; план: ${describePlan(plan)}` : '')
     }
     return markers.map((marker) => {
       const key = hexKey(marker.coord.q, marker.coord.r)
@@ -559,7 +582,9 @@ function stepActionsSmart(
       const plan = tried >= MAX_MARKER_ATTEMPTS ? null : planMarker(ctx, key, !ctx.situation.profile.previewCombat)
       const reserve = reserveValueOf(ctx, key)
       const value = plan?.value ?? -Infinity
-      return { marker, plan, reserve, tried, score: value - (rivalsStillAct ? reserve : 0) }
+      // Терпение: центр, который соперник ещё может отбить до начала хода, — позже прочих ходов.
+      const wait = rivalsStillAct && plan?.kind === 'move' ? ctx.situation.profile.patience * plan.timing : 0
+      return { marker, plan, reserve, tried, score: value - (rivalsStillAct ? reserve : 0) - wait }
     })
   }, () => null)
   if (!evaluated) return stepActionsEasy(game, map, playerId, tally, attempts)
@@ -826,6 +851,16 @@ export function settleRechargePicks(
  * Ходит только за `botIds`; ход человека не трогает.
  */
 export function greedyBotStep(
+  game: GameSnapshot,
+  map: MapDefinition,
+  botIds: ReadonlySet<string>,
+  attempts: MarkerAttempts,
+  options?: GreedyBotOptions,
+): void {
+  withBotMemory(options?.memory, () => greedyBotStepInner(game, map, botIds, attempts, options))
+}
+
+function greedyBotStepInner(
   game: GameSnapshot,
   map: MapDefinition,
   botIds: ReadonlySet<string>,
