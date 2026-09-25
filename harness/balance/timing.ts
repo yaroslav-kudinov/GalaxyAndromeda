@@ -17,6 +17,7 @@ import {
   applyGameActionOnSnapshot,
   beginMatchForParticipants,
   BOT_DIFFICULTIES,
+  createBotMemory,
   gameSnapshotFromMap,
   isBotDifficulty,
   planGreedyBotAction,
@@ -50,7 +51,7 @@ interface TimingResult {
 function measure(mapName: string, games: number, seed: number, difficulty: BotDifficulty): TimingResult {
   const map = loadMap(mapName)
   const seats = seatIdsOf(map)
-  const options = { difficultyByPlayer: Object.fromEntries(seats.map((seat) => [seat, difficulty])) }
+  const difficultyByPlayer = Object.fromEntries(seats.map((seat) => [seat, difficulty]))
   const times: number[] = []
   const turns: number[] = []
   let finished = 0
@@ -60,6 +61,8 @@ function measure(mapName: string, games: number, seed: number, difficulty: BotDi
       beginMatchForParticipants(game, map.id, seats)
       const bots = new Set(seats)
       const attempts: MarkerAttempts = new Map()
+      // Как на сервере: память ботов живёт вместе с партией.
+      const options = { difficultyByPlayer, memory: createBotMemory() }
       let turn = game.turnNumber
       // Как на сервере: номер хода сменился — счётчики попыток маркеров обнуляются.
       for (let step = 0; step < 40_000 && !game.gameOver; step += 1) {

@@ -14,8 +14,11 @@
  * экономика не встанет на ноги.
  *
  * Оба уровня прежде всего бегут к порогу сами. Высокий отличается тем, что замечает соперника,
- * который вот-вот победит (`NearWinner`), и тогда бросает силы на то, чтобы его остановить;
- * пока такого соперника нет, свою оборону он держит минимальной — она съедает темп.
+ * который вот-вот победит (`NearWinner`), и тогда бросает силы на то, чтобы его остановить.
+ * Обычную оборону своих центров он не держит по правилу, а взвешивает: держит план — цель, к
+ * которой идёт из хода в ход (`bot-plan.ts`), — и оставляет пикет на центре или возвращается
+ * к нему, только если ожидаемая потеря центра от набега (`raidRisk`) больше того, что даст ход
+ * по плану.
  */
 
 import { combatStrength } from './bot-combat-math.js'
@@ -36,6 +39,7 @@ import { SHIP_PRODUCTION_COST, SHIP_PRODUCTION_REGION_MIN } from './ships.js'
 import { hexKey, type ShipType } from './types.js'
 import { effectiveMoveRange } from './doctrines.js'
 import { victoryThresholdForSnapshot } from './victory.js'
+import type { BotPlan } from './bot-plan.js'
 
 export type SmartDifficulty = 'medium' | 'hard'
 
@@ -53,10 +57,16 @@ export interface BotProfile {
   /** Доля внимания к обычной обороне своих центров. */
   routineDefense: number
   /**
-   * Доля внимания к пустому центру, до которого долетает враг: чужой центр без гарнизона
-   * уходит набегом сразу, поэтому хватает одного корабля-пикета, чтобы набег стал боем.
+   * Вес ожидаемой потери своего центра от набега (`raidRisk`) в сравнении с ходом по плану.
+   * Чужой центр без гарнизона уходит к вошедшему сразу, поэтому один корабль-пикет превращает
+   * набег в бой. 0 — бот набеги не взвешивает и центры без гарнизона оставляет спокойно.
    */
-  raidDefense: number
+  raidRiskWeight: number
+  /**
+   * Насколько цель текущего плана (`bot-plan.ts`) дороже для бота, чем та же цель без плана:
+   * доля её ценности. 0 — плана нет, бот каждый шаг выбирает цель заново.
+   */
+  commitment: number
   /**
    * Вес экономического развития: клетки с фишками, рост регионов, трата денег, бюджет
    * перезарядки. 0 — бот бежит за центрами, как прежде.
@@ -117,7 +127,8 @@ export const BOT_PROFILES: Record<SmartDifficulty, BotProfile> = {
   medium: {
     difficulty: 'medium',
     routineDefense: 0.15,
-    raidDefense: 0,
+    raidRiskWeight: 0,
+    commitment: 0,
     economy: 1,
     pacing: 0.35,
     rechargeAware: 1,
@@ -148,9 +159,10 @@ export const BOT_PROFILES: Record<SmartDifficulty, BotProfile> = {
   hard: {
     difficulty: 'hard',
     routineDefense: 0,
-    // Пикеты на всех центрах, до которых долетает враг, в партиях ботов стоили темпа дороже
-    // отбитых набегов (замер 2026-09-25); важные центры высокий держит через criticalDefense.
-    raidDefense: 0,
+    // Пикет на каждом центре, до которого долетает враг, стоил темпа дороже отбитых набегов
+    // (замер 2026-09-25). Теперь высокий взвешивает: оборона против хода по плану.
+    raidRiskWeight: 1,
+    commitment: 0.35,
     economy: 1,
     pacing: 0.35,
     rechargeAware: 1,
@@ -252,6 +264,11 @@ export interface PowerCenterThreat {
   occupied: boolean
   /** Это последний центр игрока: потеря — выбывание. */
   last: boolean
+  /**
+   * Своя сила, которая ещё может войти на центр в этот ход (корабли не на самой клетке; в фазе
+   * действий — только под своими маркерами): ею центр отбивают до начала следующего хода.
+   */
+  response: number
   /** До центра долетает тот, кто вот-вот победит: потеря центра может отдать ему партию. */
   byNearWinner: boolean
 }
@@ -284,6 +301,8 @@ export interface BotSituation {
   /** Сколько клеток бот займёт в конце хода, если корабли останутся на местах. */
   plannedClaims: { powerCenters: number; other: number; keys: Set<string> }
   regions: { largest: RegionInfo | null; regionOf: Map<string, number>; list: RegionInfo[] }
+  /** План высокого уровня (`bot-plan.ts`); `null` — плана нет или уровень планом не пользуется. */
+  plan: BotPlan | null
 }
 
 function participantIds(game: GameSnapshot): string[] {
@@ -437,6 +456,7 @@ function computeThreats(
 ): Map<string, PowerCenterThreat> {
   const threats = new Map<string, PowerCenterThreat>()
   const movable = new Map(rivals.map((rival) => [rival.id, rivalMovableCells(game, rival.id)]))
+  const ownMovable = rivalMovableCells(game, me.id)
   for (const [key, cell] of board.cells) {
     if (!cell.isPowerCenter || cell.controlOwnerId !== me.id) continue
     let now = 0
@@ -466,6 +486,7 @@ function computeThreats(
       occupied,
       last: me.powerCenters <= 1,
       byNearWinner,
+      response: reachingStrength(board, me, key, ownMovable),
     })
   }
   return threats
@@ -533,7 +554,7 @@ export function defenseShareFor(
  * «соперник доберёт порог захватами следующего хода».
  */
 function computeModes(
-  situation: Omit<BotSituation, 'modes' | 'mode'>,
+  situation: Omit<BotSituation, 'modes' | 'mode' | 'plan'>,
 ): Record<BotMode, number> {
   const { me, threshold, turnsLeft, profile, nearWinner, fleetRatio, neutralPowerCenters, threats, turn } = situation
   const neutralShare = neutralPowerCenters.length / Math.max(1, threshold)
@@ -711,7 +732,7 @@ export function analyzeSituation(
     regions: { largest: regionsInfo.largest, regionOf: regionsInfo.regionOf, list: regionsInfo.regions },
   }
   const modes = computeModes(base)
-  return { ...base, modes, mode: dominantMode(modes) }
+  return { ...base, modes, mode: dominantMode(modes), plan: null }
 }
 
 /** Базовая ценность одного центра власти в очках оценки; всё остальное меряется от неё. */
@@ -724,9 +745,16 @@ export function isDenyTarget(situation: BotSituation, playerId: string | null | 
 
 /**
  * Ценность клетки как цели: что даст бот, если в конце хода его корабль будет стоять здесь.
- * Бой сюда не входит — его цена считается отдельно, по шансам.
+ * Бой сюда не входит — его цена считается отдельно, по шансам. Цель плана высокого уровня
+ * дороже на `commitment`: бот держит её, пока она не потеряет смысл.
  */
 export function cellGoalValue(situation: BotSituation, key: string): number {
+  const value = baseCellGoalValue(situation, key)
+  return situation.plan?.target === key ? value * (1 + situation.profile.commitment) : value
+}
+
+/** Ценность клетки как цели без бонуса плана. */
+export function baseCellGoalValue(situation: BotSituation, key: string): number {
   const cell = situation.board.cells.get(key)
   if (!cell) return 0
   const { modes, playerId } = situation
@@ -906,7 +934,51 @@ export function defenseValue(situation: BotSituation, key: string): number {
   const base = POWER_CENTER_VALUE * (threat.last ? 2.2 : 1.1)
   const nearWin = situation.modes.finish > 0.5 ? 0.4 : 0
   const likelihood = threat.occupied ? 1 : threat.now > 0 ? 0.6 : 0.25
-  // Пустой центр, до которого враг долетает сейчас, уходит набегом без боя.
-  const raid = threat.garrison <= 0 && threat.now > 0 ? situation.profile.raidDefense * 0.6 : 0
-  return base * (1 + nearWin) * likelihood * Math.max(defenseShareFor(situation, threat), raid)
+  return base * (1 + nearWin) * likelihood * defenseShareFor(situation, threat)
+}
+
+/**
+ * Ожидаемая потеря своего центра до начала следующего хода, если на нём останется гарнизон силы
+ * `garrison` (0 — пустой). С ней высокий уровень сравнивает ход по плану: пикет остаётся на
+ * центре, корабль возвращается или строится на нём, только если оборона выгоднее.
+ *
+ * Слагаемые, каждое можно назвать словами:
+ *
+ * - **придут ли** — враг долетает до центра в этот ход (в фазе действий — кораблями под
+ *   маркерами). Пустой центр — лучшая добыча для любого соперника: в фазе действий почти
+ *   наверняка, в планировании, пока маркеры не расставлены, — через раз. На центр с гарнизоном
+ *   придут только с явным перевесом;
+ * - **чего стоит потеря** — центр у себя минус один, у врага плюс один; дороже, если враг от
+ *   этого встанет в шаге от порога или сравняется с ботом, и если сам бот в шаге от победы;
+ * - **отобьём ли до начала хода** — своя сила, которая ещё может войти на центр в этот ход:
+ *   победа считается только в начале хода, и отбитый набег врагу ничего не даёт.
+ *
+ * Важную оборону (последний центр, удар почти победителя, центр перед своей победой) это не
+ * заменяет: её высокий держит всегда (`criticalDefense`).
+ */
+export function raidRisk(situation: BotSituation, key: string, garrison: number): number {
+  const weight = situation.profile.raidRiskWeight
+  if (weight <= 0) return 0
+  const threat = situation.threats.get(key)
+  if (!threat || threat.occupied || threat.now <= 0) return 0
+  let chance = situation.board.game.phase === 'actions' ? 0.7 : 0.5
+  if (garrison > 0) {
+    const edge = threat.now / garrison
+    chance *= edge >= 2.5 ? 0.7 : edge >= 1.5 ? 0.4 : 0.1
+  }
+  const { me, threshold } = situation
+  let loss = POWER_CENTER_VALUE
+  const attacker = threat.attackerId ? situation.views.get(threat.attackerId) : undefined
+  if (attacker) {
+    if (attacker.projected + 1 >= threshold - 1) loss += POWER_CENTER_VALUE * 0.6
+    else if (attacker.projected >= me.projected) loss += POWER_CENTER_VALUE * 0.25
+  }
+  if (me.projected >= threshold - 1) loss *= 1.5
+  const retake = threat.response >= Math.max(PICKET_STRENGTH, threat.now) * 1.2 ? 0.55 : threat.response > 0 ? 0.25 : 0
+  return weight * chance * loss * (1 - retake)
+}
+
+/** Сколько ожидаемой потери от набега снимает гарнизон: было `from`, стало `to`. */
+export function raidRiskAverted(situation: BotSituation, key: string, from: number, to: number): number {
+  return Math.max(0, raidRisk(situation, key, from) - raidRisk(situation, key, to))
 }

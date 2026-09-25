@@ -26,6 +26,7 @@ import {
 } from './bot-combat-math.js'
 import {
   analyzeSituation,
+  baseCellGoalValue,
   BOT_PROFILES,
   cellGoalValue,
   defenseShareFor,
@@ -34,11 +35,14 @@ import {
   isDenyTarget,
   PICKET_STRENGTH,
   POWER_CENTER_VALUE,
+  raidRisk,
+  raidRiskAverted,
   rivalMovableCells,
   shipCost,
   type BotSituation,
   type SmartDifficulty,
 } from './bot-strategy.js'
+import { currentBotMemory, resolvePlan } from './bot-plan.js'
 import { claimPicksRemaining, eligibleClaimCells } from './claim.js'
 import { buildCombatPreview, combatShotModifier, isBattleUnresolvable } from './combat.js'
 import { shipHitThreshold } from './combat-hits.js'
@@ -89,6 +93,15 @@ export function createTacticalContext(
   difficulty: SmartDifficulty,
 ): TacticalContext {
   const situation = analyzeSituation(game, playerId, BOT_PROFILES[difficulty])
+  const memory = currentBotMemory()
+  if (memory && situation.profile.commitment > 0) {
+    situation.plan = resolvePlan(
+      situation,
+      memory,
+      (key) => baseCellGoalValue(situation, key),
+      (id) => isDenyTarget(situation, id),
+    )
+  }
   return {
     game,
     map,
@@ -153,21 +166,12 @@ function enemyReachStrength(ctx: TacticalContext, key: string, includeOnCell = t
 }
 
 /**
- * Нужный гарнизон своего центра с поправкой на уровень. Средний держит только последний
- * центр; высокий — центры, оборона которых важна для партии (последний, под ударом почти
- * победителя, перед своей победой), а обычную оборону оставляет, чтобы не терять темп.
+ * Гарнизон, который уровень держит по правилу, что бы ни сулил ход по плану. Средний держит
+ * только последний центр; высокий — центры, оборона которых важна для партии (последний, под
+ * ударом почти победителя, перед своей победой). Обычную оборону от набега высокий не держит по
+ * правилу, а взвешивает против плана (`raidRisk`, см. `planMoves` и `planBuild`).
  */
 function garrisonNeedFor(ctx: TacticalContext, key: string): number {
-  const critical = criticalNeedFor(ctx, key)
-  if (critical > 0) return critical
-  // Пустой центр уходит к вошедшему сразу: одного корабля хватает, чтобы набег стал боем.
-  const threat = ctx.situation.threats.get(key)
-  if (ctx.situation.profile.raidDefense > 0 && threat && threat.now > 0) return PICKET_STRENGTH
-  return 0
-}
-
-/** Гарнизон, который уровень держит всерьёз: без пикетов от набега. */
-function criticalNeedFor(ctx: TacticalContext, key: string): number {
   const need = garrisonNeed(ctx.situation, key)
   if (need <= 0) return 0
   const threat = ctx.situation.threats.get(key)
@@ -176,12 +180,14 @@ function criticalNeedFor(ctx: TacticalContext, key: string): number {
   return (profile.threatAware ? defenseShareFor(ctx.situation, threat) >= 0.5 : threat.last) ? need : 0
 }
 
-/**
- * Возвращаться ли кораблю на свой пустой центр ради пикета. Полная оборона от набега
- * (`raidDefense` 1) — да; половинная — только оставлять пикет, уходя, и строить его на месте.
- */
+/** Возвращаться ли кораблю на свой пустой центр ради пикета по правилу: только ради важной обороны. */
 function returnsForPicket(ctx: TacticalContext, key: string): boolean {
-  return ctx.situation.profile.raidDefense >= 1 || criticalNeedFor(ctx, key) > 0
+  return garrisonNeedFor(ctx, key) > 0
+}
+
+/** Своя сила на клетке без кораблей из `except`. */
+function ownStrengthAt(ctx: TacticalContext, key: string, except: ReadonlySet<string> = new Set()): number {
+  return combatStrength(ownShipsAt(ctx.board, key, ctx.playerId).filter((ship) => !except.has(ship.id)).map((ship) => ship.type))
 }
 
 function approachGoals(ctx: TacticalContext): ApproachGoal[] {
@@ -472,6 +478,15 @@ export function planMoves(ctx: TacticalContext, markerKey: string, quick: boolea
   const reach = new Map<string, Map<string, number>>()
   for (const ship of free) reach.set(ship.id, reachForShip(board, markerKey, playerId, ship.type))
 
+  // Свой центр, с которого уходят корабли: оставить его пустым — значит рискнуть набегом.
+  // Высокий уровень сравнивает этот риск с тем, что даст уход (`raidRisk`); средний не считает.
+  const guardOrigin = cell.isPowerCenter && cell.controlOwnerId === playerId && kept.size === 0
+    && raidRisk(situation, markerKey, 0) > 0
+  const exposeCost = (leaving: ReadonlySet<string>) => {
+    if (!guardOrigin || mine.some((ship) => !leaving.has(ship.id))) return 0
+    return raidRiskAverted(situation, markerKey, 0, ownStrengthAt(ctx, markerKey))
+  }
+
   let combat: CombatOption | null = null
   const combatKeys = new Set<string>()
   for (const cells of reach.values()) {
@@ -479,7 +494,18 @@ export function planMoves(ctx: TacticalContext, markerKey: string, quick: boolea
   }
   for (const key of combatKeys) {
     const attackers = free.filter((ship) => reach.get(ship.id)!.has(key))
-    const option = evaluateCombatTarget(ctx, key, attackers, quick)
+    let option = evaluateCombatTarget(ctx, key, attackers, quick)
+    const cost = option ? exposeCost(new Set(attackers.map((ship) => ship.id))) : 0
+    if (option && cost > 0) {
+      option = { ...option, value: option.value - cost, reason: `${option.reason}, центр без пикета (риск набега ${cost.toFixed(0)})` }
+      if (attackers.length >= 2) {
+        // Тот же бой без самого дешёвого корабля: он остаётся пикетом.
+        const picket = [...attackers].sort((a, b) => shipCost(a.type) - shipCost(b.type))[0]!
+        const lean = evaluateCombatTarget(ctx, key, attackers.filter((ship) => ship !== picket), quick)
+        if (lean && lean.value > option.value) option = { ...lean, reason: `${lean.reason}, пикет остаётся` }
+      }
+      if (option.value <= 0) option = null
+    }
     if (option && (!combat || option.value > combat.value)) combat = option
   }
 
@@ -509,8 +535,11 @@ export function planMoves(ctx: TacticalContext, markerKey: string, quick: boolea
     let best: { ship: ShipUnit; key: string; gain: number; note: string } | null = null
     for (const ship of remaining) {
       const here = approachValue(ctx, markerKey, ship.type)
-      // Последний корабль уходит с клетки, которую бот вот-вот займёт, — захват пропадёт.
-      const leaveCost = originLeft === 1 && originPending ? originGoal : 0
+      // Последний корабль уходит с клетки, которую бот вот-вот займёт, — захват пропадёт. Со
+      // своего центра под угрозой — оставляет его набегу: ход должен дать больше, чем стоит риск.
+      const leaveCost = originLeft === 1
+        ? (originPending ? originGoal : guardOrigin ? raidRiskAverted(situation, markerKey, 0, combatStrength([ship.type])) : 0)
+        : 0
       for (const [key] of reach.get(ship.id)!) {
         if (isCombatCellFor(board, playerId, key)) continue
         const dest = board.cells.get(key)!
@@ -535,6 +564,15 @@ export function planMoves(ctx: TacticalContext, markerKey: string, quick: boolea
           }
         } else if (dest.isPowerCenter) {
           const need = garrisonNeedFor(ctx, key)
+          const empty = ownAt(key) + extra === 0
+          if (need <= 0 && empty && situation.profile.raidRiskWeight > 0) {
+            // Вернуться на свой пустой центр под угрозой набега — если это выгоднее хода по плану.
+            const averted = raidRiskAverted(situation, key, 0, combatStrength([ship.type]))
+            if (averted > 0) {
+              gain += averted
+              note = 'пикет'
+            }
+          }
           if (need > 0) {
             const held = combatStrength(ownShipsAt(board, key, playerId).map((s) => s.type))
             const empty = ownAt(key) + extra === 0
@@ -569,6 +607,11 @@ export function planMoves(ctx: TacticalContext, markerKey: string, quick: boolea
     reasons.push(`${best.note} ${best.key}`)
   }
 
+  if (guardOrigin && moves.length > 0) {
+    reasons.push(originLeft > 0
+      ? `пикет остаётся на ${markerKey}`
+      : `центр ${markerKey} без пикета: ход выгоднее обороны (риск набега ${raidRisk(situation, markerKey, 0).toFixed(0)})`)
+  }
   if (moves.length === 0) return null
   return { moves, value, combat, reason: reasons.join(', ') }
 }
@@ -676,6 +719,14 @@ export function planBuild(ctx: TacticalContext, markerKey: string): BuildPlan | 
     if (savingFor && shipCost(type) < shipCost(savingFor) && deficit <= 0) moneyCost = 1.25
     let value = count * (worth * situation.profile.buildScale - shipCost(type) * moneyCost)
     let reason = `постройка ${type}×${count}`
+    if (deficit <= 0 && held <= 0 && cell.isPowerCenter && situation.profile.raidRiskWeight > 0) {
+      // Пустой свой центр под угрозой набега: построенный корабль сразу встаёт пикетом.
+      const averted = raidRiskAverted(situation, markerKey, 0, combatStrength(Array.from({ length: count }, () => type)))
+      if (averted > 0) {
+        value += averted
+        reason += ' в пикет'
+      }
+    }
     if (deficit > 0) {
       const added = combatStrength(Array.from({ length: count }, () => type))
       if (held <= 0 && situation.profile.pickets) {
@@ -773,7 +824,10 @@ export function reserveValueOf(ctx: TacticalContext, key: string): number {
     if (threat.next <= 0 && !threat.occupied) continue
     if (threat.key === key) continue
     const covers = ships.some((ship) => reachForShip(ctx.board, key, ctx.playerId, ship.type).has(threat.key))
-    if (covers) best = Math.max(best, defenseValue(ctx.situation, threat.key) * 0.25)
+    if (!covers) continue
+    // Маркер рядом с центром, который могут взять набегом, — это шанс отбить его до начала хода.
+    const raid = threat.garrison <= 0 ? raidRisk(ctx.situation, threat.key, 0) * 0.3 : 0
+    best = Math.max(best, defenseValue(ctx.situation, threat.key) * 0.25, raid)
   }
   return best
 }

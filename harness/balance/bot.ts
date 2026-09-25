@@ -37,12 +37,14 @@ import type {
   ShipType,
 } from '../../packages/rules/src/index.js'
 import {
+  createBotMemory,
   faceUpValueFor,
   indexCells,
   parseKey,
   pickDoctrine,
   setBotErrorListener,
   settleClaimPicks,
+  withBotMemory,
   settleRechargePicks,
   stepActions,
   stepCombat,
@@ -349,7 +351,8 @@ export function runGame(map: MapDefinition, seed: number, options: RunOptions): 
     }
   })
   try {
-    const record = runGameSeeded(map, seed, options)
+    // Память ботов — на партию, как у сервера на комнату: план высокого уровня живёт в ней.
+    const record = withBotMemory(createBotMemory(), () => runGameSeeded(map, seed, options))
     record.botErrors = botIssues.errors
     record.botPlanRejects = botIssues.rejects
     if (botIssues.samples.length) record.botIssueSamples = botIssues.samples
