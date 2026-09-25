@@ -7,6 +7,8 @@
  * партии, тем дольше партия остаётся неопределённой.
  */
 
+import type { BehaviorCounters } from './behavior.js'
+
 export interface PlayerSample {
   powerCenters: number
   cells: number
@@ -78,6 +80,8 @@ export interface GameRecord {
    * `stopped` — он не победил в ближайшие два хода.
    */
   nearWins?: NearWinEpisode[]
+  /** Поведение каждого места: набеги, штурмы, отбитые центры, открытые центры (`behavior.ts`). */
+  behavior?: Record<string, BehaviorCounters>
   /** Сбои оценки среднего и высокого уровня (заменены решением простого бота). */
   botErrors?: number
   /** Планы бота, которые движок отклонил: оценка разошлась с правилами. */
@@ -94,6 +98,11 @@ export interface NearWinEpisode {
   /** Сколько других мест в партии занимал высокий уровень — те, кто может помешать нарочно. */
   otherHardSeats: number
   stopped: boolean
+  /**
+   * «Остановлен» лишь потому, что в эти два хода партию выиграл кто-то другой. Такой эпизод
+   * не говорит, что почти победителю помешали: соперник просто успел раньше.
+   */
+  otherWon?: boolean
 }
 
 /** Сводка эпизодов «почти победы»: сколько их было и сколько раз почти победителя остановили. */
@@ -101,6 +110,8 @@ export interface NearWinSummary {
   episodes: number
   stopped: number
   share: number
+  /** Из остановленных — партию в эти два хода выиграл другой. */
+  otherWon: number
 }
 
 /**
@@ -212,6 +223,8 @@ function summarizeEconomy(records: readonly GameRecord[]): Record<string, Econom
 export interface DifficultyResult {
   /** Мест этого уровня за все партии. */
   seats: number
+  /** Партий с победителем, в которых уровень участвовал. */
+  decided: number
   wins: number
   /** Доля побед среди партий с победителем. */
   winRate: number
@@ -382,6 +395,8 @@ export interface Summary {
   winRateByDifficulty: Record<string, DifficultyResult>
   /** Экономика по уровням сложности ботов. */
   economyByDifficulty: Record<string, EconomySummary>
+  /** Поведение по уровням: набеги, штурмы, отбитые и открытые центры. */
+  behaviorByDifficulty: Record<string, BehaviorSummary>
   /** Как часто почти победителя останавливали. */
   nearWins: ReturnType<typeof summarizeNearWins>
   bot: { errors: number; planRejects: number; samples: string[] }
@@ -398,14 +413,15 @@ function summarizeDifficulties(records: readonly GameRecord[]): Record<string, D
     fairPerSeat += 1 / total
     for (const playerId of record.playerIds) {
       const level = seats[playerId] ?? 'easy'
-      const entry = (out[level] ??= { seats: 0, wins: 0, winRate: 0, fairShare: 0, winsPerSeat: 0, perSeatVsFair: 0 })
+      const entry = (out[level] ??= { seats: 0, decided: 0, wins: 0, winRate: 0, fairShare: 0, winsPerSeat: 0, perSeatVsFair: 0 })
       entry.seats += 1
       entry.fairShare += 1 / total
       if (record.winnerId === playerId) entry.wins += 1
     }
   }
   fairPerSeat = decided.length ? fairPerSeat / decided.length : 0
-  for (const entry of Object.values(out)) {
+  for (const [level, entry] of Object.entries(out)) {
+    entry.decided = decided.filter((record) => record.playerIds.some((id) => (record.seatDifficulty?.[id] ?? 'easy') === level)).length
     entry.winRate = decided.length ? entry.wins / decided.length : 0
     entry.fairShare = decided.length ? entry.fairShare / decided.length : 0
     entry.winsPerSeat = entry.seats ? entry.wins / entry.seats : 0
@@ -416,7 +432,12 @@ function summarizeDifficulties(records: readonly GameRecord[]): Record<string, D
 
 function nearWinSummary(episodes: readonly NearWinEpisode[]): NearWinSummary {
   const stopped = episodes.filter((episode) => episode.stopped).length
-  return { episodes: episodes.length, stopped, share: episodes.length ? stopped / episodes.length : 0 }
+  return {
+    episodes: episodes.length,
+    stopped,
+    share: episodes.length ? stopped / episodes.length : 0,
+    otherWon: episodes.filter((episode) => episode.stopped && episode.otherWon).length,
+  }
 }
 
 /**
@@ -440,6 +461,72 @@ function summarizeNearWins(records: readonly GameRecord[]): {
     withOtherHard: nearWinSummary(episodes.filter((episode) => episode.otherHardSeats > 0)),
     withoutOtherHard: nearWinSummary(episodes.filter((episode) => episode.otherHardSeats === 0)),
   }
+}
+
+/** Поведение уровня: средние на место за партию, открытые центры — на ход. */
+export interface BehaviorSummary {
+  seats: number
+  raids: number
+  storms: number
+  besiegedStorms: number
+  siegeCaptures: number
+  neutralClaims: number
+  lostToRaids: number
+  lostToStorms: number
+  retaken: number
+  lossesHeld: number
+  nearWinnerTakes: number
+  /** Своих центров без кораблей под ударом врага с маркером — в среднем за ход. */
+  exposedPerTurn: number
+}
+
+/** Подписи счётчиков поведения для отчётов: поле, подпись, знаков после запятой. */
+export const BEHAVIOR_LABELS: readonly (readonly [Exclude<keyof BehaviorSummary, 'seats'>, string, number])[] = [
+  ['raids', 'набегов', 2],
+  ['storms', 'штурмов', 2],
+  ['besiegedStorms', 'из них осаждённых', 2],
+  ['siegeCaptures', 'взято осадой', 2],
+  ['neutralClaims', 'нейтральных занято', 2],
+  ['lostToRaids', 'потеряно набегом', 2],
+  ['lostToStorms', 'потеряно штурмом', 2],
+  ['retaken', 'отбито до начала хода', 2],
+  ['lossesHeld', 'потерь к началу хода', 2],
+  ['nearWinnerTakes', 'отнято у почти победителя', 2],
+  ['exposedPerTurn', 'открытых центров за ход', 2],
+]
+
+function summarizeBehavior(records: readonly GameRecord[]): Record<string, BehaviorSummary> {
+  const sums: Record<string, BehaviorCounters & { seats: number }> = {}
+  for (const record of records) {
+    for (const [playerId, counters] of Object.entries(record.behavior ?? {})) {
+      const level = record.seatDifficulty?.[playerId] ?? 'easy'
+      const sum = (sums[level] ??= {
+        seats: 0, turns: 0, raids: 0, storms: 0, besiegedStorms: 0, siegeCaptures: 0, neutralClaims: 0,
+        lostToRaids: 0, lostToStorms: 0, retaken: 0, lossesHeld: 0, nearWinnerTakes: 0, exposedPcTurns: 0,
+      })
+      sum.seats += 1
+      for (const key of Object.keys(counters) as (keyof BehaviorCounters)[]) sum[key] += counters[key]
+    }
+  }
+  const out: Record<string, BehaviorSummary> = {}
+  for (const [level, sum] of Object.entries(sums)) {
+    const perSeat = (value: number) => (sum.seats ? value / sum.seats : 0)
+    out[level] = {
+      seats: sum.seats,
+      raids: perSeat(sum.raids),
+      storms: perSeat(sum.storms),
+      besiegedStorms: perSeat(sum.besiegedStorms),
+      siegeCaptures: perSeat(sum.siegeCaptures),
+      neutralClaims: perSeat(sum.neutralClaims),
+      lostToRaids: perSeat(sum.lostToRaids),
+      lostToStorms: perSeat(sum.lostToStorms),
+      retaken: perSeat(sum.retaken),
+      lossesHeld: perSeat(sum.lossesHeld),
+      nearWinnerTakes: perSeat(sum.nearWinnerTakes),
+      exposedPerTurn: sum.turns ? sum.exposedPcTurns / sum.turns : 0,
+    }
+  }
+  return out
 }
 
 const TRACKED_SHIP_TYPES = ['destroyer', 'cruiser', 'carrier', 'battleship', 'hyper']
@@ -596,6 +683,7 @@ export function summarize(records: readonly GameRecord[]): Summary {
     },
     winRateByDifficulty: summarizeDifficulties(ok),
     economyByDifficulty: summarizeEconomy(ok),
+    behaviorByDifficulty: summarizeBehavior(ok),
     nearWins: summarizeNearWins(ok),
     bot: {
       errors: records.reduce((sum, record) => sum + (record.botErrors ?? 0), 0),

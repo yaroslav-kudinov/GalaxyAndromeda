@@ -2,8 +2,8 @@
 /**
  * Замер скорости бота лобби: сколько занимает один вызов `planGreedyBotAction`.
  *
- *   pnpm tsx harness/balance/timing.ts --map reference-six-13 --games 3
- *   pnpm tsx harness/balance/timing.ts --map reference-six-13 --games 3 --difficulty hard
+ *   pnpm balance:timing --map six-point-path --games 3
+ *   pnpm balance:timing --map six-point-path --games 3 --difficulty hard
  *
  * Партия идёт так же, как в лобби сервера: на каждом шаге бот планирует одно действие на копии
  * состояния, действие применяется, и так до конца партии. Если ботам делать нечего, шаг
@@ -11,10 +11,7 @@
  * замеряются все три уровня по очереди, все места — одного уровня.
  */
 
-import { readFileSync } from 'node:fs'
-import { dirname, resolve } from 'node:path'
 import { performance } from 'node:perf_hooks'
-import { fileURLToPath } from 'node:url'
 
 import {
   applyGameActionOnSnapshot,
@@ -22,15 +19,13 @@ import {
   BOT_DIFFICULTIES,
   gameSnapshotFromMap,
   isBotDifficulty,
-  normalizeMapDefinition,
   planGreedyBotAction,
   type BotDifficulty,
   type MarkerAttempts,
 } from '../../packages/rules/src/index.js'
 import { seatIdsOf } from './bot.js'
+import { loadMap } from './maps.js'
 import { mixSeed, withSeededRandom } from './rng.js'
-
-const HERE = dirname(fileURLToPath(import.meta.url))
 
 function flag(name: string, fallback: string): string {
   const index = process.argv.indexOf(`--${name}`)
@@ -53,7 +48,7 @@ interface TimingResult {
 }
 
 function measure(mapName: string, games: number, seed: number, difficulty: BotDifficulty): TimingResult {
-  const map = normalizeMapDefinition(JSON.parse(readFileSync(resolve(HERE, 'maps', `${mapName}.json`), 'utf8')))
+  const map = loadMap(mapName)
   const seats = seatIdsOf(map)
   const options = { difficultyByPlayer: Object.fromEntries(seats.map((seat) => [seat, difficulty])) }
   const times: number[] = []
@@ -99,7 +94,7 @@ function measure(mapName: string, games: number, seed: number, difficulty: BotDi
 }
 
 function main(): void {
-  const mapName = flag('map', 'reference-six-13')
+  const mapName = flag('map', 'six-point-path')
   const games = Math.max(1, Number(flag('games', '3')))
   const seed = Number(flag('seed', '1'))
   const raw = flag('difficulty', '')
