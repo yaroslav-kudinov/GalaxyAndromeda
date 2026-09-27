@@ -21,8 +21,10 @@ after(() => rmSync(dir, { recursive: true, force: true }))
 const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='
 
 describe('баг-репорты в админке', () => {
-  it('список — новые сверху, со скриншотом; удалённого больше нет', () => {
+  it('список — новые сверху, со скриншотом; удалённого больше нет', async () => {
     const first = createBugReport({ description: 'Первый', playerName: 'Игрок' })
+    // Время создания — с точностью до миллисекунды: разводим репорты, чтобы порядок был виден.
+    await new Promise((done) => setTimeout(done, 5))
     const second = createBugReport({ description: 'Второй', screenshotBase64: PNG, screenshotMime: 'image/png' })
 
     const list = listBugReports()

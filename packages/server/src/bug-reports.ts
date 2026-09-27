@@ -171,7 +171,8 @@ export function listBugReports(now = Date.now()): BugReportMeta[] {
     const meta = readMeta(entry.name)
     if (meta && !isExpired(meta, now)) reports.push(meta)
   }
-  return reports.sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+  // При одинаковом времени — по идентификатору: порядок не зависит от порядка файлов на диске.
+  return reports.sort((a, b) => b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id))
 }
 
 const EXT_TO_MIME: Record<string, string> = {
