@@ -303,6 +303,15 @@ const markerActionBusy = ref(false)
 const battleModalOpen = ref(false)
 const rulesHelpOpen = ref(false)
 const bugReportOpen = ref(false)
+/**
+ * На телефоне открыто окно поверх карты: нижний ряд («Чат», кнопка хода, «Игра») лежит выше окон
+ * по слою и закрывал их кнопки — например, «Выбрать на карте» в окне маркера. Пока окно открыто,
+ * ряд прячем: передавать ход или открывать чат в этот момент всё равно незачем.
+ */
+const mobileOverlayOpen = computed(
+  () => isNarrowUi.value
+    && (markerActionOpen.value || battleModalOpen.value || rulesHelpOpen.value || bugReportOpen.value),
+)
 
 const RULES_NEWBIE_TIP_STORAGE_KEY = 'galaxy-rules-newbie-tip-dismissed'
 const showRulesNewbieTip = ref(
@@ -3208,6 +3217,7 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
 
     <RoomChatPanel
       v-if="chatEnabled"
+      v-show="!mobileOverlayOpen"
       v-model:open="chatOpen"
       :messages="chatMessages"
       :peers="chatPeers"
@@ -3777,7 +3787,7 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
     </div>
 
     <div
-      v-if="isMyTurn && isNarrowUi"
+      v-if="isMyTurn && isNarrowUi && !mobileOverlayOpen"
       class="mobile-phase-dock"
       role="region"
       aria-label="Действие фазы"
@@ -3799,6 +3809,7 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
     </div>
 
     <aside
+      v-show="!mobileOverlayOpen"
       class="hud-right"
       :class="{
         collapsed: panelCollapsed,
