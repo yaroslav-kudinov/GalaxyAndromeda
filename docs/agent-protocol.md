@@ -8,6 +8,9 @@ HTTP base: `http://127.0.0.1:3001` (env `GAME_SERVER_URL` for MCP).
 |--------|------|-------------|
 | GET | `/health` | Health check |
 | POST | `/bug-reports` | Body: `{ description, screenshotBase64?, screenshotMime?, roomId?, playerId?, playerName? }` → `{ ok, id, expiresAt, hasScreenshot }`. Хранение в `.bug-reports/`, TTL 60 дней |
+| GET | `/admin/bug-reports` | Админка, заголовок `Authorization: Bearer <GALAXY_ADMIN_TOKEN>` → `{ reports: [{ id, createdAt, expiresAt, description, playerId?, playerName?, roomId?, userAgent?, hasScreenshot }] }`, новые сверху |
+| GET | `/admin/bug-reports/:id/screenshot` | Админка → файл скриншота (PNG, JPEG, WebP, GIF) или 404 |
+| DELETE | `/admin/bug-reports/:id` | Админка → `{ ok: true }` или 404; `id` — только UUID |
 | POST | `/rooms` | Body: `{ map, maxPlayers? }` or `{ save, maxPlayers? }` → `{ roomId, code }`. Комната в статусе `lobby` |
 | POST | `/rooms/:id/join` | Body: `{ playerName, preferredPlayerId? }` → `{ playerId, code }`. Только пока `lobby` |
 | POST | `/rooms/:id/rejoin` | Body: `{ playerId, playerName?, preferredPlayerId? }` → смена слота в лобби или возврат в свой слот |

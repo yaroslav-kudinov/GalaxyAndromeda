@@ -155,6 +155,65 @@ export function createBugReport(input: CreateBugReportInput): BugReportMeta {
   return meta
 }
 
+/** Идентификатор репорта — UUID: другого в пути к файлам не пропускаем. */
+const BUG_REPORT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+export function isBugReportId(id: string): boolean {
+  return BUG_REPORT_ID.test(id)
+}
+
+/** Живые репорты, новые сверху. */
+export function listBugReports(now = Date.now()): BugReportMeta[] {
+  ensureStore()
+  const reports: BugReportMeta[] = []
+  for (const entry of readdirSync(bugReportsDir, { withFileTypes: true })) {
+    if (!entry.isDirectory() || !isBugReportId(entry.name)) continue
+    const meta = readMeta(entry.name)
+    if (meta && !isExpired(meta, now)) reports.push(meta)
+  }
+  // При одинаковом времени — по идентификатору: порядок не зависит от порядка файлов на диске.
+  return reports.sort((a, b) => b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id))
+}
+
+const EXT_TO_MIME: Record<string, string> = {
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  webp: 'image/webp',
+  gif: 'image/gif',
+}
+
+export function readBugReportScreenshot(id: string): { mime: string; data: Buffer } | null {
+  if (!isBugReportId(id)) return null
+  const meta = readMeta(id)
+  if (!meta?.screenshotFile || !/^screenshot\.(png|jpg|webp|gif)$/.test(meta.screenshotFile)) return null
+  const path = join(reportDir(id), meta.screenshotFile)
+  if (!existsSync(path)) return null
+  const ext = meta.screenshotFile.split('.').pop()!
+  return { mime: EXT_TO_MIME[ext] ?? 'application/octet-stream', data: readFileSync(path) }
+}
+
+export function deleteBugReport(id: string): boolean {
+  if (!isBugReportId(id) || !existsSync(reportDir(id))) return false
+  rmSync(reportDir(id), { recursive: true, force: true })
+  return true
+}
+
+/** Просмотр репортов — только в админке, под токеном (`registerAdminRoutes`). */
+export function registerBugReportAdminRoutes(admin: FastifyInstance): void {
+  admin.get('/bug-reports', async () => ({ reports: listBugReports() }))
+
+  admin.get<{ Params: { id: string } }>('/bug-reports/:id/screenshot', async (req, reply) => {
+    const shot = readBugReportScreenshot(req.params.id)
+    if (!shot) return reply.code(404).send({ error: 'Скриншота нет' })
+    return reply.header('Cache-Control', 'no-store').type(shot.mime).send(shot.data)
+  })
+
+  admin.delete<{ Params: { id: string } }>('/bug-reports/:id', async (req, reply) => {
+    if (!deleteBugReport(req.params.id)) return reply.code(404).send({ error: 'Репорт не найден' })
+    return { ok: true }
+  })
+}
+
 let cleanupTimer: ReturnType<typeof setInterval> | null = null
 
 export function startBugReportCleanup(): void {

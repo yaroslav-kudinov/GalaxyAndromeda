@@ -2,10 +2,24 @@
 definePageMeta({ middleware: 'admin' })
 
 const token = ref('')
-const tab = ref<'maps' | 'submissions' | 'logs'>('maps')
+const tab = ref<'maps' | 'submissions' | 'logs' | 'bugs'>('maps')
 const maps = ref<Array<{ id: string; name: string; published: boolean }>>([])
 const submissions = ref<Array<{ id: number; nickname: string; map: { name: string } }>>([])
 const logs = ref<Array<{ id: number; room_id: string; map_id: string; outcome: string; ended_at: string }>>([])
+interface BugReport {
+  id: string
+  createdAt: string
+  expiresAt: string
+  description: string
+  playerId?: string
+  playerName?: string
+  roomId?: string
+  userAgent?: string
+  hasScreenshot: boolean
+}
+const bugReports = ref<BugReport[]>([])
+/** Скриншоты грузятся с токеном и показываются по ссылке на скачанный файл. */
+const screenshots = ref<Record<string, string>>({})
 const error = ref<string | null>(null)
 const busy = ref(false)
 
@@ -43,6 +57,8 @@ async function refresh() {
       maps.value = (await adminFetch<{ maps: typeof maps.value }>('/maps')).maps
     } else if (tab.value === 'submissions') {
       submissions.value = (await adminFetch<{ submissions: typeof submissions.value }>('/submissions?status=pending')).submissions
+    } else if (tab.value === 'bugs') {
+      bugReports.value = (await adminFetch<{ reports: BugReport[] }>('/bug-reports')).reports
     } else {
       logs.value = (await adminFetch<{ logs: typeof logs.value }>('/game-logs')).logs
     }
@@ -65,6 +81,32 @@ async function reject(id: number) {
   await refresh()
 }
 
+async function showScreenshot(id: string) {
+  error.value = null
+  try {
+    const res = await fetch(`/api/admin/bug-reports/${id}/screenshot`, {
+      headers: { Authorization: `Bearer ${token.value.trim()}` },
+    })
+    if (!res.ok) throw new Error(`Скриншот не загрузился: HTTP ${res.status}`)
+    screenshots.value = { ...screenshots.value, [id]: URL.createObjectURL(await res.blob()) }
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : String(e)
+  }
+}
+
+async function removeBugReport(id: string) {
+  if (!confirm('Удалить этот баг-репорт? Восстановить его будет нельзя.')) return
+  await adminFetch(`/bug-reports/${id}`, { method: 'DELETE' })
+  const url = screenshots.value[id]
+  if (url) URL.revokeObjectURL(url)
+  await refresh()
+}
+
+function formatDate(iso: string): string {
+  const date = new Date(iso)
+  return Number.isNaN(date.getTime()) ? iso : date.toLocaleString('ru-RU')
+}
+
 watch(tab, () => void refresh())
 </script>
 
@@ -82,6 +124,7 @@ watch(tab, () => void refresh())
         <button :class="{ active: tab === 'maps' }" @click="tab = 'maps'">Карты</button>
         <button :class="{ active: tab === 'submissions' }" @click="tab = 'submissions'">Модерация</button>
         <button :class="{ active: tab === 'logs' }" @click="tab = 'logs'">Логи</button>
+        <button :class="{ active: tab === 'bugs' }" @click="tab = 'bugs'">Баг-репорты</button>
       </nav>
 
       <p v-if="error" class="err">{{ error }}</p>
@@ -101,6 +144,30 @@ watch(tab, () => void refresh())
         </li>
       </ul>
 
+      <template v-if="tab === 'bugs'">
+        <p v-if="!busy && !bugReports.length">Баг-репортов нет.</p>
+        <ul>
+          <li v-for="r in bugReports" :key="r.id" class="bug">
+            <div class="bug-head">
+              <strong>{{ formatDate(r.createdAt) }}</strong>
+              <span>{{ r.playerName ?? r.playerId ?? 'без имени' }}</span>
+              <span v-if="r.roomId" :title="r.roomId">комната {{ r.roomId.slice(0, 8) }}…</span>
+              <span class="bug-muted">хранится до {{ formatDate(r.expiresAt) }}</span>
+            </div>
+            <p class="bug-text">{{ r.description }}</p>
+            <p v-if="r.userAgent" class="bug-muted">{{ r.userAgent }}</p>
+            <div class="bug-actions">
+              <button v-if="r.hasScreenshot && !screenshots[r.id]" type="button" @click="showScreenshot(r.id)">
+                Показать скриншот
+              </button>
+              <a v-if="screenshots[r.id]" :href="screenshots[r.id]" target="_blank" rel="noopener">Открыть скриншот</a>
+              <button type="button" @click="removeBugReport(r.id)">Удалить</button>
+            </div>
+            <img v-if="screenshots[r.id]" :src="screenshots[r.id]" alt="Скриншот баг-репорта" class="bug-shot" />
+          </li>
+        </ul>
+      </template>
+
       <ul v-if="tab === 'logs'">
         <li v-for="l in logs" :key="l.id">
           #{{ l.id }} {{ l.room_id.slice(0, 8) }}… карта {{ l.map_id }} — {{ l.outcome }} ({{ l.ended_at }})
@@ -118,4 +185,10 @@ watch(tab, () => void refresh())
 .err { color: #f87171; }
 ul { list-style: none; padding: 0; }
 li { padding: 0.5rem 0; border-bottom: 1px solid #334155; }
+.bug-head { display: flex; gap: 0.75rem; flex-wrap: wrap; align-items: baseline; }
+.bug-text { white-space: pre-wrap; margin: 0.4rem 0; }
+.bug-muted { color: #94a3b8; font-size: 0.85em; }
+.bug-actions { display: flex; gap: 0.5rem; align-items: center; }
+.bug-actions a { color: #93c5fd; }
+.bug-shot { display: block; max-width: 100%; margin-top: 0.5rem; border: 1px solid #334155; }
 </style>

@@ -21,6 +21,7 @@ import {
   listPublishedScenarios,
 } from './db/index.js'
 import { clientIp } from './catalog.js'
+import { registerBugReportAdminRoutes } from './bug-reports.js'
 
 const MAX_SUBMISSIONS_PER_DAY = Number(process.env.GALAXY_MAX_MAP_SUBMISSIONS_PER_DAY ?? 5)
 
@@ -86,6 +87,8 @@ export function registerAdminRoutes(app: FastifyInstance): void {
     admin.addHook('preHandler', async (req, reply) => {
       if (!assertAdmin(req, reply)) return reply
     })
+
+    registerBugReportAdminRoutes(admin)
 
     admin.get('/maps', async () => {
       const rows = listAllMaps()
