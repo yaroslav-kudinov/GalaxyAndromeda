@@ -298,6 +298,8 @@ function flash(set: typeof struck, shipId: string, ms: number) {
 }
 
 function spawnBurst(x: number, y: number, kind: Burst['kind']) {
+  // Осколки — тяжёлый эффект: на медленной машине остаётся только вспышка корабля.
+  if (!motion.rich.value) return
   const count = kind === 'boom' ? 14 : 6
   const reach = kind === 'boom' ? 46 : 20
   const burst: Burst = {
@@ -336,7 +338,8 @@ function landHit(targetId: string) {
   }
 }
 
-const reducedMotion = import.meta.client && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+/** Анимация боя: свой переключатель игрока и замер производительности (`useBattleMotion`). */
+const motion = useBattleMotion()
 
 /** Разыграть броски одного корабля: вспышка орудий и выстрел на каждый кубик. */
 function playRoll(roll: ShipCombatRollLog, animate: boolean) {
@@ -351,7 +354,7 @@ function playRoll(roll: ShipCombatRollLog, animate: boolean) {
     setTimeout(() => {
       audio.shot(roll.shipType)
       const to = die.targetShipId ? centerOf(die.targetShipId) : null
-      if (from && to) {
+      if (from && to && motion.rich.value) {
         // Промах уходит мимо: чуть в сторону от цели.
         const aim = die.hit ? to : { x: to.x + (Math.random() < 0.5 ? -1 : 1) * (18 + Math.random() * 12), y: to.y }
         const bolt: Bolt = {
@@ -393,7 +396,7 @@ watch(
   ([revealed]) => {
     const upTo = Math.min(revealed, props.rolls.length)
     // Скачок сразу на много бросков — окно открыли на готовом итоге: без анимации.
-    const animate = !reducedMotion && upTo - processed.value <= 2
+    const animate = motion.enabled.value && upTo - processed.value <= 2
     if (animate && upTo > processed.value && processed.value === 0) audio.diceRoll()
     while (processed.value < upTo) {
       const roll = props.rolls[processed.value]
@@ -604,6 +607,7 @@ function shipTitle(ship: FieldShip): string {
 let releaseAmbient: (() => void) | null = null
 onMounted(() => {
   releaseAmbient = audio.holdAmbient()
+  motion.probePerformance()
 })
 onUnmounted(() => {
   releaseAmbient?.()
@@ -618,7 +622,7 @@ const lines = computed(() => [
 </script>
 
 <template>
-  <div ref="fieldRef" class="bf" :class="{ 'bf--editable': editable }">
+  <div ref="fieldRef" class="bf" :class="{ 'bf--editable': editable, 'bf--still': !motion.enabled.value }">
     <div class="bf-stars" aria-hidden="true" />
 
     <template v-for="row in lines" :key="row.key">
@@ -1138,13 +1142,17 @@ const lines = computed(() => [
     display: none;
   }
 }
-@media (prefers-reduced-motion: reduce) {
-  .bf-stars,
-  .bf-bolt,
-  .bf-shard,
-  .bf-burst-core,
-  .bf-rolled-die {
-    animation: none;
-  }
+/* Анимация выключена игроком (переключатель в окне боя). Системное «уменьшить движение» не
+   слушаем: в Windows его включает режим быстродействия, и бой замирал без ведома игрока. */
+.bf--still .bf-stars,
+.bf--still .bf-bolt,
+.bf--still .bf-shard,
+.bf--still .bf-burst-core,
+.bf--still .bf-rolled-die,
+.bf--still :deep(.bs--struck),
+.bf--still :deep(.bs--exploding),
+.bf--still :deep(.bs-section--hit),
+.bf--still :deep(.bs-engine) {
+  animation: none;
 }
 </style>

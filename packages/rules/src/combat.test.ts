@@ -1157,16 +1157,23 @@ describe('обстрел', () => {
     expect(canShipBombard('carrier')).toBe(false)
   })
 
-  it('цели обстрела — спорные клетки в дальности', () => {
+  it('цели обстрела — клетки с вражескими кораблями в дальности; пустую чужую — нет', () => {
     const map = createEmptyMap('bombard-test', 'Bombard')
     map.cells.push({ q: 1, r: 0 }, { q: 2, r: 0 }, { q: 3, r: 0 })
     const game = gameSnapshotFromMap(map)
     addShip(game, 0, 0, 'player-1', 'battleship', 'bb-1')
-    for (const q of [1, 2, 3]) cellAt(game, q, 0).controlOwnerId = 'player-2'
+    for (const q of [1, 2, 3]) {
+      cellAt(game, q, 0).controlOwnerId = 'player-2'
+      addShip(game, q, 0, 'player-2', 'destroyer', `dd-${q}`)
+    }
 
     const keys = getBombardmentTargetKeys(game, 'player-1', { q: 0, r: 0 }, 'battleship')
     expect(keys.sort()).toEqual(['1,0', '2,0'])
     expect(getBombardmentTargetKeys(game, 'player-1', { q: 0, r: 0 }, 'cruiser')).toEqual(['1,0'])
+
+    // Чужая клетка без кораблей: попасть не во что, а обстрел её не захватывает.
+    cellAt(game, 1, 0).ships = []
+    expect(getBombardmentTargetKeys(game, 'player-1', { q: 0, r: 0 }, 'battleship')).toEqual(['2,0'])
   })
 
   it('превью обстрела: стреляют только выбранные корабли, с поправкой на расстояние', () => {
@@ -1219,6 +1226,7 @@ describe('обстрел', () => {
   it('обстрел снимает маркер, корабли остаются на месте', () => {
     const { map, game } = duelBoard()
     addShip(game, 0, 0, 'player-1', 'cruiser', 'cr-1')
+    addShip(game, 1, 0, 'player-2', 'destroyer', 'def-dd')
     placeActionMarker(game, 'player-1', { q: 0, r: 0 })
 
     const result = executeMarkerBombardment(game, map, 'player-1', { q: 0, r: 0 }, [

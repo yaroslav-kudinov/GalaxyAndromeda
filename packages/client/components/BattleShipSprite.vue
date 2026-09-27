@@ -193,12 +193,4 @@ const height = computed(() => Math.round((props.width * 68) / 44))
   30% { transform: scale(1.18); filter: brightness(3) drop-shadow(0 0 10px #fb923c); opacity: 1; }
   100% { transform: scale(0.85); filter: grayscale(1) brightness(0.8); opacity: 0.28; }
 }
-@media (prefers-reduced-motion: reduce) {
-  .bs--struck,
-  .bs--exploding,
-  .bs-section--hit,
-  .bs-engine {
-    animation: none;
-  }
-}
 </style>

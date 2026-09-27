@@ -685,3 +685,22 @@ describe('бот в долгом бою', () => {
     expect(pending?.continueDecisions?.attacker).toBe(true)
   })
 })
+
+describe('выбывание', () => {
+  it('выбывший теряет контроль всех клеток и маркеры, корабли остаются', () => {
+    const { map, game } = siegeBoard()
+    // Третий игрок потерял свой единственный центр, но держит соседнюю клетку и флот на ней.
+    cellAt(game, 3, 0).controlOwnerId = 'player-1'
+    cellAt(game, 2, 0).controlOwnerId = 'player-3'
+    addShip(game, 2, 0, 'player-3', 'cruiser', 'p3-cr')
+    placeMarker(game, 'player-3', 2, 0)
+
+    game.phase = 'planning'
+    applyVictoryAndDefeatChecks(game, map.id)
+
+    expect(game.players.find((p) => p.id === 'player-3')?.eliminated).toBe(true)
+    expect(game.cells.some((cell) => cell.controlOwnerId === 'player-3')).toBe(false)
+    expect(game.actionMarkers.some((marker) => marker.ownerId === 'player-3')).toBe(false)
+    expect(cellAt(game, 2, 0).ships.map((ship) => ship.id)).toEqual(['p3-cr'])
+  })
+})

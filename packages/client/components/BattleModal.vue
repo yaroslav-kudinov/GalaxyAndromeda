@@ -68,6 +68,8 @@ const emit = defineEmits<{
 }>()
 
 const tt = useUiStrings().combatTargets
+/** Переключатель анимации боя — в шапке окна. */
+const motion = useBattleMotion()
 const bf = useUiStrings().battleField
 const garrisonText = useUiStrings().garrisonChoice
 
@@ -158,6 +160,10 @@ const shipTypeById = computed(() => {
     map.set(ship.shipId, ship.type)
   }
   for (const roll of allRolls.value) map.set(roll.shipId, roll.shipType)
+  // Уничтоженного нет ни в составе боя, ни в бросках, если он не стрелял (авианосец).
+  for (const round of props.resolution?.rounds ?? (props.resolution?.roundOne ? [props.resolution.roundOne] : [])) {
+    for (const [shipId, type] of Object.entries(round.destroyedShipTypes ?? {})) map.set(shipId, type)
+  }
   return map
 })
 
@@ -328,7 +334,16 @@ const showPrepTargets = computed(
     phase.value === 'pre'
     && localFiringSide.value != null
     && !isDefenderObserver.value
-    && !(props.assaultBlocked && isLocalAttacker.value),
+    && !(props.assaultBlocked && isLocalAttacker.value)
+    && !awaitingGarrison.value,
+)
+
+/**
+ * Осаждающий ждёт, нападёт ли гарнизон: решать ему пока нечего. Раньше он видел кубики и
+ * «Готов», нажимал — и ничего не происходило, а при отказе гарнизона окно просто исчезало.
+ */
+const awaitingGarrison = computed(
+  () => !!props.siegeResponse && isLocalDefender.value && !props.attackerReady,
 )
 
 const pendingDamage = computed(() => props.snapshot.pendingCombat?.damageByShipId ?? {})
@@ -414,7 +429,21 @@ onUnmounted(() => {
             <span :style="{ color: playerColor(preview.defenderId) }">{{ playerLabel(preview.defenderId) }}</span>
           </p>
         </div>
-        <button v-if="phase === 'post'" type="button" class="close-btn" @click="emit('close')">×</button>
+        <div class="battle-head-tools">
+          <button
+            type="button"
+            class="motion-btn"
+            :aria-pressed="motion.enabled.value"
+            :title="motion.enabled.value
+              ? (motion.lowPerformance.value ? tt.motionLow : tt.motionOn)
+              : tt.motionOff"
+            @pointerdown.stop
+            @click="motion.toggle()"
+          >
+            {{ motion.enabled.value ? tt.motionLabelOn : tt.motionLabelOff }}
+          </button>
+          <button v-if="phase === 'post'" type="button" class="close-btn" @click="emit('close')">×</button>
+        </div>
       </header>
 
       <div class="battle-body">
@@ -462,9 +491,12 @@ onUnmounted(() => {
           <p v-if="isDefenderObserver" class="observer-banner">
             Вы наблюдаете за обстрелом
           </p>
-          <p v-if="siegeResponse && isLocalDefender" class="observer-banner">
-            Вы осадили центр власти. Гарнизон может сразу напасть на ваш флот — тогда начнётся
-            бой прямо на клетке. Если гарнизон откажется, осада продолжится.
+          <p v-if="awaitingGarrison" class="observer-banner">
+            Вы осадили центр власти. Гарнизон решает, нападать ли на ваш флот. Если нападёт —
+            здесь появятся цели для ваших кубиков; если откажется, осада продолжится.
+          </p>
+          <p v-else-if="siegeResponse && isLocalDefender" class="observer-banner">
+            Гарнизон нападает на ваш флот. Выберите цели и нажмите «Готов».
           </p>
           <p v-if="siegeResponse && isLocalAttacker" class="observer-banner">
             Ваш центр власти осадили. Можно напасть на осаждающих сейчас или отказаться — тогда
@@ -620,8 +652,9 @@ onUnmounted(() => {
           >
             Осадить
           </button>
+          <span v-if="awaitingGarrison" class="observer-hint">Ждём решения гарнизона…</span>
           <button
-            v-if="!selfReady && !(assaultBlocked && isLocalAttacker)"
+            v-else-if="!selfReady && !(assaultBlocked && isLocalAttacker)"
             type="button"
             class="btn-primary"
             :disabled="resolving || prepPhase === 'countdown'"
@@ -699,6 +732,23 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
+.battle-head-tools {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.motion-btn {
+  font-size: 0.75rem;
+  padding: 0.2rem 0.5rem;
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  background: rgba(15, 23, 42, 0.6);
+  color: #cbd5e1;
+  cursor: pointer;
+}
+.motion-btn[aria-pressed='false'] {
+  opacity: 0.7;
+}
 .battle-backdrop {
   position: fixed;
   inset: 0;

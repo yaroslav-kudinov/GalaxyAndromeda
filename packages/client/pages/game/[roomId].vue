@@ -728,6 +728,22 @@ const resolutionInvolvesMe = computed(() => {
   return rounds.some((round) => round.shipRolls.some((roll) => roll.ownerId === playerId.value))
 })
 
+/** Гарнизон отказался нападать — окно боя у осаждающего закрылось; говорим почему. */
+watch(
+  () => {
+    const pending = pendingCombatState.value
+    const prep = combatPrepState.value
+    return prep?.siegeResponse && pending && isCombatDefender(pending, playerId.value) ? pending.cellKey : null
+  },
+  (cellKey, prevKey) => {
+    if (cellKey || !prevKey) return
+    const declined = (snapshot.value?.eventLog ?? [])
+      .slice(-6)
+      .some((entry) => entry.message.startsWith('Осаждённый не стал нападать'))
+    if (declined) pushStatusToast('phase', ui.siegeResponse.declinedTitle, ui.siegeResponse.declined)
+  },
+)
+
 /** Итог чужого боя: окна нет, только уведомление над картой — и только когда бой закончен. */
 function noteForeignCombatResult(key: string) {
   const res = battleResolution.value
