@@ -25,6 +25,7 @@ import {
   combatPrepOf,
   combatSupportersAwaited,
   getCombatRetreatDestinations,
+  isCombatRetreatAllowed,
   type CombatPreview,
 } from './combat.js'
 import { actionMarkerLimitForPlayer, countControlledPowerCenters } from './marker-pools.js'
@@ -773,7 +774,9 @@ export function stepCombat(
         pending.roundNumber < options.maxCombatRounds
         && (!preview || !retreats.length || sideHoldsOut(preview, side))
     }
-    if (keepFighting) {
+    // Пока в бою никто не уничтожен, отступать нельзя: предел раундов бота тут не действует,
+    // иначе он просил отступления, получал отказ и бой вставал.
+    if (keepFighting || !isCombatRetreatAllowed(pending)) {
       const { errors } = act(game, map, playerId, 'continue-combat')
       return errors.length === 0
     }
@@ -788,7 +791,8 @@ export function stepCombat(
       'stop-combat',
       retreatTo ? { retreatTo } : undefined,
     )
-    return errors.length === 0
+    // Отступить не вышло — бой не должен вставать: продолжаем.
+    return errors.length === 0 || act(game, map, playerId, 'continue-combat').errors.length === 0
   }
 
   return false

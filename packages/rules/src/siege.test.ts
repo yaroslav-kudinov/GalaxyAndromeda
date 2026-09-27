@@ -17,6 +17,7 @@ import { applySiegeTick, siegeAt, siegeLossesOwedBy } from './siege.js'
 import { getBuildableShipsForMarker } from './production.js'
 import { applyTurnEndClaims } from './claim.js'
 import { advanceGameSnapshot } from './turn.js'
+import { GREEDY_BOT_MAX_COMBAT_ROUNDS, stepCombat } from './greedy-bot.js'
 import { applyVictoryAndDefeatChecks } from './victory.js'
 
 function cellAt(game: GameSnapshot, q: number, r: number) {
@@ -656,5 +657,31 @@ describe('поддержка третьего игрока', () => {
     })
     expect(ready.errors).toEqual([])
     expect(combatPrepOf(game.pendingCombat)?.readyBy['player-3']).toBe(true)
+  })
+})
+
+describe('бот в долгом бою', () => {
+  it('после предела раундов бот не просит отступления, пока в бою никто не уничтожен', () => {
+    const { map, game } = siegeBoard()
+    const origin = cellAt(game, 1, 0)
+    origin.isPowerCenter = false
+    origin.controlOwnerId = null
+    addShip(game, 1, 0, 'player-1', 'destroyer', 'att-dd')
+    addShip(game, 2, 0, 'player-2', 'destroyer', 'def-dd')
+    placeMarker(game, 'player-1', 1, 0)
+    // Эсминцам нужна шестёрка: единицы — никто не попал, бой ждёт решения.
+    withRandom(0, () =>
+      applyGameActionOnSnapshot(game, map, 'player-1', 'execute-marker-movement', {
+        from: { q: 1, r: 0 },
+        moves: [{ shipId: 'att-dd', to: { q: 2, r: 0 } }],
+        combatOptions: {},
+      }),
+    )
+    expect(game.pendingCombat?.phase).toBe('awaiting-continue')
+    game.pendingCombat!.roundNumber = GREEDY_BOT_MAX_COMBAT_ROUNDS
+
+    expect(withRandom(0, () => stepCombat(game, map))).toBe(true)
+    const pending = game.pendingCombat as { continueDecisions?: { attacker?: boolean } } | undefined
+    expect(pending?.continueDecisions?.attacker).toBe(true)
   })
 })
