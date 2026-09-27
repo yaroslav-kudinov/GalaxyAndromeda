@@ -19,7 +19,8 @@
     "balance:trace": "tsx harness/balance/trace.ts",
     "balance:timing": "tsx harness/balance/timing.ts",
     "balance:start": "tsx harness/balance/start-state.ts",
-    "balance:check": "tsx harness/balance/check-baseline.ts"
+    "balance:check": "tsx harness/balance/check-baseline.ts",
+    "bug-reports:pull": "tsx harness/scripts/bug-reports-pull.ts"
   },
   "devDependencies": {
     "tsx": "^4.19.2"
