@@ -728,6 +728,22 @@ const resolutionInvolvesMe = computed(() => {
   return rounds.some((round) => round.shipRolls.some((roll) => roll.ownerId === playerId.value))
 })
 
+/** Гарнизон отказался нападать — окно боя у осаждающего закрылось; говорим почему. */
+watch(
+  () => {
+    const pending = pendingCombatState.value
+    const prep = combatPrepState.value
+    return prep?.siegeResponse && pending && isCombatDefender(pending, playerId.value) ? pending.cellKey : null
+  },
+  (cellKey, prevKey) => {
+    if (cellKey || !prevKey) return
+    const declined = (snapshot.value?.eventLog ?? [])
+      .slice(-6)
+      .some((entry) => entry.message.startsWith('Осаждённый не стал нападать'))
+    if (declined) pushStatusToast('phase', ui.siegeResponse.declinedTitle, ui.siegeResponse.declined)
+  },
+)
+
 /** Итог чужого боя: окна нет, только уведомление над картой — и только когда бой закончен. */
 function noteForeignCombatResult(key: string) {
   const res = battleResolution.value
@@ -5301,17 +5317,23 @@ button,
   .mobile-phase-dock__hint {
     order: -1;
     padding: 0.2rem 0.45rem;
+    /* Как у кнопки под ней: крупный шрифт телефона не вытягивает подсказку в столбик. */
+    font-size: min(0.78rem, 13px);
     border-radius: 8px;
     background: rgba(15, 23, 42, 0.92);
     box-shadow: 0 4px 14px rgba(2, 6, 23, 0.4);
   }
   .phase-advance-btn--dock {
     width: auto;
-    min-width: 7.25rem;
+    /* Не шире места между «Чат» и «Игра»: при крупном шрифте телефона rem растёт, и минимальная
+       ширина 7,25rem выталкивала кнопку на соседние. Длинный текст переносится. */
+    min-width: min(7.25rem, calc(100vw - 9.25rem));
     max-width: 100%;
+    overflow-wrap: break-word;
     min-height: 2.6rem;
     padding: 0.45rem 0.85rem;
-    font-size: 0.88rem;
+    /* Крупный шрифт телефона не раздувает кнопку в узкую башню: подпись не больше 15px. */
+    font-size: min(0.88rem, 15px);
     border-radius: 999px;
     box-shadow: 0 6px 18px rgba(2, 6, 23, 0.4);
   }

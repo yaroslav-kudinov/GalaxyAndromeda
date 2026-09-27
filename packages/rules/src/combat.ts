@@ -161,6 +161,11 @@ export interface CombatRoundResult {
   damageByShipId: Record<string, number>
   /** Уничтожены в этом раунде — с обеих сторон. */
   destroyedShipIds: string[]
+  /**
+   * Классы уничтоженных: после боя корабля нет ни на карте, ни в составе боя, а авианосец и
+   * бросков не оставляет — подписать его иначе нечем.
+   */
+  destroyedShipTypes?: Record<string, ShipType>
 }
 
 export interface BattleLogEntry {
@@ -494,7 +499,7 @@ function isSiegeAssaultCell(
   )
 }
 
-/** Цель обстрела: любой вражеский корабль или чужой контроль. */
+/** Цель обстрела: клетка с вражескими кораблями. Пустую чужую клетку обстрел не захватывает — стрелять там не во что. */
 export function isBombardmentDestination(
   game: GameSnapshot,
   attackerId: string,
@@ -505,9 +510,7 @@ export function isBombardmentDestination(
   // В осаждённую клетку обстрел не ведут: там стоят вперемешку оба флота.
   if (siegeAt(game, dest)) return false
 
-  const enemyShips = cell.ships.some((s) => s.ownerId !== attackerId)
-  const enemyControl = cell.controlOwnerId != null && cell.controlOwnerId !== attackerId
-  return enemyShips || enemyControl
+  return cell.ships.some((s) => s.ownerId !== attackerId)
 }
 
 /** Гексы в радиусе хода, куда ведёт бой (вражеские), но не проходят обычную валидацию движения */
@@ -1170,13 +1173,17 @@ export function scoreRolledRound(
 
   const nextDamage: Record<string, number> = { ...damageByShipId }
   const destroyedShipIds: string[] = []
+  const destroyedShipTypes: Record<string, ShipType> = {}
   for (const participant of [...preview.attacker.ships, ...preview.defender.ships]) {
     const hits = hitsOn.get(participant.shipId) ?? 0
     const before = damageByShipId[participant.shipId] ?? participant.damage
     if (before >= participant.hull) continue
     const after = before + hits
     nextDamage[participant.shipId] = after
-    if (after >= participant.hull) destroyedShipIds.push(participant.shipId)
+    if (after >= participant.hull) {
+      destroyedShipIds.push(participant.shipId)
+      destroyedShipTypes[participant.shipId] = participant.type
+    }
   }
 
   return {
@@ -1185,6 +1192,7 @@ export function scoreRolledRound(
     shipRolls,
     damageByShipId: nextDamage,
     destroyedShipIds,
+    destroyedShipTypes,
   }
 }
 

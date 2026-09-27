@@ -273,12 +273,20 @@ export function applyVictoryAndDefeatChecks(
     if (player && !player.eliminated) {
       player.eliminated = true
       clearMarkersOwnedByPlayer(game, playerId)
+      // Как при сдаче: контроль снят, на карте остаются только корабли выбывшего.
+      for (const cell of game.cells) {
+        if (cell.controlOwnerId === playerId) cell.controlOwnerId = null
+      }
+      // Осаду выбывшего снимаем: центр ему уже не перейдёт.
+      for (const [key, siege] of Object.entries(game.sieges ?? {})) {
+        if (siege.besiegerId === playerId) delete game.sieges![key]
+      }
       game.eventLog.push({
         id: `evt-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
         turn: game.turnNumber,
         phase: game.phase,
         type: 'elimination',
-        message: `${player.name} выбыл — потеряны все центры власти`,
+        message: `${player.name} выбыл — потеряны все центры власти; контроль снят, корабли остаются`,
         timestamp: Date.now(),
       })
     }
