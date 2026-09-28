@@ -2,6 +2,8 @@
 import type { BotDifficulty, GalaxySaveFile, GameSnapshot, HexCoord, LegalAction, MapDefinition, ScenarioHighlight, ScenarioStep, ShipMovePlan, BombardmentPlan, CombatOptions, CombatResolutionResult, TokenSpendRef } from '@galaxy/rules'
 import {
   actionMarkerOf,
+  computeClaimLimit,
+  doctrineClaimLimitModifier,
   createEmptyMap,
   GALAXY_SAVE_VERSION,
   executeMarkerBombardment,
@@ -59,6 +61,7 @@ import { advanceScenarioStep, fetchObservation, fetchRoomBootstrap, GameApiError
 import { loadGameSessionForRoom, saveGameSession, persistLocalGalaxySave, clearLocalGalaxySave, loadLocalGalaxySaveRaw, pruneOnlineGalaxySaveCache } from '~/composables/useGameSession'
 import { loadPlayerClaim, savePlayerClaim } from '~/composables/usePlayerClaim'
 import { bootstrapToLobbySlots, defaultSlotForRoom, roomHasFreeSlot } from '~/utils/lobby-slot'
+import { playerConditions } from '~/utils/player-conditions'
 import { useGamePresence } from '~/composables/useGamePresence'
 import { usePlayerProfile } from '~/composables/usePlayerProfile'
 import { useObservationSync } from '~/composables/useObservationSync'
@@ -303,6 +306,14 @@ const markerActionBusy = ref(false)
 const battleModalOpen = ref(false)
 const rulesHelpOpen = ref(false)
 const bugReportOpen = ref(false)
+/** Журнал партии открыт (объявлен здесь: нужен нижнему ряду телефона ниже по файлу). */
+const journalOpenEarly = ref(false)
+/**
+ * Карточка «Нужно решить» на экране: на телефоне она доходит до низа, где стоит кнопка хода.
+ * После подтверждения карточка исчезает, кнопка становится активной, и повторное касание
+ * передавало ход. Пока карточка видна, нижний ряд спрятан.
+ */
+const planningDecisionsShown = ref(false)
 /**
  * На телефоне открыто окно поверх карты: нижний ряд («Чат», кнопка хода, «Игра») лежит выше окон
  * по слою и закрывал их кнопки — например, «Выбрать на карте» в окне маркера. Пока окно открыто,
@@ -310,8 +321,11 @@ const bugReportOpen = ref(false)
  */
 const mobileOverlayOpen = computed(
   () => isNarrowUi.value
-    && (markerActionOpen.value || battleModalOpen.value || rulesHelpOpen.value || bugReportOpen.value),
+    && (markerActionOpen.value || battleModalOpen.value || rulesHelpOpen.value || bugReportOpen.value
+      || journalOpenEarly.value),
 )
+/** Кнопку хода на телефоне прячем и под карточкой «Нужно решить»: «Чат» и «Игра» ей не мешают. */
+const mobileDockHidden = computed(() => mobileOverlayOpen.value || (isNarrowUi.value && planningDecisionsShown.value))
 
 const RULES_NEWBIE_TIP_STORAGE_KEY = 'galaxy-rules-newbie-tip-dismissed'
 const showRulesNewbieTip = ref(
@@ -1138,6 +1152,22 @@ const planningStep = computed(() =>
   snapshot.value ? planningStepFor(snapshot.value, playerId.value) : 'markers',
 )
 
+watchEffect(() => {
+  const game = snapshot.value
+  planningDecisionsShown.value = !!game && !game.gameOver && game.phase === 'planning'
+    && planningStep.value !== 'markers' && !battleModalOpen.value
+})
+
+/**
+ * Решения начала хода только что закрыты — кнопка хода стала активной там, где игрок ещё жмёт
+ * «Подтвердить». Короткая пауза, чтобы повторное касание не передало ход.
+ */
+const ADVANCE_GUARD_MS = 1200
+let advanceGuardUntil = 0
+watch(planningStep, (step, previous) => {
+  if (previous && previous !== 'markers' && step === 'markers') advanceGuardUntil = Date.now() + ADVANCE_GUARD_MS
+})
+
 const canPlaceMarkers = computed(
   () =>
     isMyTurn.value
@@ -1523,6 +1553,7 @@ function applyObservation(
 
 async function endPhase() {
   if (!saveFile.value?.game || !isMyTurn.value || advancingPhase.value) return
+  if (Date.now() < advanceGuardUntil) return
 
   if (phaseAdvanceBlockedReason.value) {
     phaseHint.value = phaseAdvanceBlockedReason.value
@@ -1536,7 +1567,9 @@ async function endPhase() {
       playerId.value,
     )
     && !confirm(
-      'Вы не расставили все доступные маркеры действия.\n\nЗавершить планирование без них?',
+      myActionMarkerCount.value === 0
+        ? 'Вы не поставили ни одного маркера действия — в фазе действий вам нечего будет делать.\n\nПередать ход без маркеров?'
+        : 'Вы расставили не все доступные маркеры действия.\n\nЗавершить планирование без них?',
     )
   ) {
     return
@@ -1651,13 +1684,66 @@ const resourceRechargeBanner = computed(() => {
   return formatRechargeBudgetHint(budget, owed, explainRechargeBudget(game, me))
 })
 
+/** Захват в начале хода: сколько клеток можно занять и почему столько. */
+const claimLine = computed(() => {
+  const game = snapshot.value
+  const me = playerId.value
+  if (!game || !me || game.gameOver) return null
+  const powerCenters = game.cells.filter((cell) => cell.isPowerCenter && cell.controlOwnerId === me).length
+  return ui.claimInfo.line(
+    computeClaimLimit(game, me),
+    powerCenters,
+    doctrineClaimLimitModifier(game, me),
+    eligibleClaimCells(game, me).length,
+  )
+})
+
+/**
+ * «Действует сейчас»: неочевидные условия, которые влияют на игрока, — доктрины (свои и
+ * соперников), осады, центры, которые сменят хозяина в начале следующего хода.
+ */
+const playerConditionList = computed(() => {
+  const game = snapshot.value
+  const me = playerId.value
+  return game && me && !game.gameOver ? playerConditions(game, me) : []
+})
+
+/** Объявление нового хода — когда партия идёт и окно лобби закрыто. */
+const turnAnnounceReady = computed(
+  () => !!snapshot.value && !snapshot.value.gameOver && !showLobbyOverlay.value,
+)
 const {
-  visible: rechargeIntroVisible,
-  dismiss: dismissRechargeIntro,
-} = useResourceRechargeIntroAnnounce(
-  roomId,
-  turnNumber,
-  resourceRechargeBanner,
+  visible: turnAnnounceVisible,
+  dismiss: dismissTurnAnnounce,
+} = useTurnStartAnnounce(roomId, turnNumber, turnAnnounceReady)
+
+/** Что произошло в начале хода: тик осад, захваты, выбывания, доктрины, ваша перезарядка. */
+const turnStartEvents = computed(() => {
+  const game = snapshot.value
+  if (!game) return []
+  const types = new Set(['siege', 'claim', 'elimination', 'doctrine', 'surrender', 'recharge'])
+  const myName = myPlayerName.value
+  return game.eventLog
+    .filter((event) => event.turn === game.turnNumber && event.phase === 'planning' && types.has(event.type))
+    .filter((event) => event.type !== 'recharge' || (!!myName && event.message.includes(myName)))
+    .slice(-6)
+    .map((event) => event.message)
+})
+
+/** Что делать дальше — последняя строка объявления хода. */
+const turnNextStep = computed(() => {
+  const game = snapshot.value
+  if (!game || game.phase !== 'planning') return null
+  const step = planningStep.value
+  if (step !== 'markers') return ui.turnAnnounce.nextDecisions(ui.planningDecisions.stepNames[step])
+  if (isMyTurn.value) return ui.turnAnnounce.nextMarkers
+  return activePlayerName.value ? ui.turnAnnounce.nextWait(activePlayerName.value) : null
+})
+
+/** Журнал партии человеческим языком. */
+const journalOpen = journalOpenEarly
+const journalPlayers = computed(() =>
+  (snapshot.value?.players ?? []).map((player) => ({ id: player.id, name: player.name, color: player.color })),
 )
 
 const phaseGuidance = computed(() =>
@@ -3222,6 +3308,7 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
       :messages="chatMessages"
       :peers="chatPeers"
       :self-player-id="playerId!"
+      :colors="playerColorById"
       :sending="chatSending"
       :error="chatError"
       @send="onChatSend"
@@ -3490,10 +3577,22 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
     />
 
     <TurnEventAnnounceModal
-      v-if="rechargeIntroVisible && resourceRechargeBanner && !showLobbyOverlay"
+      v-if="turnAnnounceVisible && turnAnnounceReady && !battleModalOpen"
       :turn-number="turnNumber"
       :recharge-banner="resourceRechargeBanner"
-      @close="dismissRechargeIntro"
+      :claim-line="claimLine"
+      :notes="playerConditionList"
+      :events="turnStartEvents"
+      :next-step="turnNextStep"
+      @close="dismissTurnAnnounce"
+    />
+
+    <GameJournalModal
+      v-if="journalOpen && snapshot"
+      :events="snapshot.eventLog"
+      :players="journalPlayers"
+      @close="journalOpen = false"
+      @focus-cell="selectedKey = hexKey($event.q, $event.r)"
     />
 
     <MarkerActionModal
@@ -3787,7 +3886,7 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
     </div>
 
     <div
-      v-if="isMyTurn && isNarrowUi && !mobileOverlayOpen"
+      v-if="isMyTurn && isNarrowUi && !mobileDockHidden"
       class="mobile-phase-dock"
       role="region"
       aria-label="Действие фазы"
@@ -3838,6 +3937,15 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
       <div v-if="!panelCollapsed" id="game-side-panel" class="panel-inner">
         <header class="panel-heading-row">
           <h2 class="panel-heading">Игра</h2>
+          <button
+            v-if="snapshot"
+            type="button"
+            class="journal-open-btn"
+            :title="ui.journal.openHint"
+            @click="journalOpen = true"
+          >
+            {{ ui.journal.open }}
+          </button>
           <div class="panel-heading-meta">
             <span
               class="you-mini"
@@ -3875,7 +3983,7 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
         </section>
 
         <section
-          v-if="snapshot && (snapshot.doctrineWindow || resourceRechargeBanner)"
+          v-if="snapshot && (snapshot.doctrineWindow || resourceRechargeBanner || claimLine || playerConditionList.length)"
           class="block event-block"
         >
           <DoctrinePanel
@@ -3883,6 +3991,8 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
             :player-id="playerId"
             :busy="doctrineBusy"
             :recharge-banner="resourceRechargeBanner"
+            :claim-line="claimLine"
+            :notes="playerConditionList"
             @choose="chooseDoctrineAction"
           />
         </section>
@@ -4534,6 +4644,20 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
   justify-content: space-between;
   gap: 0.5rem;
   margin-bottom: 0.65rem;
+}
+.journal-open-btn {
+  margin-left: 0.5rem;
+  padding: 0.15rem 0.55rem;
+  border-radius: 999px;
+  border: 1px solid #475569;
+  background: rgba(30, 41, 59, 0.8);
+  color: #cbd5e1;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+.journal-open-btn:hover {
+  border-color: #93c5fd;
+  color: #e2e8f0;
 }
 .panel-heading {
   margin: 0;

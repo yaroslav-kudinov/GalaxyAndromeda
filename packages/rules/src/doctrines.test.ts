@@ -89,7 +89,8 @@ describe('доктрины: окна и выбор', () => {
     expect(computeRechargeBudget(game, 'player-2')).toBe(3)
     expect(rechargePicksRemaining(game, 'player-1')).toBe(0)
     expect(rechargePicksRemaining(game, 'player-2')).toBe(3)
-    expect(game.eventLog.at(-1)?.message).toMatch(/Доктрины вскрыты/)
+    // После вскрытия в журнал могут попасть перевёрнутые фишки — поэтому ищем, а не берём последнее.
+    expect(game.eventLog.some((event) => /Доктрины вскрыты/.test(event.message))).toBe(true)
   })
 
   it('не выбравший к концу планирования остаётся без доктрины', () => {

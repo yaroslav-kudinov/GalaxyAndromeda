@@ -11,6 +11,8 @@ const props = defineProps<{
   selfPlayerId: string
   sending?: boolean
   error?: string | null
+  /** Цвета игроков по id — имя и полоса сообщения в цвете отправителя. */
+  colors?: Record<string, string>
 }>()
 
 const emit = defineEmits<{
@@ -23,6 +25,20 @@ const { panelRef, panelStyle, isDragging, onDragHandlePointerDown } = useDraggab
 const draft = ref('')
 /** '' = общий канал */
 const toPlayerId = ref('')
+/** Фильтр: '' — все; иначе переписка с игроком — его сообщения и ваши личные ему. */
+const onlyPlayerId = ref('')
+
+const shownMessages = computed(() => {
+  const id = onlyPlayerId.value
+  if (!id) return props.messages
+  return props.messages.filter(
+    (m) => m.fromPlayerId === id || (m.fromPlayerId === props.selfPlayerId && m.toPlayerId === id),
+  )
+})
+
+function colorOf(id: string | null | undefined): string | undefined {
+  return id ? props.colors?.[id] : undefined
+}
 const listRef = ref<HTMLElement | null>(null)
 
 const placeholder = computed(() =>
@@ -86,6 +102,15 @@ watch(
       >
         <strong>{{ t.title }}</strong>
         <label class="room-chat-peer">
+          <span>{{ t.filter }}</span>
+          <select v-model="onlyPlayerId" :title="t.filterHint">
+            <option value="">{{ t.filterAll }}</option>
+            <option v-for="p in peers" :key="p.id" :value="p.id">
+              {{ p.name }}
+            </option>
+          </select>
+        </label>
+        <label class="room-chat-peer">
           <span>{{ t.pickPeer }}</span>
           <select v-model="toPlayerId">
             <option value="">{{ t.everyone }}</option>
@@ -97,21 +122,22 @@ watch(
       </header>
 
       <div ref="listRef" class="room-chat-list">
-        <p v-if="!messages.length" class="room-chat-empty">{{ t.empty }}</p>
+        <p v-if="!shownMessages.length" class="room-chat-empty">{{ onlyPlayerId ? t.filterEmpty : t.empty }}</p>
         <div
-          v-for="m in messages"
+          v-for="m in shownMessages"
           :key="m.id"
           class="room-chat-msg"
           :class="{
             'room-chat-msg--mine': m.fromPlayerId === selfPlayerId,
             'room-chat-msg--dm': m.toPlayerId != null,
           }"
+          :style="colorOf(m.fromPlayerId) ? { borderLeftColor: colorOf(m.fromPlayerId) } : undefined"
         >
           <div class="room-chat-meta">
-            <span class="room-chat-from">
+            <span class="room-chat-from" :style="{ color: colorOf(m.fromPlayerId) }">
               {{ m.fromPlayerId === selfPlayerId ? t.you : m.fromName }}
             </span>
-            <span v-if="m.toPlayerId" class="room-chat-dm-tag">
+            <span v-if="m.toPlayerId" class="room-chat-dm-tag" :style="{ color: colorOf(m.toPlayerId) }">
               →
               {{
                 m.toPlayerId === selfPlayerId
@@ -242,6 +268,7 @@ watch(
 .room-chat-msg {
   padding: 0.35rem 0.45rem;
   border-radius: 8px;
+  border-left: 3px solid transparent;
   background: rgba(30, 41, 59, 0.85);
 }
 .room-chat-msg--mine {
