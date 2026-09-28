@@ -322,8 +322,10 @@ const planningDecisionsShown = ref(false)
 const mobileOverlayOpen = computed(
   () => isNarrowUi.value
     && (markerActionOpen.value || battleModalOpen.value || rulesHelpOpen.value || bugReportOpen.value
-      || journalOpenEarly.value || planningDecisionsShown.value),
+      || journalOpenEarly.value),
 )
+/** Кнопку хода на телефоне прячем и под карточкой «Нужно решить»: «Чат» и «Игра» ей не мешают. */
+const mobileDockHidden = computed(() => mobileOverlayOpen.value || (isNarrowUi.value && planningDecisionsShown.value))
 
 const RULES_NEWBIE_TIP_STORAGE_KEY = 'galaxy-rules-newbie-tip-dismissed'
 const showRulesNewbieTip = ref(
@@ -3884,7 +3886,7 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
     </div>
 
     <div
-      v-if="isMyTurn && isNarrowUi && !mobileOverlayOpen"
+      v-if="isMyTurn && isNarrowUi && !mobileDockHidden"
       class="mobile-phase-dock"
       role="region"
       aria-label="Действие фазы"

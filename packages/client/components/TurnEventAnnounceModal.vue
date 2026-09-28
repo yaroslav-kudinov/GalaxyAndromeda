@@ -101,6 +101,10 @@ const kicker = computed(() => (props.turnNumber <= 1 ? t.matchStart : t.newTurn)
 }
 .event-announce {
   width: min(28rem, calc(100vw - 2rem));
+  /* Объявление хода бывает длинным: на низком экране оно прокручивается, а не обрезается. */
+  max-height: calc(100dvh - 2rem);
+  overflow-y: auto;
+  box-sizing: border-box;
   padding: 1.15rem 1.2rem 1rem;
   border-radius: 14px;
   border: 2px solid rgba(192, 132, 252, 0.55);
