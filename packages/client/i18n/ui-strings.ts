@@ -61,6 +61,10 @@ export const uiStringsRu = {
     close: 'Свернуть чат',
     empty: 'Пока нет сообщений',
     pickPeer: 'Кому',
+    filter: 'Показать',
+    filterAll: 'всех',
+    filterHint: 'Только переписка с игроком: его сообщения и ваши личные ему',
+    filterEmpty: 'С этим игроком сообщений пока нет',
     everyone: 'Всем',
     you: 'вы',
     errorSend: 'Не удалось отправить',
@@ -104,6 +108,7 @@ export const uiStringsRu = {
     finish: 'Завершить обучение',
   },
   doctrines: {
+    nowActive: 'Действует сейчас',
     heading: 'Доктрина',
     windowLabel: (from: number, to: number) => `Ходы ${from}–${to}`,
     choosePrompt:
@@ -221,6 +226,27 @@ export const uiStringsRu = {
   garrisonChoice: {
     banner: 'Ваш гарнизон стоит на клетке этого боя. Встаньте на сторону одного из противников — тогда он будет биться на клетке — или не вмешивайтесь.',
   },
+  claimInfo: {
+    line: (limit: number, powerCenters: number, doctrine: number, eligible: number) => {
+      const why = `1 + центров власти ${powerCenters}${doctrine > 0 ? ` + ${doctrine} за доктрину` : doctrine < 0 ? ` − ${-doctrine} за доктрину` : ''}`
+      const head = `Захват в начале хода: до ${limit} ${pluralRu(limit, 'клетки', 'клеток', 'клеток')} (${why}).`
+      if (!eligible) return `${head} Сейчас под вашими кораблями нет клеток для захвата.`
+      const now = `Сейчас можно занять ${eligible} ${pluralRu(eligible, 'клетку', 'клетки', 'клеток')}`
+      return eligible > limit ? `${head} ${now} — займёте ${limit}, какие именно, выберете сами.` : `${head} ${now}.`
+    },
+  },
+  journal: {
+    open: 'Журнал',
+    openHint: 'Журнал партии: кто что сделал, по ходам',
+    title: 'Журнал партии',
+    filter: 'Показать',
+    everyone: 'всех',
+    close: 'Закрыть',
+    hint: 'Последние события партии, новые ходы сверху. Координаты в скобках показывают клетку на карте.',
+    empty: 'Событий пока нет.',
+    turn: (turn: number) => `Ход ${turn}`,
+    showCell: 'Показать клетку на карте',
+  },
   siegeResponse: {
     declinedTitle: 'Осада',
     declined: 'Гарнизон не стал нападать — осада продолжается',
@@ -289,6 +315,12 @@ export const uiStringsRu = {
   },
   turnAnnounce: {
     matchStart: 'Начало партии',
+    newTurn: 'Новый ход',
+    turnTitle: (turn: number) => `Ход ${turn}`,
+    nowActive: 'Действует сейчас',
+    nextDecisions: (step: string) => `Сначала примите решение в карточке «Нужно решить»: ${step.toLowerCase()}.`,
+    nextMarkers: 'Ваша очередь: поставьте маркеры действия на клетки со своими кораблями.',
+    nextWait: (name: string) => `Сейчас планирует ${name}. Когда дойдёт ваша очередь, кнопка вверху подскажет.`,
     rechargeHint:
       'Каждый ход в начале планирования перевёрнутые фишки поднимаются — не больше вашего бюджета перезарядки.',
     ok: 'Понятно',

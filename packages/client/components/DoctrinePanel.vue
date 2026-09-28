@@ -9,6 +9,7 @@ import {
   DOCTRINES,
 } from '@galaxy/rules'
 import { useUiStrings } from '~/i18n/ui-strings'
+import type { PlayerCondition } from '~/utils/player-conditions'
 
 const props = defineProps<{
   snapshot: GameSnapshot
@@ -16,6 +17,10 @@ const props = defineProps<{
   busy?: boolean
   /** Строка бюджета перезарядки — живёт в этом же блоке боковой панели. */
   rechargeBanner?: string | null
+  /** Захват в начале хода: лимит и сколько клеток можно занять. */
+  claimLine?: string | null
+  /** «Действует сейчас»: неочевидные условия — доктрины, осады, скорые захваты центров. */
+  notes?: readonly PlayerCondition[]
 }>()
 
 const emit = defineEmits<{
@@ -68,8 +73,15 @@ const showNextChoice = computed(() => {
 </script>
 
 <template>
-  <section v-if="enabled || rechargeBanner" class="doctrines">
+  <section v-if="enabled || rechargeBanner || claimLine || notes?.length" class="doctrines">
     <ResourceRechargeBanner v-if="rechargeBanner" :text="rechargeBanner" variant="panel" />
+    <p v-if="claimLine" class="doctrines-info">{{ claimLine }}</p>
+    <div v-if="notes?.length" class="doctrines-now">
+      <h4 class="doctrines-now-title">{{ t.nowActive }}</h4>
+      <ul>
+        <li v-for="(note, index) in notes" :key="index" :class="`doctrines-now--${note.tone}`">{{ note.text }}</li>
+      </ul>
+    </div>
 
     <template v-if="enabled">
       <header class="doctrines-head">
@@ -122,6 +134,38 @@ const showNextChoice = computed(() => {
 </template>
 
 <style scoped>
+.doctrines-info {
+  margin: 0;
+  font-size: 0.8rem;
+  line-height: 1.35;
+  color: #cbd5e1;
+}
+.doctrines-now-title {
+  margin: 0.2rem 0 0.15rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #94a3b8;
+}
+.doctrines-now ul {
+  margin: 0;
+  padding-left: 1rem;
+  font-size: 0.8rem;
+  line-height: 1.35;
+}
+.doctrines-now li + li {
+  margin-top: 0.2rem;
+}
+.doctrines-now--warn {
+  color: #fbbf24;
+}
+.doctrines-now--good {
+  color: #86efac;
+}
+.doctrines-now--info {
+  color: #cbd5e1;
+}
 .doctrines {
   display: flex;
   flex-direction: column;

@@ -67,6 +67,12 @@ function setPicksRemaining(game: GameSnapshot, ownerId: string, value: number): 
   else delete game.rechargePicksRemainingByPlayer[ownerId]
 }
 
+/** «Имя: перевёрнуто фишек N» — чтобы в журнале было видно, чья перезарядка. */
+function rechargeMessage(game: GameSnapshot, playerId: string, count: number, auto: boolean): string {
+  const name = game.players.find((player) => player.id === playerId)?.name ?? playerId
+  return `Перезарядка${auto ? ' (выбор игры)' : ''}: ${name} переворачивает фишек: ${count}`
+}
+
 function appendRechargeEvent(game: GameSnapshot, message: string): void {
   game.eventLog.push({
     id: `evt-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
@@ -112,6 +118,8 @@ export function grantRechargeBudgetFor(game: GameSnapshot, playerId: string): vo
       const token = entry.cell.resourceTokens[entry.tokenIndex]
       if (token) token.faceUp = true
     }
+    // Выбирать было нечего — перевернулись все; в журнале это тоже видно.
+    appendRechargeEvent(game, rechargeMessage(game, playerId, faceDown.length, true))
     return
   }
   setPicksRemaining(game, playerId, budget)
@@ -175,7 +183,7 @@ export function executeRechargePicks(
     if (token) token.faceUp = true
   }
   setPicksRemaining(game, playerId, remaining - resolved.length)
-  appendRechargeEvent(game, `Перезарядка: поднято фишек ${resolved.length}`)
+  appendRechargeEvent(game, rechargeMessage(game, playerId, resolved.length, false))
   return []
 }
 
@@ -206,7 +214,7 @@ export function autoResolveRechargePicks(game: GameSnapshot, playerId: string): 
   }
   setPicksRemaining(game, playerId, 0)
   if (taken.length > 0) {
-    appendRechargeEvent(game, `Перезарядка автоматически: поднято фишек ${taken.length}`)
+    appendRechargeEvent(game, rechargeMessage(game, playerId, taken.length, true))
   }
   return taken.length
 }
