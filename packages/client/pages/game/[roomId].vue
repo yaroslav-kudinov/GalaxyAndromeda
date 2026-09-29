@@ -52,7 +52,6 @@ import {
   combatResolutionFingerprint,
   combatResolutionFromPending,
   computeRechargeBudget,
-  countFaceDownTokens,
   explainRechargeBudget,
   formatRechargeBudgetHint,
   getCombatRetreatDestinations,
@@ -61,7 +60,7 @@ import { advanceScenarioStep, fetchObservation, fetchRoomBootstrap, GameApiError
 import { loadGameSessionForRoom, saveGameSession, persistLocalGalaxySave, clearLocalGalaxySave, loadLocalGalaxySaveRaw, pruneOnlineGalaxySaveCache } from '~/composables/useGameSession'
 import { loadPlayerClaim, savePlayerClaim } from '~/composables/usePlayerClaim'
 import { bootstrapToLobbySlots, defaultSlotForRoom, roomHasFreeSlot } from '~/utils/lobby-slot'
-import { playerConditions } from '~/utils/player-conditions'
+import { ownDoctrineSummary, playerConditions } from '~/utils/player-conditions'
 import { gameConfirm } from '~/composables/useGameDialog'
 import { useGamePresence } from '~/composables/useGamePresence'
 import { usePlayerProfile } from '~/composables/usePlayerProfile'
@@ -1682,31 +1681,34 @@ async function chooseDoctrineAction(doctrineId: import('@galaxy/rules').Doctrine
     doctrineBusy.value = false
   }
 }
-const resourceRechargeBanner = computed(() => {
+/**
+ * Три яркие плашки хода — «Перезарядка», «Захват», «Доктрина»: главное, что игроку нужно знать,
+ * крупно, с пояснением мелко. Показываются в панели «Игра» и в объявлении хода.
+ */
+const infoBanners = computed(() => {
   const game = snapshot.value
   const me = playerId.value
-  if (!game || !me) return null
-  // Отсчёта до перезарядки больше нет: фишки возвращаются каждый ход, но не больше
-  // бюджета, и бюджет падает с ростом числа центров власти.
+  if (!game || !me || game.gameOver) return []
+  const out: { key: string; title: string; detail?: string | null; tone: 'amber' | 'teal' | 'violet' | 'warn' }[] = []
   const owed = game.rechargePicksRemainingByPlayer?.[me] ?? 0
   const budget = computeRechargeBudget(game, me)
-  // Нулевой бюджет тоже объясняем: иначе непонятно, почему фишки не переворачиваются.
-  if (owed <= 0 && budget <= 0 && countFaceDownTokens(game, me) === 0) return null
-  return formatRechargeBudgetHint(budget, owed, explainRechargeBudget(game, me))
-})
-
-/** Захват в начале хода: сколько клеток можно занять и почему столько. */
-const claimLine = computed(() => {
-  const game = snapshot.value
-  const me = playerId.value
-  if (!game || !me || game.gameOver) return null
+  out.push({
+    key: 'recharge',
+    title: formatRechargeBudgetHint(budget, owed),
+    detail: ui.claimInfo.rechargeWhy(explainRechargeBudget(game, me)),
+    tone: budget > 0 ? 'amber' : 'warn',
+  })
   const powerCenters = game.cells.filter((cell) => cell.isPowerCenter && cell.controlOwnerId === me).length
-  return ui.claimInfo.line(
-    computeClaimLimit(game, me),
-    powerCenters,
-    doctrineClaimLimitModifier(game, me),
-    eligibleClaimCells(game, me).length,
-  )
+  const limit = computeClaimLimit(game, me)
+  out.push({
+    key: 'claim',
+    title: ui.claimInfo.title(limit),
+    detail: ui.claimInfo.detail(limit, powerCenters, doctrineClaimLimitModifier(game, me), eligibleClaimCells(game, me).length),
+    tone: 'teal',
+  })
+  const doctrine = ownDoctrineSummary(game, me)
+  if (doctrine) out.push({ key: 'doctrine', title: doctrine.title, detail: doctrine.detail, tone: doctrine.warn ? 'warn' : 'violet' })
+  return out
 })
 
 /**
@@ -3599,8 +3601,7 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
     <TurnEventAnnounceModal
       v-if="turnAnnounceVisible && turnAnnounceReady && !battleModalOpen"
       :turn-number="turnNumber"
-      :recharge-banner="resourceRechargeBanner"
-      :claim-line="claimLine"
+      :banners="infoBanners"
       :notes="playerConditionList"
       :events="turnStartEvents"
       :next-step="turnNextStep"
@@ -4003,15 +4004,14 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
         </section>
 
         <section
-          v-if="snapshot && (snapshot.doctrineWindow || resourceRechargeBanner || claimLine || playerConditionList.length)"
+          v-if="snapshot && (snapshot.doctrineWindow || infoBanners.length || playerConditionList.length)"
           class="block event-block"
         >
           <DoctrinePanel
             :snapshot="snapshot"
             :player-id="playerId"
             :busy="doctrineBusy"
-            :recharge-banner="resourceRechargeBanner"
-            :claim-line="claimLine"
+            :banners="infoBanners"
             :notes="playerConditionList"
             @choose="chooseDoctrineAction"
           />

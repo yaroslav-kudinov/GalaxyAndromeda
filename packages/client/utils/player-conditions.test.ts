@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { createEmptyMap, gameSnapshotFromMap } from '@galaxy/rules'
-import { playerConditions } from './player-conditions'
+import { ownDoctrineSummary, playerConditions } from './player-conditions'
 
 function board() {
   const map = createEmptyMap('conditions', 'Условия')
@@ -27,8 +27,13 @@ test('«Атака» при осаде своего центра: предупр
     'player-1': { doctrineId: 'attack', fromTurn: 1 },
     'player-2': { doctrineId: 'defense', fromTurn: 1 },
   }
+  const own = ownDoctrineSummary(game, 'player-1')
+  assert.equal(own?.title, 'Доктрина: «Атака» не действует')
+  assert.ok(own?.detail.startsWith('Осаждён ваш центр власти (0,0)'))
+  assert.equal(own?.warn, true)
   const texts = playerConditions(game, 'player-1').map((c) => c.text)
-  assert.ok(texts.some((t) => t.startsWith('«Атака» сейчас не действует: осаждён ваш центр власти (0,0)')))
+  // Своя доктрина — на отдельной плашке, в списке её нет.
+  assert.ok(!texts.some((t) => t.includes('«Атака»') && t.startsWith('Ваша')))
   assert.ok(texts.some((t) => t.includes('«Оборона»: на его клетках вашим кораблям нужно на 1 больше')))
   assert.ok(texts.some((t) => t.startsWith('Ваш центр (0,0) осаждает игрок')))
 })

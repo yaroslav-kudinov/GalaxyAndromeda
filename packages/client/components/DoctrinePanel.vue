@@ -6,7 +6,7 @@ import {
   doctrineDefinition,
   doctrinesEnabled,
   doctrineWindowStart,
-  DOCTRINES,
+  SELECTABLE_DOCTRINES,
 } from '@galaxy/rules'
 import { useUiStrings } from '~/i18n/ui-strings'
 import type { PlayerCondition } from '~/utils/player-conditions'
@@ -15,10 +15,8 @@ const props = defineProps<{
   snapshot: GameSnapshot
   playerId: string
   busy?: boolean
-  /** Строка бюджета перезарядки — живёт в этом же блоке боковой панели. */
-  rechargeBanner?: string | null
-  /** Захват в начале хода: лимит и сколько клеток можно занять. */
-  claimLine?: string | null
+  /** Яркие плашки хода: перезарядка, захват, доктрина. */
+  banners?: readonly { key: string; title: string; detail?: string | null; tone: 'amber' | 'teal' | 'violet' | 'warn' }[]
   /** «Действует сейчас»: неочевидные условия — доктрины, осады, скорые захваты центров. */
   notes?: readonly PlayerCondition[]
 }>()
@@ -73,9 +71,15 @@ const showNextChoice = computed(() => {
 </script>
 
 <template>
-  <section v-if="enabled || rechargeBanner || claimLine || notes?.length" class="doctrines">
-    <ResourceRechargeBanner v-if="rechargeBanner" :text="rechargeBanner" variant="panel" />
-    <p v-if="claimLine" class="doctrines-info">{{ claimLine }}</p>
+  <section v-if="enabled || banners?.length || notes?.length" class="doctrines">
+    <InfoBanner
+      v-for="banner in banners"
+      :key="banner.key"
+      :title="banner.title"
+      :detail="banner.detail"
+      :tone="banner.tone"
+      variant="panel"
+    />
     <div v-if="notes?.length" class="doctrines-now">
       <h4 class="doctrines-now-title">{{ t.nowActive }}</h4>
       <ul>
@@ -92,7 +96,7 @@ const showNextChoice = computed(() => {
       <template v-if="owed">
         <p class="doctrines-prompt">{{ t.choosePrompt }}</p>
         <ul class="doctrine-options">
-          <li v-for="doctrine in DOCTRINES" :key="doctrine.id" class="doctrine-option">
+          <li v-for="doctrine in SELECTABLE_DOCTRINES" :key="doctrine.id" class="doctrine-option">
             <div class="doctrine-text">
               <strong>{{ doctrine.name }}</strong>
               <span class="doctrine-line"><em>{{ t.gives }}:</em> {{ doctrine.gives }}</span>

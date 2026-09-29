@@ -22,26 +22,47 @@ export interface PlayerCondition {
 
 const cell = (key: string) => `(${key})`
 
+export interface OwnDoctrineSummary {
+  title: string
+  detail: string
+  /** Доктрина не действует или её нет — плашка предупреждающая. */
+  warn: boolean
+}
+
+/** Своя доктрина для плашки: название, что даёт и чем платит; «Атака» при осаде не действует. */
+export function ownDoctrineSummary(game: GameSnapshot, playerId: string): OwnDoctrineSummary | null {
+  if (!game.doctrineWindow) return null
+  const mine = activeDoctrineId(game, playerId)
+  if (mine === 'none') {
+    return {
+      title: 'Доктрина: нет',
+      detail: 'Доктрину не выбрали вовремя — до следующего выбора вы без доктрины.',
+      warn: true,
+    }
+  }
+  const def = doctrineDefinition(mine)
+  const besieged = Object.entries(game.sieges ?? {}).filter(([, siege]) => siege.besiegedId === playerId)
+  if (mine === 'attack' && besieged.length) {
+    return {
+      title: `Доктрина: «${def.name}» не действует`,
+      detail: `Осаждён ваш центр власти ${besieged.map(([key]) => cell(key)).join(', ')}. Бонус вернётся, когда осаду снимут. Плата при этом остаётся: ${def.costs}.`,
+      warn: true,
+    }
+  }
+  return { title: `Доктрина: «${def.name}»`, detail: `${capitalize(def.gives)}. Плата: ${def.costs}.`, warn: false }
+}
+
+function capitalize(text: string): string {
+  return text.charAt(0).toUpperCase() + text.slice(1)
+}
+
+/** Неочевидные условия, кроме своей доктрины: она показана отдельной плашкой. */
 export function playerConditions(game: GameSnapshot, playerId: string): PlayerCondition[] {
   const out: PlayerCondition[] = []
   const nameOf = (id: string | null | undefined) => game.players.find((player) => player.id === id)?.name ?? id ?? '—'
   const sieges = Object.entries(game.sieges ?? {})
   const myBesieged = sieges.filter(([, siege]) => siege.besiegedId === playerId)
   const rivals = game.players.filter((player) => player.id !== playerId && !player.eliminated)
-
-  // Своя доктрина: что даёт и чем платит; «Атака» при осаде ваших центров не действует.
-  const mine = activeDoctrineId(game, playerId)
-  if (mine !== 'none') {
-    const def = doctrineDefinition(mine)
-    if (mine === 'attack' && myBesieged.length) {
-      out.push({
-        tone: 'warn',
-        text: `«Атака» сейчас не действует: осаждён ваш центр власти ${myBesieged.map(([key]) => cell(key)).join(', ')}. Бонус вернётся, когда осаду снимут.`,
-      })
-    } else {
-      out.push({ tone: 'info', text: `Ваша доктрина «${def.name}»: ${def.gives}. Плата: ${def.costs}.` })
-    }
-  }
 
   // Доктрины соперников, которые меняют ваши бои и их манёвры.
   for (const rival of rivals) {

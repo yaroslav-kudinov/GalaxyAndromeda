@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { gameConfirm } from '~/composables/useGameDialog'
 /**
  * Обязательные решения планирования в карточке над картой — строго по одному, в порядке
  * правил (`planningStepFor`): потери гарнизона в осаде, доктрина, клетки захвата, фишки
@@ -7,7 +8,7 @@
 import type { DoctrineId, GameSnapshot, HexCoord, ResourceTokenRef, ShipUnit } from '@galaxy/rules'
 import {
   claimPicksRemaining,
-  DOCTRINES,
+  SELECTABLE_DOCTRINES,
   eligibleClaimCells,
   planningStepFor,
   rechargePicksRemaining,
@@ -85,9 +86,27 @@ const garrisonOf = (key: string): ShipUnit[] =>
     ?.ships.filter((ship) => ship.ownerId === props.playerId) ?? []
 const siegeChoice = ref<Record<string, string>>({})
 
-// Новый долг — чистый выбор.
-watch(() => `${props.snapshot.turnNumber}:${claimsOwed.value}`, () => { claimSelected.value = [] })
-watch(() => `${props.snapshot.turnNumber}:${rechargeOwed.value}`, () => { rechargeSelected.value = [] })
+/** Центры власти, потом клетки с дорогими фишками — так же выбирает игра, когда решает за игрока. */
+function claimRank(cell: { isPowerCenter?: boolean; resourceTokens: { value: number }[] }): number {
+  return (cell.isPowerCenter ? 1000 : 0) + cell.resourceTokens.reduce((sum, token) => sum + token.value, 0)
+}
+
+// Новый выбор — всё доступное уже отмечено: подтверждение одним нажатием, снять отметки можно.
+watch(
+  () => `${props.snapshot.turnNumber}:${claimsOwed.value}`,
+  () => {
+    claimSelected.value = [...claimCandidates.value]
+      .sort((a, b) => claimRank(b) - claimRank(a))
+      .slice(0, claimNeed.value)
+      .map((cell) => keyOf(cell.coord))
+  },
+  { immediate: true },
+)
+watch(
+  () => `${props.snapshot.turnNumber}:${rechargeOwed.value}`,
+  () => { rechargeSelected.value = faceDownTokens.value.slice(0, rechargeNeed.value).map((token) => token.key) },
+  { immediate: true },
+)
 watch(() => `${props.snapshot.turnNumber}:${siegeCells.value.join('|')}`, () => { siegeChoice.value = {} })
 
 const visible = computed(() => step.value !== 'markers')
@@ -108,15 +127,25 @@ function toggleToken(key: string, coord: HexCoord) {
   emit('focusCell', coord)
 }
 
-function submitClaims() {
+async function submitClaims() {
   const picks = claimCandidates.value
     .filter((cell) => claimSelected.value.includes(keyOf(cell.coord)))
     .map((cell) => ({ ...cell.coord }))
+  // Меньше доступного — можно, но игрок должен понимать, что отказывается от клеток.
+  if (picks.length < claimNeed.value) {
+    const sure = await gameConfirm(t.claimsFewer(picks.length, claimNeed.value))
+    if (!sure) return
+  }
   emit('claims', picks)
 }
 
-function submitRecharge() {
-  emit('recharge', faceDownTokens.value.filter((token) => rechargeSelected.value.includes(token.key)).map((token) => token.ref))
+async function submitRecharge() {
+  const picks = faceDownTokens.value.filter((token) => rechargeSelected.value.includes(token.key)).map((token) => token.ref)
+  if (picks.length < rechargeNeed.value) {
+    const sure = await gameConfirm(t.rechargeFewer(picks.length, rechargeNeed.value))
+    if (!sure) return
+  }
+  emit('recharge', picks)
 }
 
 function submitSiege() {
@@ -160,7 +189,7 @@ function cellTokens(coord: HexCoord): string {
       <p class="pd-title">{{ t.doctrineTitle }}</p>
       <div class="pd-doctrines">
         <button
-          v-for="doctrine in DOCTRINES"
+          v-for="doctrine in SELECTABLE_DOCTRINES"
           :key="doctrine.id"
           type="button"
           class="pd-doctrine"
@@ -168,8 +197,8 @@ function cellTokens(coord: HexCoord): string {
           @click="emit('doctrine', doctrine.id)"
         >
           <strong>{{ doctrine.name }}</strong>
-          <span v-if="doctrine.id !== 'none'" class="pd-gives">{{ doctrine.gives }}</span>
-          <span v-if="doctrine.id !== 'none'" class="pd-costs">{{ t.costs }}: {{ doctrine.costs }}</span>
+          <span class="pd-gives">{{ doctrine.gives }}</span>
+          <span class="pd-costs">{{ t.costs }}: {{ doctrine.costs }}</span>
         </button>
       </div>
     </div>
@@ -195,7 +224,7 @@ function cellTokens(coord: HexCoord): string {
       <button
         type="button"
         class="pd-confirm"
-        :disabled="busy || claimSelected.length !== claimNeed"
+        :disabled="busy"
         @click="submitClaims"
       >
         {{ t.claimsConfirm(claimSelected.length, claimNeed) }}
@@ -222,7 +251,7 @@ function cellTokens(coord: HexCoord): string {
       <button
         type="button"
         class="pd-confirm"
-        :disabled="busy || rechargeSelected.length !== rechargeNeed"
+        :disabled="busy"
         @click="submitRecharge"
       >
         {{ t.rechargeConfirm(rechargeSelected.length, rechargeNeed) }}
