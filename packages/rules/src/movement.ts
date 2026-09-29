@@ -868,7 +868,7 @@ export function getLegalActionsForSnapshot(
     actions.push({
       id: 'execute-claim-picks',
       type: 'claimPicks',
-      description: `Занять клетки (осталось ${owedClaims}); без выбора займутся лучшие`,
+      description: `Захват: до ${owedClaims} — какие клетки занять, в picks (можно меньше; [] — ни одной); без picks займутся лучшие`,
       params: { remaining: owedClaims },
     })
   }
@@ -907,7 +907,7 @@ export function getLegalActionsForSnapshot(
     actions.push({
       id: 'execute-recharge-picks',
       type: 'rechargePicks',
-      description: `Перезарядка: выбрать фишки (осталось ${owedPicks}); без выбора поднимутся самые крупные`,
+      description: `Перезарядка: до ${owedPicks} — какие фишки поднять, в picks (можно меньше; [] — ни одной); без picks поднимутся самые крупные`,
       params: { remaining: owedPicks },
     })
   }
