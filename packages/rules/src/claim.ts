@@ -125,15 +125,15 @@ export function transferControlIfEnemyOwned(
 }
 
 /**
- * Конец игрового хода: занять клетки в пределах лимита.
+ * Конец игрового хода: выбор клеток для захвата в пределах лимита.
  *
- * Если подходящих клеток не больше лимита — занимаем все молча. Если больше, выбор
- * откладывается: игрок закроет его в начале следующего планирования, до выдачи бюджета
- * перезарядки, потому что бюджет зависит от числа центров власти после захвата.
+ * Игрок выбирает каждый ход, даже если клеток не больше лимита: занять можно и меньше, и
+ * ничего — например, не брать центр власти, который урежет перезарядку. Выбор закрывается в
+ * начале следующего планирования, до выдачи бюджета перезарядки, потому что бюджет зависит
+ * от числа центров власти после захвата. Сколько клеток отмечено заранее — `min(лимит, клеток)`.
  */
 export function applyTurnEndClaims(game: GameSnapshot, mapId: string): { claimed: number } {
-  let claimed = 0
-  const parts: string[] = []
+  const claimed = 0
   game.claimPicksRemainingByPlayer = {}
 
   for (const playerId of participantsOf(game)) {
@@ -143,17 +143,10 @@ export function applyTurnEndClaims(game: GameSnapshot, mapId: string): { claimed
     const limit = computeClaimLimit(game, playerId)
     if (limit <= 0) continue
 
-    if (eligible.length <= limit) {
-      for (const cell of eligible) claimCell(game, cell, playerId)
-      claimed += eligible.length
-      parts.push(describeClaims(game, playerId, eligible))
-      continue
-    }
-    setClaimPicksRemaining(game, playerId, limit)
+    setClaimPicksRemaining(game, playerId, Math.min(limit, eligible.length))
   }
 
-  if (claimed) appendClaimEvent(game, `Захват клеток: ${parts.join('; ')}`)
-  if (claimed) applyVictoryAndDefeatChecks(game, mapId)
+  void mapId
   return { claimed }
 }
 
@@ -184,7 +177,7 @@ export function executeClaimPicks(
 ): string[] {
   const remaining = claimPicksRemaining(game, playerId)
   if (remaining <= 0) return [CLAIM_PICK_ERRORS.nothingOwed]
-  if (picks.length === 0) return [CLAIM_PICK_ERRORS.nothingOwed]
+  // Меньше лимита и даже ни одной — можно: игрок сам решает, что брать.
   if (picks.length > remaining) return [CLAIM_PICK_ERRORS.tooMany]
 
   const seen = new Set<string>()
@@ -205,8 +198,10 @@ export function executeClaimPicks(
   }
 
   for (const cell of resolved) claimCell(game, cell, playerId)
-  setClaimPicksRemaining(game, playerId, remaining - resolved.length)
-  appendClaimEvent(game, `Захват клеток: ${describeClaims(game, playerId, resolved)}`)
+  setClaimPicksRemaining(game, playerId, 0)
+  appendClaimEvent(game, resolved.length
+    ? `Захват клеток: ${describeClaims(game, playerId, resolved)}`
+    : `Захват клеток: ${game.players.find((player) => player.id === playerId)?.name ?? playerId} ничего не занимает`)
 
   if (claimPicksRemaining(game, playerId) === 0) grantRechargeBudgetFor(game, playerId)
   applyVictoryAndDefeatChecks(game, mapId)

@@ -100,7 +100,8 @@ export function scoreDoctrines(game: GameSnapshot, playerId: string): DoctrineSc
     defense: (besieged ? 6 : 0) + 5 * modes.defend + (modes.finish >= 0.99 ? 1.5 : 0) - claimGain * 0.4
       + profile.defenseDoctrineBonus * defenseGain * Math.max(modes.defend, 0.3),
     maneuvers: heavy >= 2 ? 0.5 + heavy * 0.45 * Math.max(modes.attack, modes.deny) - 1.2 : -10,
-    none: 0,
+    // «Без доктрины» не выбирают.
+    none: -Infinity,
   }
   return (Object.keys(scores) as DoctrineId[]).map((doctrineId) => ({ doctrineId, score: scores[doctrineId] }))
 }

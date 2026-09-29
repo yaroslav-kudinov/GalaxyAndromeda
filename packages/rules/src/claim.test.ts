@@ -87,6 +87,8 @@ describe('production hex claims', () => {
     const game = gameSnapshotFromMap(map)
     addShip(game, 1, 0, 'player-1', 'destroyer', 'dd-n')
     applyTurnEndClaims(game, map.id)
+    // Выбор за игроком и когда клеток не больше лимита — закрываем его за игрока.
+    autoResolveClaimPicks(game, map.id, 'player-1')
     // Деления на колонизаторов и прочих больше нет: тормозом служит лимит захвата.
     expect(game.cells.find((c) => c.coord.q === 1 && c.coord.r === 0)!.controlOwnerId).toBe(
       'player-1',
@@ -98,9 +100,22 @@ describe('production hex claims', () => {
     const game = gameSnapshotFromMap(map)
     addShip(game, 1, 0, 'player-1', 'cruiser', 'cr-n')
     applyTurnEndClaims(game, map.id)
+    // Одна клетка при лимите два: игрока всё равно спрашивают, отмечена одна.
+    expect(claimPicksRemaining(game, 'player-1')).toBe(1)
+    expect(executeClaimPicks(game, map.id, 'player-1', [{ q: 1, r: 0 }])).toEqual([])
     expect(game.cells.find((c) => c.coord.q === 1 && c.coord.r === 0)!.controlOwnerId).toBe(
       'player-1',
     )
+  })
+
+  it('можно не занимать ничего — например, не брать центр, который урежет перезарядку', () => {
+    const map = claimMap()
+    const game = gameSnapshotFromMap(map)
+    addShip(game, 1, 0, 'player-1', 'cruiser', 'cr-n')
+    applyTurnEndClaims(game, map.id)
+    expect(executeClaimPicks(game, map.id, 'player-1', [])).toEqual([])
+    expect(claimPicksRemaining(game, 'player-1')).toBe(0)
+    expect(game.cells.find((c) => c.coord.q === 1 && c.coord.r === 0)!.controlOwnerId).toBeNull()
   })
 
   it('does not claim a hex with enemy ships', () => {
@@ -123,6 +138,9 @@ describe('production hex claims', () => {
     game.actionMarkers = []
     expect(advanceGameSnapshot(game, map.id)).toEqual([])
     expect(game.turnNumber).toBeGreaterThanOrEqual(1)
+    // Конец хода открыл выбор клеток; клетка займётся, когда игрок его закроет.
+    expect(claimPicksRemaining(game, 'player-1')).toBe(1)
+    expect(executeClaimPicks(game, map.id, 'player-1', [{ q: 1, r: 0 }])).toEqual([])
     expect(game.cells.find((c) => c.coord.q === 1 && c.coord.r === 0)!.controlOwnerId).toBe(
       'player-1',
     )
@@ -162,7 +180,8 @@ describe('production hex claims', () => {
 
     expect(executeClaimPicks(game, map.id, 'player-1', [{ q: 3, r: 0 }])).toEqual([])
     expect(game.cells.find((c) => c.coord.q === 3)!.controlOwnerId).toBe('player-1')
-    expect(claimPicksRemaining(game, 'player-1')).toBe(1)
+    // Выбрана одна из двух — это решение игрока, выбор закрыт.
+    expect(claimPicksRemaining(game, 'player-1')).toBe(0)
   })
 
   it('auto-resolve prefers power centers, then valuable tokens', () => {

@@ -11,7 +11,7 @@ import {
 } from './doctrines.js'
 import { applyGameActionOnSnapshot, getLegalActionsForSnapshot } from './movement.js'
 import { computeClaimLimit } from './claim.js'
-import { computeRechargeBudget, rechargePicksRemaining } from './resource-recharge.js'
+import { computeRechargeBudget, countFaceDownTokens, rechargePicksRemaining } from './resource-recharge.js'
 import { advanceGameSnapshot } from './turn.js'
 import { establishSiegeRecord } from './siege.js'
 
@@ -73,6 +73,17 @@ describe('доктрины: окна и выбор', () => {
     ).toMatch(/нет/)
   })
 
+  it('«Без доктрины» не выбирают: она остаётся только тому, кто не выбрал вовремя', () => {
+    const { map, game } = duel()
+    expect(
+      applyGameActionOnSnapshot(game, map, 'player-1', 'choose-doctrine', { doctrineId: 'none' }).errors[0],
+    ).toMatch(/Выберите одну из доктрин/)
+    const options = getLegalActionsForSnapshot(game, map.id, 'player-1')
+      .find((action) => action.id === 'choose-doctrine')?.params?.options as string[] | undefined
+    expect(options).toBeDefined()
+    expect(options).not.toContain('none')
+  })
+
   it('когда выбрали все, доктрины вскрываются и выдаётся бюджет по ним', () => {
     const { map, game } = duel()
     spendAllTokens(game, 'player-1', 5)
@@ -87,8 +98,9 @@ describe('доктрины: окна и выбор', () => {
     // Порог 6, один центр: базовый бюджет 4. «Производство» +2, «Атака» −1.
     expect(computeRechargeBudget(game, 'player-1')).toBe(6)
     expect(computeRechargeBudget(game, 'player-2')).toBe(3)
-    expect(rechargePicksRemaining(game, 'player-1')).toBe(0)
-    expect(rechargePicksRemaining(game, 'player-2')).toBe(3)
+    // Выбор фишек — каждый ход; заранее отмечено min(бюджет, перевёрнутых).
+    expect(rechargePicksRemaining(game, 'player-1')).toBe(Math.min(6, countFaceDownTokens(game, 'player-1')))
+    expect(rechargePicksRemaining(game, 'player-2')).toBe(Math.min(3, countFaceDownTokens(game, 'player-2')))
     // После вскрытия в журнал могут попасть перевёрнутые фишки — поэтому ищем, а не берём последнее.
     expect(game.eventLog.some((event) => /Доктрины вскрыты/.test(event.message))).toBe(true)
   })
@@ -163,12 +175,12 @@ describe('доктрины: эффекты', () => {
     // Защищающийся стреляет по атакующему без поправок.
     expect(doctrineShotModifier(game, 'player-2', 'player-1')).toBe(0)
 
-    const { game: game2 } = withDoctrines('attack', 'none')
+    const { game: game2 } = withDoctrines('attack', 'production')
     expect(doctrineShotModifier(game2, 'player-1', 'player-2')).toBe(-1)
   })
 
   it('Атака не действует, пока осаждают центр самого атакующего', () => {
-    const { game } = withDoctrines('attack', 'none')
+    const { game } = withDoctrines('attack', 'production')
     establishSiegeRecord(game, { q: 0, r: 0 }, 'player-2', 'player-1')
     expect(doctrineShotModifier(game, 'player-1', 'player-2')).toBe(0)
   })

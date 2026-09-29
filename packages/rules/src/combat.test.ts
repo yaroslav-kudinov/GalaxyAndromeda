@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { autoResolveClaimPicks } from './claim.js'
 import {
   GALAXY_SAVE_FORMAT,
   GALAXY_SAVE_VERSION,
@@ -1134,6 +1135,8 @@ describe('итог боя на доске', () => {
 
     game.actionMarkers = []
     expect(advanceGameSnapshot(game, map.id)).toEqual([])
+    // Захват в начале хода — выбор игрока; закрываем его за игрока.
+    autoResolveClaimPicks(game, map.id, 'player-1')
     expect(target.controlOwnerId).toBe('player-1')
   })
 

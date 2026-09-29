@@ -15,7 +15,7 @@ import { addActionMarker } from './markers.js'
 import { autoDiceTargetsFor } from './combat-targets.js'
 import { applySiegeTick, siegeAt, siegeLossesOwedBy } from './siege.js'
 import { getBuildableShipsForMarker } from './production.js'
-import { applyTurnEndClaims } from './claim.js'
+import { applyTurnEndClaims, executeClaimPicks } from './claim.js'
 import { advanceGameSnapshot } from './turn.js'
 import { GREEDY_BOT_MAX_COMBAT_ROUNDS, stepCombat } from './greedy-bot.js'
 import { applyVictoryAndDefeatChecks } from './victory.js'
@@ -171,6 +171,7 @@ describe('осада: установка', () => {
     expect(cellAt(game, 1, 0).controlOwnerId).toBeNull()
 
     applyTurnEndClaims(game, map.id)
+    expect(executeClaimPicks(game, map.id, 'player-1', [{ q: 1, r: 0 }])).toEqual([])
     expect(cellAt(game, 1, 0).controlOwnerId).toBe('player-1')
   })
 

@@ -67,7 +67,7 @@ import {
 import {
   chooseDoctrine,
   doctrineChoiceOwed,
-  DOCTRINES,
+  SELECTABLE_DOCTRINES,
   effectiveMoveRange,
 } from './doctrines.js'
 import { getShipMoveRange } from './ships.js'
@@ -878,7 +878,7 @@ export function getLegalActionsForSnapshot(
       id: 'choose-doctrine',
       type: 'doctrine',
       description: 'Выбрать доктрину на это окно ходов; соперники увидят её, когда выберут все',
-      params: { options: DOCTRINES.map((doctrine) => doctrine.id) },
+      params: { options: SELECTABLE_DOCTRINES.map((doctrine) => doctrine.id) },
     })
   }
 

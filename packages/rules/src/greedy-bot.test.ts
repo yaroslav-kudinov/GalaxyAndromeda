@@ -45,7 +45,7 @@ describe('жадный бот в живой партии', () => {
       if (!planned) {
         // Ждём доктрину человека — выбираем за него вручную.
         const other = active === 'player-1' ? 'player-2' : 'player-1'
-        expect(applyGameActionOnSnapshot(game, map, other, 'choose-doctrine', { doctrineId: 'none' }).errors).toEqual([])
+        expect(applyGameActionOnSnapshot(game, map, other, 'choose-doctrine', { doctrineId: 'production' }).errors).toEqual([])
         continue
       }
       expect(planned.playerId).toBe(active)
