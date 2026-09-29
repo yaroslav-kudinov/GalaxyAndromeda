@@ -1379,9 +1379,9 @@ function dispatchGameAction(
       return { errors: [CLAIM_PICK_ERRORS.nothingOwed] }
     }
     const picks = params?.picks as HexCoord[] | undefined
-    // Без списка клеток — законный пропуск выбора: движок берёт по приоритету,
-    // центры власти и дорогие фишки первыми.
-    if (picks === undefined || (Array.isArray(picks) && picks.length === 0)) {
+    // Без списка клеток — выбор за игру: центры власти и дорогие фишки первыми (боты, таймауты).
+    // Пустой список — другое: игрок сознательно ничего не занимает.
+    if (picks === undefined) {
       autoResolveClaimPicks(game, map.id, playerId)
       return { errors: [] }
     }
@@ -1394,9 +1394,9 @@ function dispatchGameAction(
       return { errors: [RECHARGE_PICK_ERRORS.nothingOwed] }
     }
     const picks = params?.picks as ResourceTokenRef[] | undefined
-    // Без списка фишек — это пропуск выбора: движок поднимает самые крупные номиналы.
-    // Так действие безопасно для ботов, таймаутов и простых клиентов.
-    if (picks === undefined || (Array.isArray(picks) && picks.length === 0)) {
+    // Без списка фишек — выбор за игру: самые крупные номиналы (боты, таймауты, простые клиенты).
+    // Пустой список — другое: игрок сознательно ничего не поднимает.
+    if (picks === undefined) {
       autoResolveRechargePicks(game, playerId)
       return { errors: [] }
     }

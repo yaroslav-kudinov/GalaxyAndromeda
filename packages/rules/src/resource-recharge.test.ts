@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest'
+import { createEmptyMap } from './map.js'
+import { applyGameActionOnSnapshot } from './movement.js'
 import type { GameSnapshot, RuntimeCellState } from './save-file.js'
 import {
   autoResolveAllRechargePicks,
@@ -123,6 +125,29 @@ describe('recharge picks', () => {
     expect(executeRechargePicks(game, 'player-1', [])).toEqual([])
     expect(rechargePicksRemaining(game, 'player-1')).toBe(0)
     expect(countFaceDownTokens(game, 'player-1')).toBe(2)
+  })
+
+  it('через действие: пустой список — ничего не поднимать, без списка — выбирает игра', () => {
+    const map = createEmptyMap('recharge-action', 'Recharge')
+    const fresh = () => {
+      const game = gameOf([
+        { q: 0, isPowerCenter: true },
+        { q: 1, faceDown: [3, 4] },
+      ])
+      refreshRechargeBudgets(game)
+      return game
+    }
+
+    // «Не поднимать» в клиенте — пустой список: фишки остаются перевёрнутыми.
+    const refused = fresh()
+    expect(applyGameActionOnSnapshot(refused, map, 'player-1', 'execute-recharge-picks', { picks: [] }).errors).toEqual([])
+    expect(rechargePicksRemaining(refused, 'player-1')).toBe(0)
+    expect(countFaceDownTokens(refused, 'player-1')).toBe(2)
+
+    // Бот и таймаут шлют действие без списка — игра поднимает самые крупные.
+    const auto = fresh()
+    expect(applyGameActionOnSnapshot(auto, map, 'player-1', 'execute-recharge-picks').errors).toEqual([])
+    expect(countFaceDownTokens(auto, 'player-1')).toBe(0)
   })
 
   it('owes exactly the budget when there is more face-down than budget', () => {

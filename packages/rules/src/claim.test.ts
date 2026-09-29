@@ -238,4 +238,30 @@ describe('решения планирования вне очереди', () => 
     // Прочие действия — по-прежнему в свой ход.
     expect(applyGameActionOnSnapshot(game, map, 'player-2', 'advance-phase').errors[0]).toMatch(/другого игрока/)
   })
+
+  it('пустой список — ничего не занимать; без списка — выбирает игра', () => {
+    const map = createEmptyMap('debts', 'Debts')
+    map.cells.push({ q: 1, r: 0 }, { q: 2, r: 0 }, { q: 3, r: 0 })
+    const game = gameSnapshotFromMap(map)
+    game.phase = 'planning'
+    game.activePlayerId = 'player-1'
+    game.participatingPlayerIds = ['player-1', 'player-2']
+    const cell = (q: number) => game.cells.find((c) => c.coord.q === q && c.coord.r === 0)!
+    for (const [q, owner] of [[0, 'player-1'], [3, 'player-2']] as const) {
+      cell(q).isPowerCenter = true
+      cell(q).controlOwnerId = owner
+    }
+    cell(1).ships.push({ id: 'p1-a', type: 'destroyer', ownerId: 'player-1' })
+    cell(2).ships.push({ id: 'p2-a', type: 'destroyer', ownerId: 'player-2' })
+    game.claimPicksRemainingByPlayer = { 'player-1': 1, 'player-2': 1 }
+
+    // Игрок снял все отметки и подтвердил «Ничего не занимать» — клетка остаётся нейтральной.
+    expect(applyGameActionOnSnapshot(game, map, 'player-1', 'execute-claim-picks', { picks: [] }).errors).toEqual([])
+    expect(cell(1).controlOwnerId).toBeNull()
+    expect(claimPicksRemaining(game, 'player-1')).toBe(0)
+
+    // Бот и таймаут шлют действие без списка — игра занимает сама.
+    expect(applyGameActionOnSnapshot(game, map, 'player-2', 'execute-claim-picks').errors).toEqual([])
+    expect(cell(2).controlOwnerId).toBe('player-2')
+  })
 })
