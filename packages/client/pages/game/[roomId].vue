@@ -62,6 +62,7 @@ import { loadGameSessionForRoom, saveGameSession, persistLocalGalaxySave, clearL
 import { loadPlayerClaim, savePlayerClaim } from '~/composables/usePlayerClaim'
 import { bootstrapToLobbySlots, defaultSlotForRoom, roomHasFreeSlot } from '~/utils/lobby-slot'
 import { playerConditions } from '~/utils/player-conditions'
+import { gameConfirm } from '~/composables/useGameDialog'
 import { useGamePresence } from '~/composables/useGamePresence'
 import { usePlayerProfile } from '~/composables/usePlayerProfile'
 import { useObservationSync } from '~/composables/useObservationSync'
@@ -1566,11 +1567,21 @@ async function endPhase() {
       saveFile.value.map,
       playerId.value,
     )
-    && !confirm(
+    && !(await gameConfirm(
       myActionMarkerCount.value === 0
-        ? 'Вы не поставили ни одного маркера действия — в фазе действий вам нечего будет делать.\n\nПередать ход без маркеров?'
-        : 'Вы расставили не все доступные маркеры действия.\n\nЗавершить планирование без них?',
-    )
+        ? {
+            title: 'Передать ход без маркеров?',
+            message: 'Вы не поставили ни одного маркера действия — в фазе действий вам нечего будет делать.',
+            confirmLabel: 'Передать ход',
+            cancelLabel: 'Поставить маркеры',
+          }
+        : {
+            title: 'Завершить планирование?',
+            message: 'Вы расставили не все доступные маркеры действия.',
+            confirmLabel: 'Завершить',
+            cancelLabel: 'Вернуться',
+          },
+    ))
   ) {
     return
   }
@@ -1915,7 +1926,13 @@ const canSurrender = computed(() => {
 
 async function surrenderMatch() {
   if (!saveFile.value?.game || !canSurrender.value) return
-  if (!window.confirm('Сдаться? Контроль и маркеры снимутся, корабли останутся на карте.')) return
+  const sure = await gameConfirm({
+    title: 'Сдаться?',
+    message: 'Контроль и маркеры снимутся, корабли останутся на карте.',
+    confirmLabel: 'Сдаться',
+    danger: true,
+  })
+  if (!sure) return
   try {
     if (serverStatus.value === 'online' && !roomId.value.startsWith('local-')) {
       bumpObservationEpoch()
@@ -3042,7 +3059,7 @@ async function toggleMarkerOnCell(q: number, r: number) {
 
   if (
     wouldRemoveMyActionMarkerAt(game, q, r)
-    && !confirmRemoveActionMarker()
+    && !(await confirmRemoveActionMarker())
   ) {
     return
   }
@@ -3082,10 +3099,13 @@ function wouldRemoveMyActionMarkerAt(game: GameSnapshot, q: number, r: number): 
   return !!cell && !!actionMarkerOf(game, cell.coord, playerId.value)
 }
 
-function confirmRemoveActionMarker(): boolean {
-  return window.confirm(
-    'Снять маркер действия с этой клетки?\n\nПлан на эту клетку будет отменён. Это нельзя отменить.',
-  )
+function confirmRemoveActionMarker(): Promise<boolean> {
+  return gameConfirm({
+    title: 'Снять маркер действия?',
+    message: 'План на эту клетку будет отменён. Это нельзя отменить.',
+    confirmLabel: 'Снять',
+    danger: true,
+  })
 }
 
 function removeMarkerAtSourceFromModal() {
@@ -3128,9 +3148,9 @@ function removeMarkerAtSourceFromModal() {
   refreshLocalLegalActions()
 }
 
-function removeSelectedActionMarker() {
+async function removeSelectedActionMarker() {
   if (!saveFile.value?.game || !selectedKey.value) return
-  if (!confirmRemoveActionMarker()) return
+  if (!(await confirmRemoveActionMarker())) return
 
   const cell = saveFile.value.game.cells.find(
     (c) => hexKey(c.coord.q, c.coord.r) === selectedKey.value,

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { gameAlert, gameConfirm } from '~/composables/useGameDialog'
 import type { MapCellContent, MapDefinition, GameSnapshot, ResourceTokenDef, ResourceTokenValue, ShipType } from '@galaxy/rules'
 import {
   MAX_SHIPS_PER_CELL,
@@ -483,8 +484,14 @@ function newMap() {
   resetHistory()
 }
 
-function clearMap() {
-  if (!confirm('Очистить карту? Останется одна пустая клетка (0,0), id и название сохранятся.')) return
+async function clearMap() {
+  const sure = await gameConfirm({
+    title: 'Очистить карту?',
+    message: 'Останется одна пустая клетка (0,0), id и название сохранятся.',
+    confirmLabel: 'Очистить',
+    danger: true,
+  })
+  if (!sure) return
   pushHistory()
   const { id, name } = map.value
   map.value = normalizeMapDefinition(createEmptyMap(id, name))
@@ -534,7 +541,10 @@ function importJson(event: Event) {
       loadSaveToEditor(save)
       if (save.game) upsertLobbySave(save)
     } catch {
-      alert('Не удалось прочитать JSON')
+      void gameAlert({
+        title: 'Не удалось прочитать файл',
+        message: 'Это не файл карты или сохранения Галактики Андромеда.',
+      })
     }
   }
   reader.readAsText(file)

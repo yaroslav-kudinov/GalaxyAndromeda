@@ -18,6 +18,7 @@
       </NuxtLayout>
     </main>
     <PatchUpdateToast />
+    <GameDialog />
   </div>
 </template>
 

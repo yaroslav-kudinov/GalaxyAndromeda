@@ -251,6 +251,11 @@ export const uiStringsRu = {
     declinedTitle: 'Осада',
     declined: 'Гарнизон не стал нападать — осада продолжается',
   },
+  dialog: {
+    confirm: 'Да',
+    cancel: 'Отмена',
+    ok: 'Понятно',
+  },
   foreignCombat: {
     title: (q: number, r: number) => `Бой на (${q},${r})`,
     outcome: (winner: string | null, destroyed: number) =>
