@@ -52,7 +52,6 @@ import {
   combatResolutionFingerprint,
   combatResolutionFromPending,
   computeRechargeBudget,
-  countFaceDownTokens,
   explainRechargeBudget,
   formatRechargeBudgetHint,
   getCombatRetreatDestinations,
@@ -61,7 +60,8 @@ import { advanceScenarioStep, fetchObservation, fetchRoomBootstrap, GameApiError
 import { loadGameSessionForRoom, saveGameSession, persistLocalGalaxySave, clearLocalGalaxySave, loadLocalGalaxySaveRaw, pruneOnlineGalaxySaveCache } from '~/composables/useGameSession'
 import { loadPlayerClaim, savePlayerClaim } from '~/composables/usePlayerClaim'
 import { bootstrapToLobbySlots, defaultSlotForRoom, roomHasFreeSlot } from '~/utils/lobby-slot'
-import { playerConditions } from '~/utils/player-conditions'
+import { ownDoctrineSummary, playerConditions } from '~/utils/player-conditions'
+import { gameConfirm } from '~/composables/useGameDialog'
 import { useGamePresence } from '~/composables/useGamePresence'
 import { usePlayerProfile } from '~/composables/usePlayerProfile'
 import { useObservationSync } from '~/composables/useObservationSync'
@@ -1566,11 +1566,21 @@ async function endPhase() {
       saveFile.value.map,
       playerId.value,
     )
-    && !confirm(
+    && !(await gameConfirm(
       myActionMarkerCount.value === 0
-        ? 'Вы не поставили ни одного маркера действия — в фазе действий вам нечего будет делать.\n\nПередать ход без маркеров?'
-        : 'Вы расставили не все доступные маркеры действия.\n\nЗавершить планирование без них?',
-    )
+        ? {
+            title: 'Передать ход без маркеров?',
+            message: 'Вы не поставили ни одного маркера действия — в фазе действий вам нечего будет делать.',
+            confirmLabel: 'Передать ход',
+            cancelLabel: 'Поставить маркеры',
+          }
+        : {
+            title: 'Завершить планирование?',
+            message: 'Вы расставили не все доступные маркеры действия.',
+            confirmLabel: 'Завершить',
+            cancelLabel: 'Вернуться',
+          },
+    ))
   ) {
     return
   }
@@ -1671,31 +1681,34 @@ async function chooseDoctrineAction(doctrineId: import('@galaxy/rules').Doctrine
     doctrineBusy.value = false
   }
 }
-const resourceRechargeBanner = computed(() => {
+/**
+ * Три яркие плашки хода — «Перезарядка», «Захват», «Доктрина»: главное, что игроку нужно знать,
+ * крупно, с пояснением мелко. Показываются в панели «Игра» и в объявлении хода.
+ */
+const infoBanners = computed(() => {
   const game = snapshot.value
   const me = playerId.value
-  if (!game || !me) return null
-  // Отсчёта до перезарядки больше нет: фишки возвращаются каждый ход, но не больше
-  // бюджета, и бюджет падает с ростом числа центров власти.
+  if (!game || !me || game.gameOver) return []
+  const out: { key: string; title: string; detail?: string | null; tone: 'amber' | 'teal' | 'violet' | 'warn' }[] = []
   const owed = game.rechargePicksRemainingByPlayer?.[me] ?? 0
   const budget = computeRechargeBudget(game, me)
-  // Нулевой бюджет тоже объясняем: иначе непонятно, почему фишки не переворачиваются.
-  if (owed <= 0 && budget <= 0 && countFaceDownTokens(game, me) === 0) return null
-  return formatRechargeBudgetHint(budget, owed, explainRechargeBudget(game, me))
-})
-
-/** Захват в начале хода: сколько клеток можно занять и почему столько. */
-const claimLine = computed(() => {
-  const game = snapshot.value
-  const me = playerId.value
-  if (!game || !me || game.gameOver) return null
+  out.push({
+    key: 'recharge',
+    title: formatRechargeBudgetHint(budget, owed),
+    detail: ui.claimInfo.rechargeWhy(explainRechargeBudget(game, me)),
+    tone: budget > 0 ? 'amber' : 'warn',
+  })
   const powerCenters = game.cells.filter((cell) => cell.isPowerCenter && cell.controlOwnerId === me).length
-  return ui.claimInfo.line(
-    computeClaimLimit(game, me),
-    powerCenters,
-    doctrineClaimLimitModifier(game, me),
-    eligibleClaimCells(game, me).length,
-  )
+  const limit = computeClaimLimit(game, me)
+  out.push({
+    key: 'claim',
+    title: ui.claimInfo.title(limit),
+    detail: ui.claimInfo.detail(limit, powerCenters, doctrineClaimLimitModifier(game, me), eligibleClaimCells(game, me).length),
+    tone: 'teal',
+  })
+  const doctrine = ownDoctrineSummary(game, me)
+  if (doctrine) out.push({ key: 'doctrine', title: doctrine.title, detail: doctrine.detail, tone: doctrine.warn ? 'warn' : 'violet' })
+  return out
 })
 
 /**
@@ -1915,7 +1928,13 @@ const canSurrender = computed(() => {
 
 async function surrenderMatch() {
   if (!saveFile.value?.game || !canSurrender.value) return
-  if (!window.confirm('Сдаться? Контроль и маркеры снимутся, корабли останутся на карте.')) return
+  const sure = await gameConfirm({
+    title: 'Сдаться?',
+    message: 'Контроль и маркеры снимутся, корабли останутся на карте.',
+    confirmLabel: 'Сдаться',
+    danger: true,
+  })
+  if (!sure) return
   try {
     if (serverStatus.value === 'online' && !roomId.value.startsWith('local-')) {
       bumpObservationEpoch()
@@ -3042,7 +3061,7 @@ async function toggleMarkerOnCell(q: number, r: number) {
 
   if (
     wouldRemoveMyActionMarkerAt(game, q, r)
-    && !confirmRemoveActionMarker()
+    && !(await confirmRemoveActionMarker())
   ) {
     return
   }
@@ -3082,10 +3101,13 @@ function wouldRemoveMyActionMarkerAt(game: GameSnapshot, q: number, r: number): 
   return !!cell && !!actionMarkerOf(game, cell.coord, playerId.value)
 }
 
-function confirmRemoveActionMarker(): boolean {
-  return window.confirm(
-    'Снять маркер действия с этой клетки?\n\nПлан на эту клетку будет отменён. Это нельзя отменить.',
-  )
+function confirmRemoveActionMarker(): Promise<boolean> {
+  return gameConfirm({
+    title: 'Снять маркер действия?',
+    message: 'План на эту клетку будет отменён. Это нельзя отменить.',
+    confirmLabel: 'Снять',
+    danger: true,
+  })
 }
 
 function removeMarkerAtSourceFromModal() {
@@ -3128,9 +3150,9 @@ function removeMarkerAtSourceFromModal() {
   refreshLocalLegalActions()
 }
 
-function removeSelectedActionMarker() {
+async function removeSelectedActionMarker() {
   if (!saveFile.value?.game || !selectedKey.value) return
-  if (!confirmRemoveActionMarker()) return
+  if (!(await confirmRemoveActionMarker())) return
 
   const cell = saveFile.value.game.cells.find(
     (c) => hexKey(c.coord.q, c.coord.r) === selectedKey.value,
@@ -3579,8 +3601,7 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
     <TurnEventAnnounceModal
       v-if="turnAnnounceVisible && turnAnnounceReady && !battleModalOpen"
       :turn-number="turnNumber"
-      :recharge-banner="resourceRechargeBanner"
-      :claim-line="claimLine"
+      :banners="infoBanners"
       :notes="playerConditionList"
       :events="turnStartEvents"
       :next-step="turnNextStep"
@@ -3983,15 +4004,14 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
         </section>
 
         <section
-          v-if="snapshot && (snapshot.doctrineWindow || resourceRechargeBanner || claimLine || playerConditionList.length)"
+          v-if="snapshot && (snapshot.doctrineWindow || infoBanners.length || playerConditionList.length)"
           class="block event-block"
         >
           <DoctrinePanel
             :snapshot="snapshot"
             :player-id="playerId"
             :busy="doctrineBusy"
-            :recharge-banner="resourceRechargeBanner"
-            :claim-line="claimLine"
+            :banners="infoBanners"
             :notes="playerConditionList"
             @choose="chooseDoctrineAction"
           />

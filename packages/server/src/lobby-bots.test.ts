@@ -149,7 +149,7 @@ describe('боты в лобби', () => {
 
       // Сходил сам — значит, итог видел.
       room.combatResultHold = { humans: ['player-1'], since: now }
-      rooms.submitAction(room, 'player-1', { actionId: 'choose-doctrine', params: { doctrineId: 'none' } }, false)
+      rooms.submitAction(room, 'player-1', { actionId: 'choose-doctrine', params: { doctrineId: 'production' } }, false)
       assert.equal(room.combatResultHold, undefined)
 
       // Окно так и не закрыли — через минуту боты идут дальше.

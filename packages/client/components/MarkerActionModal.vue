@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { gameConfirm } from '~/composables/useGameDialog'
 import type {
   BuildableShipOption,
   GameSnapshot,
@@ -484,15 +485,14 @@ function onExecuteBuild() {
   emit('executeBuild', { orders: buildOrders(), spentTokens })
 }
 
-function onRemoveMarker() {
-  if (
-    !window.confirm(
-      'Снять маркер действия с этой клетки?\n\nПлан на эту клетку будет отменён. Это нельзя отменить.',
-    )
-  ) {
-    return
-  }
-  emit('removeMarker')
+async function onRemoveMarker() {
+  const sure = await gameConfirm({
+    title: 'Снять маркер действия?',
+    message: 'План на эту клетку будет отменён. Это нельзя отменить.',
+    confirmLabel: 'Снять',
+    danger: true,
+  })
+  if (sure) emit('removeMarker')
 }
 
 function onKeydown(e: KeyboardEvent) {

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { gameConfirm, gamePrompt } from '~/composables/useGameDialog'
 definePageMeta({ middleware: 'admin' })
 
 const token = ref('')
@@ -75,7 +76,7 @@ async function approve(id: number) {
 }
 
 async function reject(id: number) {
-  const note = prompt('Причина отклонения')?.trim()
+  const note = await gamePrompt({ title: 'Причина отклонения', placeholder: 'Что не так с картой', confirmLabel: 'Отклонить' })
   if (!note) return
   await adminFetch(`/submissions/${id}/reject`, { method: 'POST', body: JSON.stringify({ note }) })
   await refresh()
@@ -95,7 +96,13 @@ async function showScreenshot(id: string) {
 }
 
 async function removeBugReport(id: string) {
-  if (!confirm('Удалить этот баг-репорт? Восстановить его будет нельзя.')) return
+  const sure = await gameConfirm({
+    title: 'Удалить баг-репорт?',
+    message: 'Восстановить его будет нельзя.',
+    confirmLabel: 'Удалить',
+    danger: true,
+  })
+  if (!sure) return
   await adminFetch(`/bug-reports/${id}`, { method: 'DELETE' })
   const url = screenshots.value[id]
   if (url) URL.revokeObjectURL(url)

@@ -67,7 +67,7 @@ import {
 import {
   chooseDoctrine,
   doctrineChoiceOwed,
-  DOCTRINES,
+  SELECTABLE_DOCTRINES,
   effectiveMoveRange,
 } from './doctrines.js'
 import { getShipMoveRange } from './ships.js'
@@ -868,7 +868,7 @@ export function getLegalActionsForSnapshot(
     actions.push({
       id: 'execute-claim-picks',
       type: 'claimPicks',
-      description: `Занять клетки (осталось ${owedClaims}); без выбора займутся лучшие`,
+      description: `Захват: до ${owedClaims} — какие клетки занять, в picks (можно меньше; [] — ни одной); без picks займутся лучшие`,
       params: { remaining: owedClaims },
     })
   }
@@ -878,7 +878,7 @@ export function getLegalActionsForSnapshot(
       id: 'choose-doctrine',
       type: 'doctrine',
       description: 'Выбрать доктрину на это окно ходов; соперники увидят её, когда выберут все',
-      params: { options: DOCTRINES.map((doctrine) => doctrine.id) },
+      params: { options: SELECTABLE_DOCTRINES.map((doctrine) => doctrine.id) },
     })
   }
 
@@ -907,7 +907,7 @@ export function getLegalActionsForSnapshot(
     actions.push({
       id: 'execute-recharge-picks',
       type: 'rechargePicks',
-      description: `Перезарядка: выбрать фишки (осталось ${owedPicks}); без выбора поднимутся самые крупные`,
+      description: `Перезарядка: до ${owedPicks} — какие фишки поднять, в picks (можно меньше; [] — ни одной); без picks поднимутся самые крупные`,
       params: { remaining: owedPicks },
     })
   }
@@ -1379,9 +1379,9 @@ function dispatchGameAction(
       return { errors: [CLAIM_PICK_ERRORS.nothingOwed] }
     }
     const picks = params?.picks as HexCoord[] | undefined
-    // Без списка клеток — законный пропуск выбора: движок берёт по приоритету,
-    // центры власти и дорогие фишки первыми.
-    if (picks === undefined || (Array.isArray(picks) && picks.length === 0)) {
+    // Без списка клеток — выбор за игру: центры власти и дорогие фишки первыми (боты, таймауты).
+    // Пустой список — другое: игрок сознательно ничего не занимает.
+    if (picks === undefined) {
       autoResolveClaimPicks(game, map.id, playerId)
       return { errors: [] }
     }
@@ -1394,9 +1394,9 @@ function dispatchGameAction(
       return { errors: [RECHARGE_PICK_ERRORS.nothingOwed] }
     }
     const picks = params?.picks as ResourceTokenRef[] | undefined
-    // Без списка фишек — это пропуск выбора: движок поднимает самые крупные номиналы.
-    // Так действие безопасно для ботов, таймаутов и простых клиентов.
-    if (picks === undefined || (Array.isArray(picks) && picks.length === 0)) {
+    // Без списка фишек — выбор за игру: самые крупные номиналы (боты, таймауты, простые клиенты).
+    // Пустой список — другое: игрок сознательно ничего не поднимает.
+    if (picks === undefined) {
       autoResolveRechargePicks(game, playerId)
       return { errors: [] }
     }

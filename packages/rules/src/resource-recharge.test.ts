@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest'
+import { createEmptyMap } from './map.js'
+import { applyGameActionOnSnapshot } from './movement.js'
 import type { GameSnapshot, RuntimeCellState } from './save-file.js'
 import {
   autoResolveAllRechargePicks,
@@ -97,17 +99,55 @@ describe('recharge budget', () => {
 })
 
 describe('recharge picks', () => {
-  it('flips everything silently when there is nothing to choose between', () => {
+  it('asks even when everything fits the budget: all are preselected, fewer is allowed', () => {
     const game = gameOf([
       { q: 0, isPowerCenter: true },
       { q: 1, faceDown: [3, 4] },
     ])
     refreshRechargeBudgets(game)
 
-    // Две фишки лицом вниз при бюджете четыре — выбор не нужен, долга нет.
+    // Две фишки лицом вниз при бюджете четыре: выбор всё равно за игроком — отмечены обе.
+    expect(rechargePicksRemaining(game, 'player-1')).toBe(2)
+    expect(countFaceDownTokens(game, 'player-1')).toBe(2)
+
+    // Перевернуть можно и меньше: долг закрыт.
+    expect(executeRechargePicks(game, 'player-1', [{ coord: { q: 1, r: 0 }, tokenIndex: 1 }])).toEqual([])
     expect(rechargePicksRemaining(game, 'player-1')).toBe(0)
-    expect(countFaceDownTokens(game, 'player-1')).toBe(0)
-    expect(faceUpValues(game, 'player-1')).toEqual([4, 3])
+    expect(faceUpValues(game, 'player-1')).toEqual([4])
+  })
+
+  it('choosing nothing closes the debt too', () => {
+    const game = gameOf([
+      { q: 0, isPowerCenter: true },
+      { q: 1, faceDown: [3, 4] },
+    ])
+    refreshRechargeBudgets(game)
+    expect(executeRechargePicks(game, 'player-1', [])).toEqual([])
+    expect(rechargePicksRemaining(game, 'player-1')).toBe(0)
+    expect(countFaceDownTokens(game, 'player-1')).toBe(2)
+  })
+
+  it('через действие: пустой список — ничего не поднимать, без списка — выбирает игра', () => {
+    const map = createEmptyMap('recharge-action', 'Recharge')
+    const fresh = () => {
+      const game = gameOf([
+        { q: 0, isPowerCenter: true },
+        { q: 1, faceDown: [3, 4] },
+      ])
+      refreshRechargeBudgets(game)
+      return game
+    }
+
+    // «Не поднимать» в клиенте — пустой список: фишки остаются перевёрнутыми.
+    const refused = fresh()
+    expect(applyGameActionOnSnapshot(refused, map, 'player-1', 'execute-recharge-picks', { picks: [] }).errors).toEqual([])
+    expect(rechargePicksRemaining(refused, 'player-1')).toBe(0)
+    expect(countFaceDownTokens(refused, 'player-1')).toBe(2)
+
+    // Бот и таймаут шлют действие без списка — игра поднимает самые крупные.
+    const auto = fresh()
+    expect(applyGameActionOnSnapshot(auto, map, 'player-1', 'execute-recharge-picks').errors).toEqual([])
+    expect(countFaceDownTokens(auto, 'player-1')).toBe(0)
   })
 
   it('owes exactly the budget when there is more face-down than budget', () => {
@@ -144,7 +184,8 @@ describe('recharge picks', () => {
       { coord: { q: 2, r: 0 }, tokenIndex: 0 },
       { coord: { q: 2, r: 0 }, tokenIndex: 1 },
     ])).toEqual([])
-    expect(rechargePicksRemaining(game, 'player-1')).toBe(1)
+    // Выбрано меньше бюджета — это решение игрока, долг закрыт.
+    expect(rechargePicksRemaining(game, 'player-1')).toBe(0)
     expect(faceUpValues(game, 'player-1')).toEqual([9, 7])
   })
 
@@ -215,6 +256,7 @@ describe('recharge picks', () => {
       { q: 1, faceUp: [9, 9, 9], faceDown: [4] },
     ])
     refreshRechargeBudgets(game)
+    autoResolveRechargePicks(game, 'player-1')
 
     // Уже поднятые фишки не сгорают: копить на дорогой корабль можно.
     expect(faceUpValues(game, 'player-1')).toEqual([9, 9, 9, 4])
@@ -222,7 +264,8 @@ describe('recharge picks', () => {
 
   it('hint tells the player what the budget is doing', () => {
     expect(formatRechargeBudgetHint(4, 0)).toBe('Перезарядка: до 4 фишек за ход')
-    expect(formatRechargeBudgetHint(3, 2)).toBe('Перезарядка: выберите фишки, осталось 2')
+    expect(formatRechargeBudgetHint(1, 0)).toBe('Перезарядка: до 1 фишки за ход')
+    expect(formatRechargeBudgetHint(3, 2)).toBe('Перезарядка: выберите до 2 фишек')
     expect(formatRechargeBudgetHint(0, 0)).toContain('недоступна')
   })
 })

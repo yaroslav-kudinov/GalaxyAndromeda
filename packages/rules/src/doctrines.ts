@@ -286,7 +286,14 @@ export const DOCTRINE_ERRORS = {
   notNow: 'Сейчас доктрину не выбирают',
   already: 'Доктрина на это окно уже выбрана',
   unknown: 'Такой доктрины нет',
+  noneNotSelectable: 'Выберите одну из доктрин: «Без доктрины» остаётся только тому, кто не выбрал вовремя',
 } as const
+
+/**
+ * Доктрины, которые можно выбрать. «Без доктрины» проигрывала «Производству» (+2 к перезарядке
+ * без платы) и потеряла смысл как выбор; она остаётся только тому, кто не выбрал вовремя.
+ */
+export const SELECTABLE_DOCTRINES: readonly DoctrineDefinition[] = DOCTRINES.filter((doctrine) => doctrine.id !== 'none')
 
 /** Выбрать доктрину. Возвращает ошибки и игроков, у которых доктрина вступила в силу. */
 export function chooseDoctrine(
@@ -295,6 +302,7 @@ export function chooseDoctrine(
   doctrineId: unknown,
 ): { errors: string[]; revealed: string[] } {
   if (!isDoctrineId(doctrineId)) return { errors: [DOCTRINE_ERRORS.unknown], revealed: [] }
+  if (doctrineId === 'none') return { errors: [DOCTRINE_ERRORS.noneNotSelectable], revealed: [] }
   const choice = game.doctrineChoice
   if (!choice || !participants(game).includes(playerId)) {
     return { errors: [DOCTRINE_ERRORS.notNow], revealed: [] }

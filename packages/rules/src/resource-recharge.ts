@@ -100,8 +100,8 @@ export function participantsOf(game: GameSnapshot): string[] {
  * Отдельно для каждого, потому что бюджет зависит от числа центров власти, а оно
  * уточняется захватом: пока у игрока не разрешён выбор клеток, считать ему бюджет рано.
  *
- * Если перевёрнутых фишек не больше бюджета — поднимаем все молча: диалог нужен только
- * когда выбирать действительно приходится.
+ * Игрок выбирает каждый ход, даже если перевёрнутых фишек не больше бюджета: перевернуть можно
+ * и меньше. Заранее отмечено `min(бюджет, перевёрнутых)`.
  */
 export function grantRechargeBudgetFor(game: GameSnapshot, playerId: string): void {
   setPicksRemaining(game, playerId, 0)
@@ -112,17 +112,7 @@ export function grantRechargeBudgetFor(game: GameSnapshot, playerId: string): vo
 
   const budget = computeRechargeBudget(game, playerId)
   if (budget === 0) return
-
-  if (faceDown.length <= budget) {
-    for (const entry of faceDown) {
-      const token = entry.cell.resourceTokens[entry.tokenIndex]
-      if (token) token.faceUp = true
-    }
-    // Выбирать было нечего — перевернулись все; в журнале это тоже видно.
-    appendRechargeEvent(game, rechargeMessage(game, playerId, faceDown.length, true))
-    return
-  }
-  setPicksRemaining(game, playerId, budget)
+  setPicksRemaining(game, playerId, Math.min(budget, faceDown.length))
 }
 
 /**
@@ -157,7 +147,7 @@ export function executeRechargePicks(
 ): string[] {
   const remaining = rechargePicksRemaining(game, playerId)
   if (remaining <= 0) return [RECHARGE_PICK_ERRORS.nothingOwed]
-  if (picks.length === 0) return [RECHARGE_PICK_ERRORS.nothingOwed]
+  // Меньше бюджета и даже ни одной — можно: игрок сам решает, что переворачивать.
   if (picks.length > remaining) return [RECHARGE_PICK_ERRORS.tooMany]
 
   const seen = new Set<string>()
@@ -182,7 +172,7 @@ export function executeRechargePicks(
     const token = entry.cell.resourceTokens[entry.tokenIndex]
     if (token) token.faceUp = true
   }
-  setPicksRemaining(game, playerId, remaining - resolved.length)
+  setPicksRemaining(game, playerId, 0)
   appendRechargeEvent(game, rechargeMessage(game, playerId, resolved.length, false))
   return []
 }
@@ -227,6 +217,13 @@ export function autoResolveAllRechargePicks(game: GameSnapshot): void {
 }
 
 /** Текст для игрока: сколько фишек можно поднять в этом ходу. */
+/** «фишки» / «фишек» после «до N»: до 1 фишки, до 2 фишек. */
+function tokensWord(count: number): string {
+  const mod10 = count % 10
+  const mod100 = count % 100
+  return mod10 === 1 && mod100 !== 11 ? 'фишки' : 'фишек'
+}
+
 /** Из чего сложился бюджет перезарядки — чтобы игрок видел, почему он такой. */
 export function explainRechargeBudget(game: GameSnapshot, ownerId: string): string {
   const threshold = victoryThresholdForSnapshot(game)
@@ -240,11 +237,11 @@ export function explainRechargeBudget(game: GameSnapshot, ownerId: string): stri
 }
 
 export function formatRechargeBudgetHint(budget: number, owed: number, explanation?: string): string {
-  if (owed > 0) return `Перезарядка: выберите фишки, осталось ${owed}`
+  if (owed > 0) return `Перезарядка: выберите до ${owed} ${tokensWord(owed)}`
   if (budget <= 0) {
     return explanation
       ? `Перезарядки в этот ход нет: бюджет ${explanation} — не больше нуля`
       : 'Перезарядка недоступна: слишком много центров власти'
   }
-  return `Перезарядка: до ${budget} фишек за ход`
+  return `Перезарядка: до ${budget} ${tokensWord(budget)} за ход`
 }

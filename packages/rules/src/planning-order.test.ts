@@ -63,15 +63,17 @@ describe('порядок решений в начале хода', () => {
     expect(planningStepFor(game, 'player-1')).toBe('doctrine-wait')
     expect(neutralOwners(game)).toEqual([null, null, null])
 
-    expect(act(game, map, 'player-2', 'choose-doctrine', { doctrineId: 'none' })).toEqual([])
-    // Лимит 1 + 1 центр + 1 за «Экспансию» = 3: все три клетки заняты.
+    expect(act(game, map, 'player-2', 'choose-doctrine', { doctrineId: 'production' })).toEqual([])
+    // Лимит 1 + 1 центр + 1 за «Экспансию» = 3: отмечены все три клетки, решает игрок.
+    expect(claimPicksRemaining(game, 'player-1')).toBe(3)
+    expect(act(game, map, 'player-1', 'execute-claim-picks', { picks: [{ q: 1, r: 0 }, { q: 2, r: 0 }, { q: 3, r: 0 }] })).toEqual([])
     expect(neutralOwners(game)).toEqual(['player-1', 'player-1', 'player-1'])
   })
 
   it('доктрина с платой захватом — клеток больше лимита, игрок выбирает', () => {
     const { map, game } = startOfTurn(4, 3)
     act(game, map, 'player-1', 'choose-doctrine', { doctrineId: 'defense' })
-    act(game, map, 'player-2', 'choose-doctrine', { doctrineId: 'none' })
+    act(game, map, 'player-2', 'choose-doctrine', { doctrineId: 'production' })
     // «Оборона» отнимает клетку захвата: 1 + 1 − 1 = 1.
     expect(claimPicksRemaining(game, 'player-1')).toBe(1)
     expect(planningStepFor(game, 'player-1')).toBe('claims')
@@ -85,17 +87,18 @@ describe('порядок решений в начале хода', () => {
     // Доктрина.
     expect(act(game, map, 'player-1', 'toggle-marker', { coord: home, kind: 'action' })).toEqual([PLANNING_ORDER_ERRORS.doctrine])
     expect(getLegalActionsForSnapshot(game, map.id, 'player-1').map((a) => a.id)).not.toContain('advance-phase')
-    act(game, map, 'player-1', 'choose-doctrine', { doctrineId: 'none' })
+    // «Оборона»: перезарядку не трогает, захват −1.
+    act(game, map, 'player-1', 'choose-doctrine', { doctrineId: 'defense' })
 
     // Ждём соперника.
     expect(act(game, map, 'player-1', 'advance-phase')).toEqual([PLANNING_ORDER_ERRORS['doctrine-wait']])
-    act(game, map, 'player-2', 'choose-doctrine', { doctrineId: 'none' })
+    act(game, map, 'player-2', 'choose-doctrine', { doctrineId: 'production' })
 
-    // Захват: две клетки из трёх; перезарядка раньше захвата не принимается.
+    // Захват: одна клетка из трёх; перезарядка раньше захвата не принимается.
     expect(planningStepFor(game, 'player-1')).toBe('claims')
     expect(rechargePicksRemaining(game, 'player-1')).toBe(0)
     expect(act(game, map, 'player-1', 'toggle-marker', { coord: home, kind: 'action' })).toEqual([PLANNING_ORDER_ERRORS.claims])
-    expect(act(game, map, 'player-1', 'execute-claim-picks', { picks: [{ q: 1, r: 0 }, { q: 2, r: 0 }] })).toEqual([])
+    expect(act(game, map, 'player-1', 'execute-claim-picks', { picks: [{ q: 1, r: 0 }] })).toEqual([])
 
     // Перезарядка: бюджет 6 − 1 − 1 центр = 4 из шести перевёрнутых фишек.
     expect(planningStepFor(game, 'player-1')).toBe('recharge')
@@ -202,6 +205,11 @@ describe('победа по центрам власти — после захв�
 
     game.turnNumber = 5
     beginTurnPlanning(game, map.id)
+    // Захват — выбор игроков: первый берёт (5,0), остальные ничего не занимают.
+    expect(act(game, map, 'player-1', 'execute-claim-picks', { picks: [{ q: 5, r: 0 }] })).toEqual([])
+    for (const other of ['player-2']) {
+      if (claimPicksRemaining(game, other) > 0) act(game, map, other, 'execute-claim-picks', { picks: [] })
+    }
     // Тик осады забрал (4,0), захват дал (5,0): у первого снова пять центров.
     expect(cell(4, 0).controlOwnerId).toBe('player-2')
     expect(cell(5, 0).controlOwnerId).toBe('player-1')

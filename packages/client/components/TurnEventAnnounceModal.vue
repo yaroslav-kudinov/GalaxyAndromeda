@@ -2,9 +2,8 @@
 import { useUiStrings } from '~/i18n/ui-strings'
 const props = defineProps<{
   turnNumber: number
-  rechargeBanner?: string | null
-  /** Захват в начале хода: лимит и сколько клеток можно занять. */
-  claimLine?: string | null
+  /** Яркие плашки хода: перезарядка, захват, доктрина. */
+  banners?: readonly { key: string; title: string; detail?: string | null; tone: 'amber' | 'teal' | 'violet' | 'warn' }[]
   /** Что произошло в начале хода: тик осад, захваты, выбывания, доктрины. */
   events?: readonly string[]
   /** Что делать дальше: решения, маркеры или ждать своей очереди. */
@@ -57,13 +56,16 @@ const kicker = computed(() => (props.turnNumber <= 1 ? t.matchStart : t.newTurn)
       <ul v-if="events?.length" class="event-announce-events">
         <li v-for="(line, index) in events" :key="index">{{ line }}</li>
       </ul>
-      <ResourceRechargeBanner
-        v-if="rechargeBanner"
-        id="event-announce-recharge"
-        :text="rechargeBanner"
-        variant="modal"
-      />
-      <p v-if="claimLine" class="event-announce-desc">{{ claimLine }}</p>
+      <div v-if="banners?.length" class="event-announce-banners">
+        <InfoBanner
+          v-for="banner in banners"
+          :key="banner.key"
+          :title="banner.title"
+          :detail="banner.detail"
+          :tone="banner.tone"
+          variant="modal"
+        />
+      </div>
       <template v-if="notes?.length">
         <p class="event-announce-subhead">{{ t.nowActive }}</p>
         <ul class="event-announce-events">
@@ -152,6 +154,13 @@ const kicker = computed(() => (props.turnNumber <= 1 ? t.matchStart : t.newTurn)
 }
 .event-announce-events li + li {
   margin-top: 0.2rem;
+}
+
+.event-announce-banners {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  margin: 0.4rem 0 0.2rem;
 }
 
 .event-announce-subhead {
