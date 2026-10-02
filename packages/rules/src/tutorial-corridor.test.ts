@@ -69,8 +69,15 @@ describe('tutorial corridor', () => {
     const ids = scenario.steps.map((step) => step.id)
     expect(ids[ids.indexOf('finish-planning-one') + 1]).toBe('phases-explained')
     const step = scenario.steps.find((s) => s.id === 'phases-explained')!
-    // Шаг обязан назвать признак, по которому игрок отличит фазы в своей партии.
-    expect(step.objective).toContain('Действия')
+    // Шаг обязан назвать признак, по которому игрок отличит фазы в своей партии: плашку
+    // фазы, её цвет и названия фаз. На рамку экрана ссылаться нельзя — она работает
+    // боковым зрением, а не чтением (согласовано с блоком A плана).
+    const text = [step.objective, step.why, step.hint].join(' ')
+    expect(text).toContain('плашка')
+    expect(text).toContain('янтарный')
+    expect(text).toContain('Планирование')
+    expect(text).toContain('Действия')
+    expect(text).not.toContain('рамка')
     expect(step.highlight).toBe('phase-panel')
     expect(step.advanceWhen).toEqual({ type: 'manual' })
   })
