@@ -46,7 +46,7 @@ import {
   combatPrepOf,
   continuePendingCombat,
   getCombatDestinationKeys,
-  getCombatDestinationKeysFromMoves,
+  combatOrderFromMoves,
   isCombatDestination,
   resolveCombatAtCell,
   removeOrphanedActionMarkersAt,
@@ -515,19 +515,14 @@ export function executeMarkerMovement(
   const errors = validateMarkerMovement(game, map, playerId, from, moves)
   if (errors.length) return { errors }
 
-  const fromCell = cellAt(game, from)!
-  const combatKeys = getCombatDestinationKeysFromMoves(game, moves, playerId)
-  const combatKey = combatKeys[0]
+  // Клетку боя и его состав берём общим помощником правил — тем же, которым клиент строит прогноз.
+  const combatOrder = combatOrderFromMoves(game, playerId, from, moves)
 
   let combatResult: ReturnType<typeof resolveCombatAtCell> | null = null
 
-  if (combatKey) {
-    const [cq, cr] = combatKey.split(',').map(Number)
-    const combatCoord = { q: cq, r: cr }
-    const combatMoves = moves.filter((m) => hexKey(m.to.q, m.to.r) === combatKey)
-    const incomingShips = combatMoves
-      .map((m) => fromCell.ships.find((s) => s.id === m.shipId))
-      .filter((s): s is ShipUnit => !!s)
+  if (combatOrder) {
+    const combatCoord = combatOrder.coord
+    const incomingShips = combatOrder.incomingShips
 
     const previewOptions = {
       ...(combatOptions ?? {}),
@@ -620,6 +615,7 @@ export function executeMarkerMovement(
   }
 
   const summaries: string[] = []
+  const combatKey = combatOrder ? hexKey(combatOrder.coord.q, combatOrder.coord.r) : undefined
 
   for (const move of moves) {
     const moveKey = hexKey(move.to.q, move.to.r)

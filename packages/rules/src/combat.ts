@@ -860,6 +860,47 @@ export function buildCombatPreview(
   }
 }
 
+/**
+ * Бой, который начнёт приказ движения: клетка и корабли, которые в него пойдут.
+ *
+ * Один источник для превью и для самого боя. Раньше клиент собирал прогноз из своего
+ * черновика назначений, а сервер — из приказа, и составы расходились: в прогнозе оказывался
+ * один эсминец там, где в бой шли два.
+ */
+export function combatOrderFromMoves(
+  game: GameSnapshot,
+  attackerId: string,
+  from: HexCoord,
+  moves: readonly ShipMoveCombatInput[],
+): { coord: HexCoord; incomingShips: ShipUnit[] } | null {
+  const fromCell = cellAt(game, from)
+  if (!fromCell) return null
+  const combatKey = getCombatDestinationKeysFromMoves(game, moves, attackerId)[0]
+  if (!combatKey) return null
+  const [q, r] = combatKey.split(',').map(Number)
+  const incomingShips = moves
+    .filter((move) => hexKey(move.to.q, move.to.r) === combatKey)
+    .map((move) => fromCell.ships.find((ship) => ship.id === move.shipId))
+    .filter((ship): ship is ShipUnit => !!ship)
+  return { coord: { q: q!, r: r! }, incomingShips }
+}
+
+/** Превью боя для приказа движения — тем же путём, которым бой построит сервер. */
+export function buildCombatPreviewForMoves(
+  game: GameSnapshot,
+  attackerId: string,
+  from: HexCoord,
+  moves: readonly ShipMoveCombatInput[],
+  options: Pick<BuildCombatPreviewOptions, 'supportSides' | 'damageByShipId'> = {},
+): CombatPreview | null {
+  const order = combatOrderFromMoves(game, attackerId, from, moves)
+  if (!order) return null
+  return buildCombatPreview(game, order.coord, attackerId, order.incomingShips, {
+    ...options,
+    attackerMovementPlans: moves,
+  })
+}
+
 /** Сканирует поле: клетки с кораблями 2+ игроков */
 export function detectCombats(game: GameSnapshot): DetectedCombat[] {
   const pending: DetectedCombat[] = []
@@ -931,10 +972,20 @@ interface SideShooter {
   threshold: number
 }
 
-function shootersOf(side: CombatSidePreview): SideShooter[] {
+/**
+ * Кто стреляет за сторону в этом раунде: корабли на клетке боя плюс поддержка с соседних.
+ * Уничтоженный корабль не стреляет, поэтому накопленный урон нужно передавать — иначе выбитый
+ * корабль продолжал бы бросать кубики там, где превью не пересобирается каждый раунд (прогноз
+ * боя до конца).
+ */
+export function combatSideShooters(
+  side: CombatSidePreview,
+  damageByShipId: Readonly<Record<string, number>> = {},
+): SideShooter[] {
   const out: SideShooter[] = []
   for (const ship of side.ships) {
     if (ship.dice <= 0 || ship.threshold == null) continue
+    if ((damageByShipId[ship.shipId] ?? ship.damage) >= ship.hull) continue
     out.push({
       shipId: ship.shipId,
       type: ship.type,
@@ -958,9 +1009,10 @@ function shootersOf(side: CombatSidePreview): SideShooter[] {
   return out
 }
 
-function targetsOf(
+/** Живые корабли стороны — то, по чему противник может стрелять в этом раунде. */
+export function combatSideTargets(
   side: CombatSidePreview,
-  damageByShipId: Readonly<Record<string, number>>,
+  damageByShipId: Readonly<Record<string, number>> = {},
 ): CombatTargetState[] {
   return side.ships
     .map((ship) => ({
@@ -977,7 +1029,7 @@ function targetsOf(
 export function combatSideFirepower(preview: CombatPreview, role: CombatRole): number {
   const side = role === 'attacker' ? preview.attacker : preview.defender
   if (preview.trigger === 'bombardment' && role === 'defender') return 0
-  return shootersOf(side).reduce((sum, s) => sum + s.dice, 0)
+  return combatSideShooters(side).reduce((sum, s) => sum + s.dice, 0)
 }
 
 export const UNRESOLVABLE_BATTLE_MSG =
@@ -1039,10 +1091,10 @@ export function rollRoundDice(
 
   for (const side of sides) {
     const enemy = side.role === 'attacker' ? preview.defender : preview.attacker
-    const targets = targetsOf(enemy, damageByShipId)
+    const targets = combatSideTargets(enemy, damageByShipId)
     const slots: CombatDieSlot[] = []
     const owners: SideShooter[] = []
-    for (const shooter of shootersOf(side)) {
+    for (const shooter of combatSideShooters(side, damageByShipId)) {
       for (let i = 0; i < shooter.dice; i++) {
         slots.push({ shooterShipId: shooter.shipId, threshold: shooter.threshold })
         owners.push(shooter)

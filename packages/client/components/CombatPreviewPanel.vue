@@ -1,11 +1,23 @@
 <script setup lang="ts">
-import type { BattleOutcomeOdds, CombatParticipant, CombatPreview } from '@galaxy/rules'
-import { SHIP_LABELS } from '@galaxy/rules'
+import type { BattleForecast, CombatParticipant, CombatPreview } from '@galaxy/rules'
+import { SHIP_LABELS, combatDiceReport } from '@galaxy/rules'
+import {
+  diceBreakdownLines,
+  formatNumber,
+  formatPercent,
+  outcomeHeading,
+  outcomeNote,
+  outcomeRows,
+  roundDamageLine,
+  roundDamageStats,
+} from '~/utils/combat-forecast-ui'
 
 const props = defineProps<{
   preview: CombatPreview
   playerNames?: Record<string, string>
-  battleOdds?: BattleOutcomeOdds | null
+  forecast?: BattleForecast | null
+  /** Выбранные корабли, которым клетка назначения ещё не указана. */
+  unassignedShips?: number
   /** Показать кнопку «Разрешение боя» (после подтверждения действия) */
   showBattleAction?: boolean
 }>()
@@ -64,26 +76,45 @@ function playerLabel(id: string): string {
   return props.playerNames?.[id] ?? id
 }
 
-function pct(value: number): string {
-  return `${Math.round(value * 100)}%`
-}
+const pct = formatPercent
 
+/** Корабль как цель: кубики и порог названы в расшифровке ниже, здесь — прочность и урон. */
 function shipLine(ship: CombatParticipant): string {
-  const stats = ship.dice && ship.threshold != null ? `${ship.dice}к на ${ship.threshold}+` : 'не стреляет'
-  return `${SHIP_LABELS[ship.type]} · ${stats} · прочность ${ship.hull}`
+  const taken = ship.damage > 0 ? `, попаданий ${ship.damage} из ${ship.hull}` : ''
+  return `${SHIP_LABELS[ship.type]} · прочность ${ship.hull}${taken}`
 }
 
-const oddsSummaryParts = computed(() => {
-  const odds = props.battleOdds
-  if (!odds) return null
+/** Панель показывают только атакующему: приказ составляет он. */
+const roundStats = computed(() =>
+  props.forecast ? roundDamageStats(props.forecast.round, 'attacker') : null,
+)
+const outcome = computed(() =>
+  props.forecast && !isBombardment.value ? outcomeRows(props.forecast.outcome, 'attacker') : null,
+)
+const outcomeTitle = computed(() => outcomeHeading(props.forecast?.exact !== false))
+const outcomeHint = computed(() => outcomeNote(props.forecast?.exact !== false))
+
+/** Открыт ли блок «если драться до конца». Игрок решает на раунд, поэтому по умолчанию закрыт. */
+const outcomeOpen = ref(false)
+
+const attackerDice = computed(() => diceBreakdownLines(combatDiceReport(props.preview, 'attacker')))
+const defenderDice = computed(() => diceBreakdownLines(combatDiceReport(props.preview, 'defender')))
+
+const compactLine = computed(() => {
+  const forecast = props.forecast
+  if (!forecast) return null
   if (isBombardment.value) {
-    return [{ label: 'Попаданий ожидаемо', value: props.preview.attacker.expectedHits.toFixed(1), tone: 'win' as const }]
+    return `попаданий ожидаемо ${formatNumber(forecast.round.attackerHits)}`
   }
-  return [
-    { label: 'Победа', value: pct(odds.win), tone: 'win' as const },
-    { label: 'Взаимно', value: pct(odds.draw), tone: 'draw' as const },
-    { label: 'Поражение', value: pct(odds.defeat), tone: 'defeat' as const },
-  ]
+  return roundDamageLine(forecast.round, 'attacker')
+})
+
+const incompleteOrderNote = computed(() => {
+  const left = props.unassignedShips ?? 0
+  if (left <= 0) return null
+  return left === 1
+    ? 'Одному выбранному кораблю клетка ещё не указана — он в прогнозе не учтён.'
+    : `Ещё ${left} выбранным кораблям клетка не указана — они в прогнозе не учтены.`
 })
 </script>
 
@@ -125,14 +156,11 @@ const oddsSummaryParts = computed(() => {
       </button>
     </header>
 
-    <p v-if="collapsed && oddsSummaryParts" class="combat-preview__compact">
-      <template v-for="(part, index) in oddsSummaryParts" :key="part.tone">
-        <span v-if="index > 0" class="combat-preview__compact-sep"> · </span>
-        <span :class="`combat-preview__compact--${part.tone}`">{{ part.label }} {{ part.value }}</span>
-      </template>
+    <p v-if="collapsed && compactLine" class="combat-preview__compact">
+      За раунд: {{ compactLine }}
     </p>
     <p v-else-if="collapsed" class="combat-preview__compact combat-preview__compact--muted">
-      Оценка боя недоступна
+      Прогноз боя недоступен
     </p>
 
     <template v-if="!collapsed">
@@ -140,32 +168,39 @@ const oddsSummaryParts = computed(() => {
         {{ leadText }}
       </p>
 
-      <section v-if="battleOdds && preview.trigger !== 'bombardment'" class="round-odds">
-        <h4>Исход боя до конца (оценка)</h4>
-        <div class="odds-bars">
-          <div class="odds-row">
-            <span class="odds-label odds-label--win">Победа</span>
-            <div class="odds-track">
-              <div class="odds-fill odds-fill--win" :style="{ width: pct(battleOdds.win) }" />
-            </div>
-            <span class="odds-pct">{{ pct(battleOdds.win) }}</span>
-          </div>
-          <div class="odds-row">
-            <span class="odds-label odds-label--draw">Взаимно</span>
-            <div class="odds-track">
-              <div class="odds-fill odds-fill--draw" :style="{ width: pct(battleOdds.draw) }" />
-            </div>
-            <span class="odds-pct">{{ pct(battleOdds.draw) }}</span>
-          </div>
-          <div class="odds-row">
-            <span class="odds-label odds-label--defeat">Поражение</span>
-            <div class="odds-track">
-              <div class="odds-fill odds-fill--defeat" :style="{ width: pct(battleOdds.defeat) }" />
-            </div>
-            <span class="odds-pct">{{ pct(battleOdds.defeat) }}</span>
-          </div>
+      <section v-if="roundStats" class="round-damage">
+        <h4>{{ isBombardment ? 'Один обстрел' : 'Один раунд боя' }}</h4>
+        <div class="round-damage__stats">
+          <p
+            v-for="stat in roundStats"
+            :key="stat.tone"
+            class="round-damage__stat"
+            :class="`round-damage__stat--${stat.tone}`"
+          >
+            <span class="round-damage__label">{{ stat.label }}</span>
+            <span class="round-damage__value">{{ stat.value }}</span>
+          </p>
         </div>
-        <p class="odds-note">Симуляция боя до конца, без отступлений.</p>
+        <p v-if="incompleteOrderNote" class="round-damage__warn">{{ incompleteOrderNote }}</p>
+      </section>
+
+      <section v-if="outcome" class="round-odds">
+        <button type="button" class="round-odds__toggle" :aria-expanded="outcomeOpen" @click="outcomeOpen = !outcomeOpen">
+          <span>{{ outcomeOpen ? '▾' : '▸' }}</span>
+          <span>{{ outcomeTitle }}</span>
+        </button>
+        <template v-if="outcomeOpen">
+          <div class="odds-bars">
+            <div v-for="row in outcome" :key="row.tone" class="odds-row" :title="row.hint">
+              <span class="odds-label" :class="`odds-label--${row.tone}`">{{ row.label }}</span>
+              <div class="odds-track">
+                <div class="odds-fill" :class="`odds-fill--${row.tone}`" :style="{ width: pct(row.value) }" />
+              </div>
+              <span class="odds-pct">{{ pct(row.value) }}</span>
+            </div>
+          </div>
+          <p class="odds-note">{{ outcomeHint }}</p>
+        </template>
       </section>
 
       <div class="combat-preview__sides">
@@ -179,17 +214,12 @@ const oddsSummaryParts = computed(() => {
               {{ preview.trigger === 'bombardment' ? 'корабли обстрела' : 'корабли из хода' }}
             </li>
           </ul>
-          <p class="dice-line">
-            Кубиков: {{ preview.attacker.diceTotal }} · ожидаемо попаданий
-            {{ preview.attacker.expectedHits.toFixed(1) }}
-          </p>
-          <ul v-if="preview.attacker.supportingShips.length" class="support-list">
-            <li v-for="sup in preview.attacker.supportingShips" :key="sup.shipId">
-              {{ preview.trigger === 'bombardment' ? 'Обстрел' : 'Поддержка' }}:
-              {{ SHIP_LABELS[sup.type] }} · {{ sup.dice }}к на {{ sup.threshold }}+
-              <span class="muted">({{ sup.fromCoord.q }}, {{ sup.fromCoord.r }})</span>
-            </li>
+          <ul class="dice-breakdown">
+            <li v-for="line in attackerDice" :key="line">{{ line }}</li>
           </ul>
+          <p v-if="forecast" class="dice-line">
+            Ожидаемо попаданий: {{ formatNumber(forecast.round.attackerHits) }}
+          </p>
         </section>
 
         <section class="side side--defender">
@@ -203,16 +233,12 @@ const oddsSummaryParts = computed(() => {
             Не отвечает на обстрел
           </p>
           <template v-else>
-            <p class="dice-line">
-              Кубиков: {{ preview.defender.diceTotal }} · ожидаемо попаданий
-              {{ preview.defender.expectedHits.toFixed(1) }}
-            </p>
-            <ul v-if="preview.defender.supportingShips.length" class="support-list">
-              <li v-for="sup in preview.defender.supportingShips" :key="sup.shipId">
-                Поддержка: {{ SHIP_LABELS[sup.type] }} · {{ sup.dice }}к на {{ sup.threshold }}+
-                <span class="muted">({{ sup.fromCoord.q }}, {{ sup.fromCoord.r }})</span>
-              </li>
+            <ul class="dice-breakdown">
+              <li v-for="line in defenderDice" :key="line">{{ line }}</li>
             </ul>
+            <p v-if="forecast" class="dice-line">
+              Ожидаемо попаданий: {{ formatNumber(forecast.round.defenderHits) }}
+            </p>
           </template>
         </section>
       </div>
@@ -364,23 +390,65 @@ const oddsSummaryParts = computed(() => {
   margin-bottom: 0.1rem;
 }
 .dice-line {
-  margin: 0;
+  margin: 0.2rem 0 0;
   font-size: 0.72rem;
   color: #fecaca;
-}
-.support-list {
-  margin: 0.2rem 0 0;
-  padding: 0;
-  list-style: none;
-  font-size: 0.68rem;
-  color: #fed7aa;
-}
-.support-list li {
-  margin-bottom: 0.1rem;
 }
 .muted {
   color: #94a3b8;
   font-size: 0.7rem;
+}
+.dice-breakdown {
+  margin: 0.2rem 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.68rem;
+  line-height: 1.35;
+  color: #fed7aa;
+}
+.dice-breakdown li:last-child {
+  margin-top: 0.1rem;
+  color: #fff;
+  font-weight: 600;
+}
+.round-damage {
+  margin-bottom: 0.45rem;
+  padding: 0.45rem 0.5rem;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.28);
+}
+.round-damage h4 {
+  margin: 0 0 0.35rem;
+  font-size: 0.72rem;
+  color: #fff;
+}
+.round-damage__stats {
+  display: grid;
+  gap: 0.3rem;
+}
+.round-damage__stat {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin: 0;
+}
+.round-damage__label {
+  font-size: 0.72rem;
+  color: #fed7d7;
+}
+.round-damage__value {
+  font-size: 1.05rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.round-damage__stat--deal .round-damage__value { color: #86efac; }
+.round-damage__stat--take .round-damage__value { color: #fca5a5; }
+.round-damage__warn {
+  margin: 0.35rem 0 0;
+  font-size: 0.68rem;
+  line-height: 1.35;
+  color: #fde68a;
 }
 .round-odds {
   margin-bottom: 0.55rem;
@@ -388,6 +456,20 @@ const oddsSummaryParts = computed(() => {
   border-radius: 8px;
   background: rgba(0, 0, 0, 0.25);
   font-size: 0.76rem;
+}
+.round-odds__toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  width: 100%;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: #fff;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
 }
 .round-odds h4 {
   margin: 0 0 0.35rem;
@@ -433,6 +515,7 @@ const oddsSummaryParts = computed(() => {
 }
 .odds-note {
   margin: 0.3rem 0 0;
+  line-height: 1.35;
   font-size: 0.65rem;
   color: #94a3b8;
 }

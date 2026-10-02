@@ -9,13 +9,22 @@ import type {
 } from '@galaxy/rules'
 import {
   autoDiceTargetsFor,
+  combatDiceReport,
   combatSideOfPlayer,
   COMBAT_PREP_COUNTDOWN_MS,
-  estimateBattleOutcome,
+  forecastBattle,
   playerCombatDice,
   playerCombatTargets,
   SHIP_LABELS,
 } from '@galaxy/rules'
+import {
+  diceBreakdownLines,
+  formatPercent,
+  outcomeHeading,
+  outcomeNote,
+  outcomeRows,
+  roundDamageStats,
+} from '~/utils/combat-forecast-ui'
 import { useUiStrings } from '~/i18n/ui-strings'
 import type { GameSnapshot } from '@galaxy/rules'
 import {
@@ -309,8 +318,6 @@ const showModalContinueActions = computed(
     && props.continueDecisionRole != null,
 )
 
-const prepOdds = computed(() => estimateBattleOutcome(props.preview, { samples: 200 }))
-
 /** Игрок стреляет в этом бою — ему выбирать цели. */
 const localFiringSide = computed(() => combatSideOfPlayer(props.preview, props.localPlayerId))
 
@@ -349,14 +356,44 @@ const awaitingGarrison = computed(
 const pendingDamage = computed(() => props.snapshot.pendingCombat?.damageByShipId ?? {})
 const pendingRound = computed(() => props.snapshot.pendingCombat?.roundNumber ?? 1)
 
+/**
+ * Прогноз боя. Считается точно по характеристикам кораблей, поэтому не «бегает» при каждом
+ * пересчёте. Крупно показываем итог одного раунда — игрок решает именно на раунд; исход боя до
+ * конца спрятан в подробности.
+ */
+const prepForecast = computed(() => forecastBattle(props.preview))
+
+/** На чьей стороне смотрящий: наблюдателю стороны называем прямо. */
+const forecastViewer = computed(() => {
+  if (isLocalAttacker.value) return 'attacker' as const
+  if (isLocalDefender.value) return 'defender' as const
+  return localFiringSide.value
+})
+
+const prepRoundStats = computed(() => roundDamageStats(prepForecast.value.round, forecastViewer.value))
+const prepOutcomeRows = computed(() => outcomeRows(prepForecast.value.outcome, forecastViewer.value))
+const prepOutcomeTitle = computed(() => outcomeHeading(prepForecast.value.exact))
+const prepOutcomeNote = computed(() => outcomeNote(prepForecast.value.exact))
+const prepOutcomeOpen = ref(false)
+
+/** Откуда у каждого борта кубики: это снимает вопросы про поддержку и ловит неполный состав. */
+const prepDiceSides = computed(() => {
+  const sides = [
+    { role: 'attacker' as const, playerId: props.preview.attackerId },
+    ...(isBombardment.value ? [] : [{ role: 'defender' as const, playerId: props.preview.defenderId }]),
+  ]
+  return sides.map((side) => ({
+    ...side,
+    lines: diceBreakdownLines(combatDiceReport(props.preview, side.role, pendingDamage.value)),
+  }))
+})
+
 function localTargetsOptions(): CombatOptions {
   const side = localFiringSide.value
   return side ? { [side]: { diceTargets: prepTargets.value } } : {}
 }
 
-function pct(n: number): string {
-  return `${Math.round(n * 100)}%`
-}
+const pct = formatPercent
 
 function startBattle() {
   emit('resolve', localTargetsOptions())
@@ -523,14 +560,52 @@ onUnmounted(() => {
           />
 
           <div v-if="!isDefenderObserver" class="prep-outlook">
-            <p class="prep-odds" title="Симуляция боя до конца, без отступлений">
-              <span class="prep-odds-pct">
-                <span :style="{ color: playerColor(preview.attackerId) }">атака {{ pct(prepOdds.win) }}</span>
-                · взаимно {{ pct(prepOdds.draw) }}
-                ·
-                <span :style="{ color: playerColor(preview.defenderId) }">защита {{ pct(prepOdds.defeat) }}</span>
-              </span>
-            </p>
+            <div class="prep-round">
+              <p
+                v-for="stat in prepRoundStats"
+                :key="stat.tone"
+                class="prep-round__stat"
+                :class="`prep-round__stat--${stat.tone}`"
+              >
+                <span class="prep-round__label">{{ stat.label }}</span>
+                <span class="prep-round__value">{{ stat.value }}</span>
+              </p>
+            </div>
+
+            <div class="prep-dice">
+              <section v-for="side in prepDiceSides" :key="side.role" class="prep-dice__side">
+                <h4 :style="{ color: playerColor(side.playerId) }">
+                  {{ side.role === 'attacker' ? 'Кубики атакующего' : 'Кубики защитника' }} ·
+                  {{ playerLabel(side.playerId) }}
+                </h4>
+                <ul>
+                  <li v-for="line in side.lines" :key="line">{{ line }}</li>
+                </ul>
+              </section>
+            </div>
+
+            <div class="prep-odds">
+              <button
+                type="button"
+                class="prep-odds__toggle"
+                :aria-expanded="prepOutcomeOpen"
+                @click="prepOutcomeOpen = !prepOutcomeOpen"
+              >
+                <span>{{ prepOutcomeOpen ? '▾' : '▸' }}</span>
+                <span>{{ prepOutcomeTitle }}</span>
+              </button>
+              <template v-if="prepOutcomeOpen">
+                <p class="prep-odds__rows">
+                  <template v-for="(row, index) in prepOutcomeRows" :key="row.tone">
+                    <span v-if="index > 0" class="prep-odds__sep"> · </span>
+                    <span class="prep-odds__row" :class="`prep-odds__row--${row.tone}`" :title="row.hint">
+                      {{ row.label }} {{ pct(row.value) }}
+                    </span>
+                  </template>
+                </p>
+                <p class="prep-odds__note">{{ prepOutcomeNote }}</p>
+              </template>
+            </div>
           </div>
 
           <p v-if="prepPhase === 'countdown' && countdownDisplay != null" class="countdown-banner">
@@ -824,13 +899,56 @@ onUnmounted(() => {
   flex-direction: column;
   gap: 0.3rem;
 }
+.prep-round {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+  gap: 0.3rem 0.6rem;
+  padding: 0.45rem 0.6rem;
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.65);
+  border: 1px solid rgba(71, 85, 105, 0.7);
+}
+.prep-round__stat {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  margin: 0;
+}
+.prep-round__label {
+  font-size: 0.7rem;
+  color: #94a3b8;
+}
+.prep-round__value {
+  font-size: 1.15rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.prep-round__stat--deal .prep-round__value { color: #86efac; }
+.prep-round__stat--take .prep-round__value { color: #fca5a5; }
+.prep-dice {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+  gap: 0.3rem 0.6rem;
+}
+.prep-dice__side h4 {
+  margin: 0 0 0.15rem;
+  font-size: 0.68rem;
+  font-weight: 600;
+}
+.prep-dice__side ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.68rem;
+  line-height: 1.35;
+  color: #cbd5e1;
+}
+.prep-dice__side li:last-child {
+  color: #fff;
+  font-weight: 600;
+}
 .prep-odds {
   margin: 0;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: center;
-  gap: 0.35rem 0.65rem;
   padding: 0.35rem 0.5rem;
   border-radius: 8px;
   background: rgba(15, 23, 42, 0.55);
@@ -838,8 +956,34 @@ onUnmounted(() => {
   font-size: 0.7rem;
   color: #94a3b8;
 }
-.prep-odds-pct {
+.prep-odds__toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  width: 100%;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: #cbd5e1;
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+.prep-odds__rows {
+  margin: 0.3rem 0 0;
   font-variant-numeric: tabular-nums;
+}
+.prep-odds__sep {
+  color: #475569;
+}
+.prep-odds__row--win { color: #86efac; }
+.prep-odds__row--draw { color: #fde68a; }
+.prep-odds__row--defeat { color: #fca5a5; }
+.prep-odds__note {
+  margin: 0.25rem 0 0;
+  font-size: 0.65rem;
+  line-height: 1.35;
   color: #64748b;
 }
 .outcome-hero {
