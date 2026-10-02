@@ -30,11 +30,21 @@ export const SCENARIO_ALWAYS_ALLOWED_ACTIONS: ReadonlySet<string> = new Set([
   'choose-doctrine',
 ])
 
+/**
+ * Действия, которых в учебной партии нет никогда — ни на шаге, ни после прохождения сценария.
+ *
+ * «Сдаться» на учебном полигоне бессмысленно: соперники учебные, а сдавшийся остаётся в комнате,
+ * где делать больше нечего, — живой тестировщик нажал кнопку из любопытства и застрял до конца
+ * партии. Закончить обучение можно, выйдя из комнаты.
+ */
+export const SCENARIO_FORBIDDEN_ACTIONS: ReadonlySet<string> = new Set(['surrender'])
+
 export function canPerformScenarioAction(
   step: ScenarioStep | null,
   actionId: string,
   params?: Record<string, unknown>,
 ): boolean {
+  if (SCENARIO_FORBIDDEN_ACTIONS.has(actionId)) return false
   if (!step || step.allowedActions === undefined) return true
   if (SCENARIO_ALWAYS_ALLOWED_ACTIONS.has(actionId)) return true
   return step.allowedActions.some((allowed) => {
@@ -47,13 +57,15 @@ export function filterScenarioLegalActions(
   step: ScenarioStep | null,
   actions: LegalAction[],
 ): LegalAction[] {
-  if (!step || step.allowedActions === undefined) return actions
+  // Запрет на учебное «сдаться» сильнее шага: он действует и когда сценарий уже пройден.
+  const playable = actions.filter((action) => !SCENARIO_FORBIDDEN_ACTIONS.has(action.id))
+  if (!step || step.allowedActions === undefined) return playable
   const ids = new Set(
     step.allowedActions.map((allowed) =>
       typeof allowed === 'string' ? allowed : allowed.actionId,
     ),
   )
-  return actions.filter(
+  return playable.filter(
     (action) => action.type === 'info' || ids.has(action.id) || SCENARIO_ALWAYS_ALLOWED_ACTIONS.has(action.id),
   )
 }
@@ -90,6 +102,9 @@ export function scenarioActionError(
   params?: Record<string, unknown>,
 ): string | null {
   if (canPerformScenarioAction(step, actionId, params)) return null
+  if (SCENARIO_FORBIDDEN_ACTIONS.has(actionId)) {
+    return 'На учебном полигоне сдаться нельзя. Чтобы закончить обучение, выйдите в лобби.'
+  }
   return step?.hint
     ? `Сейчас другой учебный шаг. ${step.hint}`
     : 'Сейчас выполните действие из учебной подсказки.'

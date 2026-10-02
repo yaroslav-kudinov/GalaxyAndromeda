@@ -4,12 +4,16 @@ import type { GameSnapshot } from './save-file.js'
 import { gameStateFromSnapshot } from './save-file.js'
 import type { GameState } from './types.js'
 
-export type VictoryReason = 'power_centers' | 'last_standing' | 'turn_limit'
+export type VictoryReason = 'power_centers' | 'last_standing' | 'turn_limit' | 'stalemate'
 
 export type GameOverReason = VictoryReason
 
 export interface GameOverState {
-  winnerId: string
+  /**
+   * `null` — партия окончена без победителя: она встала, а на карте не осталось ни чьего флота и
+   * ни чьего контроля, поэтому выбирать победителя не из кого.
+   */
+  winnerId: string | null
   reason: GameOverReason
 }
 
@@ -25,6 +29,7 @@ const REASON_LABELS: Record<VictoryReason, string> = {
   power_centers: 'большинство центров власти',
   last_standing: 'единственный оставшийся игрок',
   turn_limit: 'лимит ходов',
+  stalemate: 'партия встала — ходов ни у кого не осталось',
 }
 
 function activePlayers(state: GameState): string[] {
@@ -316,20 +321,35 @@ export function applyVictoryAndDefeatChecks(
   return { eliminated, gameOver: null }
 }
 
+/**
+ * Партия встала: ни у кого из оставшихся не осталось действия, и следующий ход в точности повторил
+ * бы этот. Закрываем её тем же тай-брейком, что и лимит ходов, — иначе счётчик ходов растёт без
+ * конца и выйти из партии нечем. Победителя может не быть вовсе: когда на карте не осталось ни
+ * чьего флота и ни чьего контроля, выбирать не из кого.
+ */
+export function finishStalledMatch(game: GameSnapshot, mapId: string): GameOverState | null {
+  if (game.gameOver) return game.gameOver
+  const state = gameStateFromSnapshot(game, mapId)
+  const outcome = resolveTurnLimitWinner(state, game.matchSeed ?? 0)
+  return finishGame(game, outcome?.winnerId ?? null, 'stalemate', []).gameOver
+}
+
 function finishGame(
   game: GameSnapshot,
-  winnerId: string,
+  winnerId: string | null,
   reason: VictoryReason,
   eliminated: string[],
 ): { eliminated: string[]; gameOver: GameOverState } {
   game.gameOver = { winnerId, reason }
-  const winner = game.players.find((p) => p.id === winnerId)
+  const winner = winnerId ? game.players.find((p) => p.id === winnerId) : undefined
   game.eventLog.push({
     id: `evt-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
     turn: game.turnNumber,
     phase: game.phase,
     type: 'victory',
-    message: `Победа: ${winner?.name ?? winnerId} (${REASON_LABELS[reason]})`,
+    message: winnerId
+      ? `Победа: ${winner?.name ?? winnerId} (${REASON_LABELS[reason]})`
+      : `Партия окончена без победителя (${REASON_LABELS[reason]})`,
     timestamp: Date.now(),
   })
   trimGameEventLog(game)

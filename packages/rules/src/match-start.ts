@@ -27,10 +27,17 @@ export function isPristineMatchSnapshot(game: GameSnapshot): boolean {
  */
 export const DEFAULT_TURN_LIMIT = 15
 
+/**
+ * Лимит ходов учебной партии. Вдвое больше обычного: урок идти не мешает — все двадцать восемь
+ * шагов укладываются в несколько ходов, — но страхует от бесконечного счётчика. Без лимита учебная
+ * партия после сдачи живого игрока оставалась с двумя пассивными ботами и крутила ходы без конца.
+ */
+export const TUTORIAL_TURN_LIMIT = 30
+
 export interface BeginMatchOptions {
   /**
-   * Лимит ходов партии. `null` — без лимита: обучение не должно обрываться на середине
-   * урока. По умолчанию `DEFAULT_TURN_LIMIT`.
+   * Лимит ходов партии. `null` — без лимита: партия может идти сколько угодно ходов.
+   * По умолчанию `DEFAULT_TURN_LIMIT`.
    */
   turnLimit?: number | null
   /**

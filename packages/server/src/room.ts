@@ -55,6 +55,7 @@ import {
   freeLobbyPlayerIds,
 
   beginMatchForParticipants,
+  TUTORIAL_TURN_LIMIT,
   isPristineMatchSnapshot,
   filterScenarioLegalActions,
   getCurrentStep,
@@ -982,9 +983,10 @@ export function startRoom(roomId: string, playerId: string): RoomStartResult {
   syncParticipatingPlayerIds(room.state, room.playerIds)
   if (isPristineMatchSnapshot(room.state)) {
     beginMatchForParticipants(room.state, room.map.id, room.playerIds, {
-      // Обучение не обрывается лимитом ходов: урок важнее темпа. И сценарий рассчитан на
-      // конкретную очередь хода, поэтому сид партии ему не выдаётся.
-      turnLimit: room.mode === 'tutorial' ? null : undefined,
+      // Учебной партии лимит задан с запасом: урок укладывается в несколько ходов, а предел
+      // страхует от бесконечного счётчика, если на полигоне остались одни пассивные боты.
+      // Сценарий рассчитан на конкретную очередь хода, поэтому сид партии ему не выдаётся.
+      turnLimit: room.mode === 'tutorial' ? TUTORIAL_TURN_LIMIT : undefined,
       matchSeed: room.mode === 'tutorial' ? null : undefined,
       doctrineWindow: room.mode === 'tutorial' ? null : undefined,
     })
