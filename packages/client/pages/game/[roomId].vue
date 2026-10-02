@@ -4340,6 +4340,28 @@ button,
   line-height: 1.2;
   text-align: center;
 }
+/*
+ * Второстепенная кнопка той же формы: контур вместо заливки, без пульса.
+ * Нужна там, где рядом с кнопкой фазы живёт ещё одно важное действие —
+ * например выход с полигона после пройденного обучения. Залитых кнопок на
+ * экране должно оставаться не больше одной, иначе игрок жмёт не ту и не
+ * понимает, почему ничего не произошло.
+ */
+.phase-advance-btn--secondary {
+  border-color: color-mix(in srgb, var(--player-color, #3b82f6) 55%, transparent);
+  background: var(--g-surface-1);
+  color: var(--g-text-strong);
+  font-weight: 650;
+  text-shadow: none;
+  animation: none;
+  box-shadow: var(--g-shadow-1);
+}
+
+.phase-advance-btn--secondary:hover:not(:disabled) {
+  border-color: var(--player-color, var(--g-accent));
+  background: var(--g-surface-2);
+}
+
 .phase-advance-btn:hover:not(:disabled) {
   filter: brightness(1.06);
 }
