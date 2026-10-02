@@ -368,6 +368,16 @@ export const uiStringsRu = {
     available: 'свободен',
     bot: 'бот',
   },
+  belt: {
+    phaseTitle: (phase: string, turn: string) => `Фаза «${phase}», ход ${turn}`,
+    toolsOpen: 'Меню партии',
+    toolsClose: 'Закрыть меню',
+    toolsLabel: 'Меню партии',
+    back: 'Вернуться в лобби',
+    markersPlanning: (placed: number, limit: number) =>
+      `Маркеров поставлено: ${placed} из ${limit}`,
+    markersActions: (left: number) => `Маркеров к исполнению: ${left}`,
+  },
   turnOrder: {
     heading: 'Очередь хода',
     you: 'вы',

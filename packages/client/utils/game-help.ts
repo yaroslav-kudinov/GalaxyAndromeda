@@ -67,6 +67,51 @@ function normalizePhase(phase: Phase | undefined): Phase | undefined {
   return phase
 }
 
+/**
+ * Строка «что от вас ждут сейчас» для пояса состояния.
+ *
+ * Отличается от `phaseGuidanceForTurn` намеренно: та объясняет, куда нажимать,
+ * и потому длинная («Клик по клетке с вашим кораблём — поставить или снять
+ * маркер действия»). В поясе нужна не инструкция, а ответ на вопрос «чья
+ * очередь что-то делать и что именно» — в одну строку, которую видно всегда.
+ * Счётчики сюда не попадают: их показывает значок маркеров рядом.
+ */
+export interface BeltStatus {
+  text: string
+  tone: 'idle' | 'info' | 'warn' | 'error'
+}
+
+export function beltStatusForTurn(
+  phase: Phase | undefined,
+  isMyTurn: boolean,
+  ctx: PhaseGuidanceContext & { activePlayerName?: string | null } = {},
+): BeltStatus | null {
+  const normalized = normalizePhase(phase)
+  if (!normalized) return null
+
+  if (!isMyTurn) {
+    return {
+      text: ctx.activePlayerName ? `Ждём: ${ctx.activePlayerName}` : 'Ждём соперника',
+      tone: 'idle',
+    }
+  }
+
+  if (ctx.doctrineOwed) return { text: 'Выберите доктрину', tone: 'warn' }
+
+  if (normalized === 'events') return { text: 'Событие применяется само', tone: 'idle' }
+
+  if (normalized === 'planning') {
+    const remaining = Math.max(0, (ctx.actionMarkersMax ?? 0) - (ctx.actionMarkersPlaced ?? 0))
+    return remaining > 0
+      ? { text: 'Отметьте клетки, с которых будете действовать', tone: 'info' }
+      : { text: 'План готов — можно передавать ход', tone: 'info' }
+  }
+
+  if (ctx.actionMarkerUnresolved) return { text: 'Исполните маркер — нажмите его на карте', tone: 'warn' }
+  if (ctx.actionMarkerUsedThisTurn) return { text: 'Действие сделано — передайте ход', tone: 'info' }
+  return { text: 'Нажмите маркер на карте, чтобы исполнить его', tone: 'info' }
+}
+
 /** Подсказка для hero-полоски с учётом фазы */
 export function phaseGuidanceForTurn(
   phase: Phase | undefined,

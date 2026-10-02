@@ -313,18 +313,22 @@ export function phaseAdvanceActionLabel(
       ctx,
     )!
     const name = playerDisplayName(state, nextId)
-    // Стрелка требовала расшифровки: она значила и «ход уходит игроку»,
-    // и «начинается следующая фаза». Теперь адресат назван прямо.
-    return `Передать ход: ${name}`
+    // Слово «ход» осталось только там, где ход действительно заканчивается.
+    // Прежняя подпись «Передать ход: Имя» стояла в обеих фазах, и живой игрок
+    // читал её как «начинается следующий ход», а не «вторая половина текущего»:
+    // «читая слово ход, я думаю что мы идём в следующий ход, а не следующую
+    // фазу». Теперь подпись называет, что именно он сейчас закончил.
+    return phase === 'planning'
+      ? `План готов → ${name}`
+      : `Действие сделано → ${name}`
   }
 
   switch (phase) {
     case 'planning':
-      return 'Все спланировали — к действиям'
+      return 'Все спланировали — переходим к действиям'
     case 'actions':
-      return 'Завершить ход'
     case 'production':
-      return 'Завершить ход'
+      return `Закончить ход ${state.turnNumber}`
     default:
       return 'Далее'
   }
@@ -497,7 +501,7 @@ export function phaseAdvanceActionLabelForSnapshot(game: GameSnapshot, mapId: st
     const order = activePlayerOrder(state.players, participating, ctx)
     const nextId = order[0]
     if (!nextId) return 'Далее'
-    return `Новый круг, ход: ${playerDisplayName(state, nextId)}`
+    return `Новый круг действий, первым: ${playerDisplayName(state, nextId)}`
   }
   return phaseAdvanceActionLabel(state, participating, game)
 }
