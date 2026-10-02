@@ -82,11 +82,13 @@ import {
 } from './room-chat.js'
 import {
   advanceTutorialScenario,
+  attachCoachToRoom,
   initTutorialRoomState,
   loadScenarioScriptById,
   manualAdvanceScenarioStep,
   runBotTicksForRoom,
   scenarioObservationExtras,
+  setScenarioHintsDismissed,
   roomBotIds,
   tutorialShouldHoldActionTurnForCombatResult,
 } from './bot-tick.js'
@@ -566,8 +568,8 @@ function roomObservation(
   const obs = buildObservation(state as unknown as Parameters<typeof buildObservation>[0], legal, {
     geometry: includeGeometry,
   })
-  const extras = scenarioObservationExtras(room)
-  if (extras.tutorialMode) {
+  const extras = scenarioObservationExtras(room, playerId)
+  if (extras.scenarioId) {
     ;(obs as GameObservation & { tutorial?: typeof extras }).tutorial = extras
   }
   return obs
@@ -626,6 +628,8 @@ export function createTutorialRoom(
 ): { ok: true; room: Room; playerId: string } | { ok: false; error: string } {
   const script = loadScenarioScriptById(scenarioId)
   if (!script) return { ok: false, error: 'Сценарий не найден' }
+  // Подсказчик картой не распоряжается — полигон из него не поднять.
+  if (!script.mapId) return { ok: false, error: 'У сценария нет карты: это подсказчик, а не полигон' }
   const map = getMapDefinition(script.mapId)
   if (!map) return { ok: false, error: 'Карта сценария не найдена в каталоге' }
   const bots = script.bots?.length
@@ -1357,6 +1361,7 @@ export function registerHttpRoutes(app: FastifyInstance): void {
       map?: MapDefinition
       catalogMapId?: string
       scenarioId?: string
+      coachId?: string
       playerName?: string
       maxPlayers?: number
       save?: unknown
@@ -1413,7 +1418,13 @@ export function registerHttpRoutes(app: FastifyInstance): void {
     const room = createRoom(map, req.body.maxPlayers ?? 6)
     room.creatorIp = ip
     trackRoomCreate(ip)
-    return { roomId: room.id, code: room.code }
+    if (req.body.coachId) {
+      const attached = attachCoachToRoom(room, req.body.coachId)
+      // Подсказчик — удобство, а не условие партии: не нашёлся, значит партия идёт без него.
+      if (!attached.ok) debugLog('coach.attach.failed', { roomId: room.id, error: attached.error })
+      else scheduleRoomPersist(room)
+    }
+    return { roomId: room.id, code: room.code, coach: Boolean(room.scenarioId) }
   })
 
 
@@ -1615,6 +1626,25 @@ export function registerHttpRoutes(app: FastifyInstance): void {
       maybeAutoAdvanceTutorialActionTurn(room)
       runBotTicksForRoom(room, applyBotActionInternal)
       bumpObservationRevision(room, 'scenario:manual-next')
+      scheduleRoomPersist(room)
+      return roomObservation(room, req.body.playerId, wantsFullGeometry(req.query.geometry))
+    },
+  )
+
+  app.post<{
+    Params: { id: string }
+    Querystring: { geometry?: string }
+    Body: { playerId: string; dismissed?: boolean }
+  }>(
+    '/rooms/:id/scenario/hints',
+    async (req, reply) => {
+      const room = getRoom(req.params.id)
+      if (!room) return reply.status(404).send({ error: 'Room not found' })
+      assertRoomMember(room, req.body.playerId)
+      if (!setScenarioHintsDismissed(room, req.body.dismissed !== false)) {
+        return reply.status(400).send({ error: 'Подсказки этой партии не переключаются' })
+      }
+      bumpObservationRevision(room, 'scenario:hints')
       scheduleRoomPersist(room)
       return roomObservation(room, req.body.playerId, wantsFullGeometry(req.query.geometry))
     },

@@ -56,7 +56,7 @@ import {
   formatRechargeBudgetHint,
   getCombatRetreatDestinations,
 } from '@galaxy/rules'
-import { advanceScenarioStep, fetchObservation, fetchRoomBootstrap, GameApiError, joinRoom, rejoinRoom, startRoom, closeRoom, addRoomBot, removeRoomBot, setRoomBotDifficulty, markCombatResultSeen, submitGameAction, updateCombatPrepAction } from '~/composables/useGameApi'
+import { advanceScenarioStep, fetchObservation, fetchRoomBootstrap, GameApiError, joinRoom, rejoinRoom, startRoom, closeRoom, addRoomBot, removeRoomBot, setRoomBotDifficulty, markCombatResultSeen, setScenarioHints, submitGameAction, updateCombatPrepAction } from '~/composables/useGameApi'
 import { loadGameSessionForRoom, saveGameSession, persistLocalGalaxySave, clearLocalGalaxySave, loadLocalGalaxySaveRaw, pruneOnlineGalaxySaveCache } from '~/composables/useGameSession'
 import { loadPlayerClaim, savePlayerClaim } from '~/composables/usePlayerClaim'
 import { bootstrapToLobbySlots, defaultSlotForRoom, roomHasFreeSlot } from '~/utils/lobby-slot'
@@ -150,6 +150,10 @@ function syncNarrowUi() {
 }
 const legalActions = ref<LegalAction[]>([])
 const tutorialMode = ref(false)
+/** Какой сценарий везёт комната: полигон, подсказчик обычной партии или ничего. */
+const coachKind = ref<'tutorial' | 'coach' | null>(null)
+const coachHintsDismissed = ref(false)
+const coachMode = computed(() => coachKind.value === 'coach')
 const serverStatus = ref<'idle' | 'loading' | 'online' | 'offline'>('idle')
 const loadError = ref<string | null>(null)
 const participationHint = ref<string | null>(null)
@@ -1410,6 +1414,17 @@ async function onScenarioCoachNext() {
   }
 }
 
+async function onScenarioHintsToggle(dismissed: boolean) {
+  if (!roomId.value || !playerId.value) return
+  try {
+    const obs = await setScenarioHints(roomId.value, playerId.value, dismissed)
+    applyObservation(obs, undefined, 'action')
+    persistLocal()
+  } catch (e) {
+    loadError.value = e instanceof Error ? e.message : String(e)
+  }
+}
+
 /** Очередь хода текущего круга: цвет, место и состояние каждого игрока */
 const turnQueue = computed(() => {
   const save = saveFile.value
@@ -1452,6 +1467,8 @@ function applyObservation(
   legalActions.value = obs.legalActions ?? []
   const tutorial = (obs as {
     tutorial?: {
+      kind?: 'tutorial' | 'coach'
+      hintsDismissed?: boolean
       scenarioStep?: {
         id: string
         title: string
@@ -1467,7 +1484,10 @@ function applyObservation(
       }
     }
   }).tutorial
-  tutorialMode.value = Boolean(tutorial)
+  // Подсказчик обычной партии ничего не запрещает: учебные ограничения включает только полигон.
+  coachKind.value = tutorial?.kind ?? null
+  tutorialMode.value = Boolean(tutorial) && tutorial!.kind !== 'coach'
+  coachHintsDismissed.value = Boolean(tutorial?.hintsDismissed)
   if (tutorial?.scenarioStep) {
     tutorialCoach.value = {
       title: tutorial.scenarioStep.title,
@@ -3879,8 +3899,18 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
             :manual="tutorialCoach.manual"
             :step-number="tutorialCoach.stepNumber"
             :step-count="tutorialCoach.stepCount"
+            :coach="coachMode"
             @next="onScenarioCoachNext"
+            @dismiss="onScenarioHintsToggle(true)"
           />
+          <button
+            v-else-if="coachMode && coachHintsDismissed"
+            type="button"
+            class="coach-restore"
+            @click="onScenarioHintsToggle(false)"
+          >
+            {{ ui.coach.coachRestore }}
+          </button>
           <div v-if="!isNarrowUi" class="you-plaque-slot" aria-live="polite">
             <div
               class="you-plaque"
@@ -4532,6 +4562,19 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
 .back-link:hover {
   border-color: rgba(147, 197, 253, 0.35);
   background: rgba(30, 41, 59, 0.65);
+}
+.coach-restore {
+  align-self: flex-start;
+  padding: 0.3rem 0.6rem;
+  border: 1px solid rgba(56, 189, 248, 0.35);
+  border-radius: 7px;
+  background: rgba(15, 23, 42, 0.9);
+  color: #7dd3fc;
+  font-size: 0.74rem;
+  cursor: pointer;
+}
+.coach-restore:hover {
+  color: #e0f2fe;
 }
 .you-plaque-slot {
   align-self: flex-start;

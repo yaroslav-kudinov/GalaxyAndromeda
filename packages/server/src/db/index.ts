@@ -233,6 +233,14 @@ function seedBundledScenarios(): void {
       path: 'scenarios/tutorial-basics.json',
       description: 'Пошаговое обучение на отдельной коридорной карте',
       sortOrder: 1,
+      published: true,
+    },
+    {
+      path: 'scenarios/coach-first-match.json',
+      description: 'Подсказки первой партии: едут на любой карте, ничего не запрещают',
+      sortOrder: 2,
+      // Подсказчик не выбирают в списке обучений: его включает создание партии.
+      published: false,
     },
   ]
   let seeded = 0
@@ -240,14 +248,15 @@ function seedBundledScenarios(): void {
     const scenarioPath = join(repoRoot(), entry.path)
     if (!existsSync(scenarioPath)) continue
     const script = readFileSync(scenarioPath, 'utf8')
-    const parsed = JSON.parse(script) as { id: string; name: string; mapId: string }
+    const parsed = JSON.parse(script) as { id: string; name: string; mapId?: string }
     upsertScenario({
       id: parsed.id,
       name: parsed.name,
       description: entry.description,
       scriptJson: script,
-      mapId: parsed.mapId,
-      published: true,
+      // У подсказчика карты нет: он едет на той, которую выбрал игрок.
+      mapId: parsed.mapId ?? '',
+      published: entry.published,
       sortOrder: entry.sortOrder,
     })
     seeded += 1

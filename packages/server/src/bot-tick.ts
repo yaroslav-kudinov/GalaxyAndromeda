@@ -2,12 +2,15 @@ import {
   advanceScenarioProgress,
   botPolicyForPlayer,
   buildObservation,
+  dismissScenarioProgress,
   getCurrentStep,
   getLegalActionsForSnapshot,
+  getVisibleStep,
   parseScenarioScript,
   pickTutorialBotAction,
   initScenarioProgress,
   manualAdvanceProgress,
+  restoreScenarioProgress,
   type ActionPayload,
   type ScenarioScript,
 } from '@galaxy/rules'
@@ -30,6 +33,30 @@ export function loadScenarioScriptById(scenarioId: string): ScenarioScript | nul
   const row = getScenarioById(scenarioId)
   if (!row) return null
   return parseScenarioScript(JSON.parse(row.script_json))
+}
+
+export function roomScenarioScript(room: Room): ScenarioScript | null {
+  return room.scenarioId ? loadScenarioScriptById(room.scenarioId) : null
+}
+
+/**
+ * Комната везёт подсказчика, а не полигон: партия обычная, боты обычные, ограничений нет —
+ * сценарий только показывает подсказки хозяину комнаты.
+ */
+export function roomHasCoach(room: Room): boolean {
+  if (room.mode === 'tutorial' || !room.scenarioId) return false
+  return roomScenarioScript(room)?.kind === 'coach'
+}
+
+/**
+ * Кому адресованы подсказки комнаты. В обучении это единственный живой игрок, в обычной
+ * партии — хозяин комнаты: подсказчик включает себе тот, кто создаёт партию.
+ */
+export function scenarioAudiencePlayerId(room: Room): string | undefined {
+  if (room.mode === 'tutorial') {
+    return room.playerIds.find((id) => !roomBotIds(room).includes(id))
+  }
+  return room.hostPlayerId ?? undefined
 }
 
 export function runBotTicksForRoom(
@@ -91,7 +118,7 @@ export function advanceTutorialScenario(
   lastAction?: ActionPayload,
   lastActorId?: string,
 ): boolean {
-  if (room.mode !== 'tutorial' || !room.scenarioId || !room.state.scenarioProgress) return false
+  if (!room.scenarioId || !room.state.scenarioProgress) return false
   const script = loadScenarioScriptById(room.scenarioId)
   if (!script) return false
   const previous = room.state.scenarioProgress
@@ -101,7 +128,10 @@ export function advanceTutorialScenario(
     room.state,
     lastAction,
     lastActorId,
-    { hasCombatResult: room.lastCombatResult != null },
+    {
+      hasCombatResult: room.lastCombatResult != null,
+      selfPlayerId: scenarioAudiencePlayerId(room),
+    },
   )
   room.state.scenarioProgress = next
   return next.stepIndex !== previous.stepIndex || next.completed !== previous.completed
@@ -138,18 +168,48 @@ export function initTutorialRoomState(
 }
 
 export function manualAdvanceScenarioStep(room: Room): boolean {
-  if (room.mode !== 'tutorial' || !room.scenarioId || !room.state.scenarioProgress) return false
+  if (!room.scenarioId || !room.state.scenarioProgress) return false
   const script = loadScenarioScriptById(room.scenarioId)
   if (!script) return false
-  const next = manualAdvanceProgress(script, room.state.scenarioProgress)
+  const next = manualAdvanceProgress(
+    script,
+    room.state.scenarioProgress,
+    room.state,
+    scenarioAudiencePlayerId(room),
+  )
   if (next.stepIndex === room.state.scenarioProgress.stepIndex && !next.completed) return false
   room.state.scenarioProgress = next
   // «Далее» на шаге после боя — игрок осознал итог; можно снова передавать ход.
-  room.lastCombatResult = undefined
+  if (room.mode === 'tutorial') room.lastCombatResult = undefined
   return true
 }
 
-export function scenarioObservationExtras(room: Room): {
+/** Игрок выключил подсказки обычной партии. Партия продолжается как обычная. */
+export function setScenarioHintsDismissed(room: Room, dismissed: boolean): boolean {
+  const progress = room.state.scenarioProgress
+  if (!progress || !roomHasCoach(room)) return false
+  if (Boolean(progress.dismissed) === dismissed) return false
+  room.state.scenarioProgress = dismissed
+    ? dismissScenarioProgress(progress)
+    : restoreScenarioProgress(progress)
+  return true
+}
+
+/**
+ * Включить подсказчика в обычной комнате. Полигон и подсказчик не совмещаются: это разные
+ * виды сценария, и комната везёт один.
+ */
+export function attachCoachToRoom(room: Room, coachId: string): { ok: true } | { ok: false; error: string } {
+  if (room.mode === 'tutorial') return { ok: false, error: 'На полигоне подсказчик не нужен' }
+  const script = loadScenarioScriptById(coachId)
+  if (!script) return { ok: false, error: 'Подсказчик не найден' }
+  if (script.kind !== 'coach') return { ok: false, error: 'Это сценарий полигона, а не подсказчик' }
+  room.scenarioId = coachId
+  room.state.scenarioProgress = initScenarioProgress(coachId)
+  return { ok: true }
+}
+
+export function scenarioObservationExtras(room: Room, viewerPlayerId?: string): {
   scenarioId?: string
   scenarioStep?: {
     id: string
@@ -165,16 +225,30 @@ export function scenarioObservationExtras(room: Room): {
     allowedActions?: import('@galaxy/rules').ScenarioStep['allowedActions']
   }
   tutorialMode?: boolean
+  /** Вид сценария: полигон ограничивает действия, подсказчик только подсказывает. */
+  kind?: 'tutorial' | 'coach'
+  /** Подсказки выключены игроком — панель не показывается, но её можно вернуть. */
+  hintsDismissed?: boolean
 } {
-  if (room.mode !== 'tutorial' || !room.scenarioId) return {}
+  if (!room.scenarioId) return {}
   const script = loadScenarioScriptById(room.scenarioId)
-  if (!script) return { tutorialMode: true, scenarioId: room.scenarioId }
+  const tutorial = room.mode === 'tutorial'
+  if (!script) return tutorial ? { tutorialMode: true, scenarioId: room.scenarioId } : {}
+  const coach = !tutorial && script.kind === 'coach'
+  if (!tutorial && !coach) return {}
+
+  const audience = scenarioAudiencePlayerId(room)
+  // Подсказчик обычной партии адресован одному игроку: остальным он не виден и ничем их
+  // не ограничивает, иначе соперник читал бы подсказки, которые не для него.
+  if (coach && viewerPlayerId && audience && viewerPlayerId !== audience) return {}
+
   const progress = room.state.scenarioProgress
-  const step =
-    progress && !progress.completed ? script.steps[progress.stepIndex] : null
+  const step = getVisibleStep(script, progress, room.state, audience)
   return {
-    tutorialMode: true,
+    ...(tutorial ? { tutorialMode: true } : {}),
+    kind: coach ? 'coach' : 'tutorial',
     scenarioId: room.scenarioId,
+    ...(progress?.dismissed ? { hintsDismissed: true } : {}),
     scenarioStep: step
       ? {
           id: step.id,
