@@ -62,6 +62,7 @@ import { loadPlayerClaim, savePlayerClaim } from '~/composables/usePlayerClaim'
 import { bootstrapToLobbySlots, defaultSlotForRoom, roomHasFreeSlot } from '~/utils/lobby-slot'
 import { ownDoctrineSummary, playerConditions } from '~/utils/player-conditions'
 import { tutorialAllowsAction as tutorialAllowsActionFor } from '~/utils/tutorial-actions'
+import { connectionToastFor, isConnectionLost } from '~/utils/connection-status'
 import { gameConfirm } from '~/composables/useGameDialog'
 import { useGamePresence } from '~/composables/useGamePresence'
 import { usePlayerProfile } from '~/composables/usePlayerProfile'
@@ -507,6 +508,20 @@ const { toasts: statusToasts, pushToast: pushStatusToast } = useGameStatusToasts
   { quiet: tutorialMode },
 )
 const { play: playGameSfx, muted: sfxMuted, toggleMute: toggleSfxMute } = useGameSfx()
+
+/** Обрыв связи не должен проходить молча — см. `utils/connection-status.ts`. */
+const connectionLost = computed(() =>
+  isConnectionLost({
+    roomId: roomId.value,
+    serverStatus: serverStatus.value,
+    syncWarningVisible: syncWarningVisible.value,
+  }),
+)
+
+watch(connectionLost, (lost, wasLost) => {
+  const toast = connectionToastFor(lost, wasLost)
+  if (toast) pushStatusToast('connection', toast.title, toast.detail, toast.accent)
+})
 
 const activePlayerName = computed(() => {
   const id = snapshot.value?.activePlayerId

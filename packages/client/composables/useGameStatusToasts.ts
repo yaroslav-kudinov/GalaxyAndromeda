@@ -2,7 +2,7 @@ import type { GameSnapshot, Phase } from '@galaxy/rules'
 
 export interface GameToast {
   id: number
-  kind: 'identity' | 'phase' | 'turn' | 'gameover' | 'error'
+  kind: 'identity' | 'phase' | 'turn' | 'gameover' | 'error' | 'connection'
   title: string
   detail?: string
   accent?: boolean

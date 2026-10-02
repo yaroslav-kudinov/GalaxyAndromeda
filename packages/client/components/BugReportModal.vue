@@ -56,8 +56,33 @@ function onKeydown(e: KeyboardEvent) {
   }
 }
 
-onMounted(() => window.addEventListener('keydown', onKeydown))
-onUnmounted(() => window.removeEventListener('keydown', onKeydown))
+/**
+ * Снимок из буфера обмена: игрок нажимает Ctrl+V (или «Вставить из буфера») — отдельный файл
+ * сохранять не нужно. Окно открыто на весь экран, поэтому слушаем вставку на документе: курсор
+ * чаще всего стоит в поле описания, но вставить картинку должно получаться и мимо него.
+ */
+async function onPaste(e: ClipboardEvent) {
+  if (!props.open || busy.value) return
+  const items = e.clipboardData?.items
+  if (!items) return
+  for (const item of items) {
+    if (item.kind !== 'file' || !item.type.startsWith('image/')) continue
+    const file = item.getAsFile()
+    if (!file) continue
+    e.preventDefault()
+    await acceptScreenshot(file, 'Снимок из буфера обмена')
+    return
+  }
+}
+
+onMounted(() => {
+  window.addEventListener('keydown', onKeydown)
+  window.addEventListener('paste', onPaste)
+})
+onUnmounted(() => {
+  window.removeEventListener('keydown', onKeydown)
+  window.removeEventListener('paste', onPaste)
+})
 
 function clearScreenshot() {
   screenshotDataUrl.value = null
@@ -73,25 +98,70 @@ function readFileAsDataUrl(file: File): Promise<string> {
   })
 }
 
-async function onFileChange(e: Event) {
-  const input = e.target as HTMLInputElement
-  const file = input.files?.[0]
-  input.value = ''
-  if (!file) return
+const MAX_SCREENSHOT_BYTES = 5 * 1024 * 1024
+
+/** Проверка и чтение снимка — одна для файла, вставки из буфера и перетаскивания. */
+async function acceptScreenshot(file: File, fallbackName: string) {
   if (!file.type.startsWith('image/')) {
     error.value = 'Нужен файл изображения (PNG, JPEG, WebP или GIF)'
     return
   }
-  if (file.size > 5 * 1024 * 1024) {
+  if (file.size > MAX_SCREENSHOT_BYTES) {
     error.value = 'Скриншот слишком большой (макс. 5 МБ)'
     return
   }
   try {
     screenshotDataUrl.value = await readFileAsDataUrl(file)
-    screenshotName.value = file.name
+    screenshotName.value = file.name || fallbackName
     error.value = null
   } catch (err) {
     error.value = err instanceof Error ? err.message : 'Не удалось прочитать файл'
+  }
+}
+
+async function onFileChange(e: Event) {
+  const input = e.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ''
+  if (!file) return
+  await acceptScreenshot(file, 'Снимок экрана')
+}
+
+/** Перетаскивание картинки в окно — тот же путь, что вставка из буфера. */
+async function onDrop(e: DragEvent) {
+  if (busy.value) return
+  const file = e.dataTransfer?.files?.[0]
+  if (!file) return
+  await acceptScreenshot(file, 'Перенесённый снимок')
+}
+
+/**
+ * Кнопка «Вставить из буфера» — для тех, кому Ctrl+V не подсказали. Браузер спрашивает
+ * разрешение на чтение буфера и в некоторых браузерах такого доступа не даёт вовсе: тогда
+ * честно просим нажать Ctrl+V.
+ */
+async function pasteFromClipboard() {
+  if (busy.value) return
+  const read = navigator.clipboard?.read
+  if (!read) {
+    error.value = 'Браузер не даёт прочитать буфер обмена. Нажмите Ctrl+V в этом окне.'
+    return
+  }
+  try {
+    const items = await navigator.clipboard.read()
+    for (const item of items) {
+      const type = item.types.find((candidate) => candidate.startsWith('image/'))
+      if (!type) continue
+      const blob = await item.getType(type)
+      await acceptScreenshot(
+        new File([blob], 'Снимок из буфера обмена', { type }),
+        'Снимок из буфера обмена',
+      )
+      return
+    }
+    error.value = 'В буфере обмена нет картинки. Сделайте снимок экрана и попробуйте снова.'
+  } catch {
+    error.value = 'Не удалось прочитать буфер обмена. Нажмите Ctrl+V в этом окне.'
   }
 }
 
@@ -174,7 +244,7 @@ async function submit() {
           />
           <p class="bug-hint">{{ description.trim().length }} / 4000</p>
 
-          <div class="bug-shot-block">
+          <div class="bug-shot-block" @drop.prevent="onDrop" @dragover.prevent>
             <label class="bug-label">Скриншот (необязательно)</label>
             <div class="bug-shot-actions">
               <label class="bug-file-btn">
@@ -187,6 +257,14 @@ async function submit() {
                 >
               </label>
               <button
+                type="button"
+                class="bug-secondary"
+                :disabled="busy"
+                @click="pasteFromClipboard"
+              >
+                Вставить из буфера
+              </button>
+              <button
                 v-if="screenshotDataUrl"
                 type="button"
                 class="bug-secondary"
@@ -196,6 +274,10 @@ async function submit() {
                 Убрать
               </button>
             </div>
+            <p class="bug-hint">
+              Снимок можно вставить из буфера обмена — нажмите Ctrl+V в этом окне — или перенести
+              картинку мышью. Сохранять отдельный файл не нужно.
+            </p>
             <p v-if="screenshotName" class="bug-hint">{{ screenshotName }}</p>
             <img
               v-if="screenshotDataUrl"
