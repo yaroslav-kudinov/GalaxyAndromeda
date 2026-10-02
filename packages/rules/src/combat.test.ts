@@ -336,6 +336,25 @@ describe('раунд боя', () => {
     expect(formatCombatRoundSummary(round, 2)).toBe('Раунд 2 — попаданий: атакующий 3, защитник 3')
   })
 
+  /**
+   * Баг-репорт Serafal от 2026-09-26: уничтоженный авианосец подписывался служебным номером
+   * корабля вместо класса. Авианосец не бросает кубиков, поэтому в бросках раунда его нет, а с
+   * доски он после боя пропадает — подписать его можно только по классам из итога раунда.
+   */
+  it('классы уничтоженных есть в итоге раунда — даже у тех, кто не стрелял', () => {
+    const { game } = duelBoard()
+    addShip(game, 0, 0, 'player-1', 'battleship', 'att-bb')
+    addShip(game, 1, 0, 'player-2', 'carrier', 'def-cv')
+    const preview = buildCombatPreview(game, { q: 1, r: 0 }, 'player-1', [
+      { id: 'att-bb', type: 'battleship', ownerId: 'player-1' },
+    ])!
+
+    const round = rollCombatRound(preview, {}, {}, allSixes)
+    expect(round.destroyedShipIds).toEqual(['def-cv'])
+    expect(round.shipRolls.some((roll) => roll.shipId === 'def-cv')).toBe(false)
+    expect(round.destroyedShipTypes).toEqual({ 'def-cv': 'carrier' })
+  })
+
   it('урон, полученный раньше в этом бою, учитывается', () => {
     const { preview } = bbVersusDestroyerAndCruiser()
     // Линкор уже получил два попадания; эсминец защиты добивает его единственной шестёркой.
