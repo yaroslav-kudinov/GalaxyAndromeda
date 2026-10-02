@@ -1414,6 +1414,29 @@ async function onScenarioCoachNext() {
   }
 }
 
+/**
+ * Обучение пройдено. Окно с двумя исходами: создать партию или остаться на полигоне. Исхода
+ * «ничего не делать» нет — после отказа кнопка выхода остаётся на виду, чтобы полигон не
+ * превращался в комнату, из которой некуда деться.
+ */
+const tutorialDoneOffered = ref(false)
+const tutorialCompleted = ref(false)
+async function onTutorialCompleted() {
+  tutorialCompleted.value = true
+  if (tutorialDoneOffered.value) return
+  tutorialDoneOffered.value = true
+  const createGame = await gameConfirm({
+    title: 'Обучение пройдено',
+    message:
+      'Вы прошли полный ход: план, исполнение маркеров, захват, постройка, обстрел и бой. '
+      + 'Можно создать свою партию — подсказки по ходу партии там останутся, если не выключите, — '
+      + 'или остаться на полигоне и попробовать то, что не успели.',
+    confirmLabel: 'Создать партию',
+    cancelLabel: 'Остаться на полигоне',
+  })
+  if (createGame) await navigateTo('/')
+}
+
 async function onScenarioHintsToggle(dismissed: boolean) {
   if (!roomId.value || !playerId.value) return
   try {
@@ -1469,6 +1492,7 @@ function applyObservation(
     tutorial?: {
       kind?: 'tutorial' | 'coach'
       hintsDismissed?: boolean
+      completed?: boolean
       scenarioStep?: {
         id: string
         title: string
@@ -1488,6 +1512,7 @@ function applyObservation(
   coachKind.value = tutorial?.kind ?? null
   tutorialMode.value = Boolean(tutorial) && tutorial!.kind !== 'coach'
   coachHintsDismissed.value = Boolean(tutorial?.hintsDismissed)
+  if (tutorial?.completed && tutorial.kind !== 'coach') void onTutorialCompleted()
   if (tutorial?.scenarioStep) {
     tutorialCoach.value = {
       title: tutorial.scenarioStep.title,
@@ -3910,6 +3935,14 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
             @click="onScenarioHintsToggle(false)"
           >
             {{ ui.coach.coachRestore }}
+          </button>
+          <button
+            v-else-if="tutorialCompleted"
+            type="button"
+            class="coach-restore"
+            @click="navigateTo('/')"
+          >
+            Обучение пройдено — создать партию
           </button>
           <div v-if="!isNarrowUi" class="you-plaque-slot" aria-live="polite">
             <div

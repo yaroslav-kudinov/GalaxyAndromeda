@@ -229,6 +229,8 @@ export function scenarioObservationExtras(room: Room, viewerPlayerId?: string): 
   kind?: 'tutorial' | 'coach'
   /** Подсказки выключены игроком — панель не показывается, но её можно вернуть. */
   hintsDismissed?: boolean
+  /** Шаги кончились: обучение пройдено. */
+  completed?: boolean
 } {
   if (!room.scenarioId) return {}
   const script = loadScenarioScriptById(room.scenarioId)
@@ -249,6 +251,7 @@ export function scenarioObservationExtras(room: Room, viewerPlayerId?: string): 
     kind: coach ? 'coach' : 'tutorial',
     scenarioId: room.scenarioId,
     ...(progress?.dismissed ? { hintsDismissed: true } : {}),
+    ...(progress?.completed ? { completed: true } : {}),
     scenarioStep: step
       ? {
           id: step.id,
