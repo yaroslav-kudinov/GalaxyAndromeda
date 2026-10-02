@@ -93,13 +93,7 @@ import {
   combatPulseHexKey,
 } from '~/utils/combat-map-fx'
 import { useCombatDeathGhosts } from '~/composables/useCombatDeathGhosts'
-import {
-  gameHelpForPhase,
-  legalActionChipIcon,
-  legalActionChipLabel,
-  beltStatusForTurn,
-  type HelpStepIcon,
-} from '~/utils/game-help'
+import { beltStatusForTurn } from '~/utils/game-help'
 
 definePageMeta({ layout: 'immersive' })
 
@@ -298,7 +292,6 @@ const exportFileName = ref('')
 const markerHint = ref<string | null>(null)
 const phaseHint = ref<string | null>(null)
 const advancingPhase = ref(false)
-const showHelp = ref(true)
 const markerActionOpen = ref(false)
 const markerActionSource = ref<HexCoord | null>(null)
 const markerActionHint = ref<string | null>(null)
@@ -530,10 +523,6 @@ const territoryLabelPlayers = computed(() =>
     color: player.color,
   })),
 )
-
-const youBadgeStyle = computed(() => ({
-  '--my-color': myPlayerColor.value,
-}))
 
 const phaseAdvanceBtnStyle = computed(() => ({
   '--player-color': activePlayerColor.value,
@@ -1289,10 +1278,6 @@ const canOpenMovementModal = computed(() => {
   return canExecuteActionMarkerThisTurn(snapshot.value, playerId.value)
 })
 
-const phaseHelp = computed(() =>
-  gameHelpForPhase(snapshot.value?.phase, isMyTurn.value),
-)
-
 const playerColorById = computed(() => {
   const map: Record<string, string> = {}
   for (const p of snapshot.value?.players ?? []) {
@@ -1336,45 +1321,12 @@ const boardSiegeMarks = computed(() => {
   return out
 })
 
-function sidePanelPlayerColor(ownerId: string): string {
-  return playerColorById.value[ownerId] ?? '#64748b'
-}
-
-function sidePanelPlayerName(ownerId: string): string {
-  return playerNameById.value[ownerId] ?? ownerId
-}
-
-function helpStepSymbol(icon: HelpStepIcon): string {
-  const symbols: Record<HelpStepIcon, string> = {
-    wait: '…',
-    event: '✦',
-    click: '⌖',
-    'marker-action': '●',
-    ship: '▲',
-    fight: '⚔',
-    build: '⚙',
-    queue: '☰',
-    limit: '#',
-    pass: '→',
-    tip: 'i',
-  }
-  return symbols[icon] ?? '·'
-}
-
 const currentPhase = computed(() => snapshot.value?.phase)
 
 const myActionMarkerLimit = computed(() =>
   saveFile.value?.game
     ? actionMarkerLimitForPlayer(saveFile.value.game, playerId.value)
     : 3,
-)
-
-const sidePanelActionRemaining = computed(() =>
-  Math.max(0, myActionMarkerLimit.value - myActionMarkerCount.value),
-)
-
-const showActionsControls = computed(
-  () => isMyTurn.value && (currentPhase.value === 'actions' || currentPhase.value === 'production'),
 )
 
 async function onScenarioCoachNext() {
@@ -1743,7 +1695,14 @@ const journalPlayers = computed(() =>
  * телефоне печаталась поверх карточки обучения.
  */
 const beltStatus = computed(() => {
+  // Порядок строгий: сначала то, что мешает играть, потом то, что подсказывает.
+  // Раньше эти четыре канала были четырьмя отдельными строками в боковой панели
+  // и в нижнем ряду, и игрок читал их все сразу либо не видел ни одной.
+  if (loadError.value) return { text: loadError.value, tone: 'error' as const }
   if (phaseHint.value) return { text: phaseHint.value, tone: 'error' as const }
+  if (markerHint.value) return { text: markerHint.value, tone: 'error' as const }
+  if (markerActionHint.value) return { text: markerActionHint.value, tone: 'error' as const }
+  if (participationHint.value) return { text: participationHint.value, tone: 'warn' as const }
   if (isMyTurn.value && phaseAdvanceBlockedReason.value) {
     return { text: phaseAdvanceBlockedReason.value, tone: 'warn' as const }
   }
@@ -1789,8 +1748,6 @@ const canRemoveActionMarkerOnSelected = computed(() => {
   const cell = saveFile.value.game.cells.find((c) => hexKey(c.coord.q, c.coord.r) === key)
   return !!cell && !!actionMarkerOf(saveFile.value.game, cell.coord, playerId.value)
 })
-
-const remainingActionMarkersCount = computed(() => actionMarkers.value.length)
 
 function filterTutorialMarkerKeys(keys: string[]): string[] {
   if (!tutorialMode.value || !tutorialAllowedSourceKeys.value.length) return keys
@@ -3780,6 +3737,15 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
               Баг
             </button>
             <button
+              v-if="snapshot"
+              type="button"
+              class="rules-help-btn"
+              :title="ui.journal.openHint"
+              @click="journalOpen = true"
+            >
+              {{ ui.journal.open }}
+            </button>
+            <button
               v-if="serverStatus === 'online' && roomBootstrap && roomBootstrap.playerCount < roomBootstrap.maxPlayers"
               type="button"
               class="invite-btn"
@@ -3787,6 +3753,18 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
             >
               {{ inviteCopied ? 'Ссылка скопирована' : 'Ссылка-приглашение' }}
             </button>
+            <!--
+              Экспорт сохранения — единственный способ не потерять партию: комната
+              на сервере живёт полчаса без действий. Раньше он прятался внизу
+              боковой панели, под семью другими блоками.
+            -->
+            <button type="button" class="sfx-mute-btn" title="Скачать сохранение партии" @click="exportGameSave">
+              ↓ Сохранить
+            </button>
+            <label class="sfx-mute-btn file-btn" title="Загрузить сохранение из файла">
+              ↑ Загрузить
+              <input type="file" accept="application/json,.json,.galaxy.json" hidden @change="importGameSave" />
+            </label>
             <button
               v-if="canSurrender"
               type="button"
@@ -3881,48 +3859,6 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
         <template v-else>{{ panelCollapsed ? '«' : '»' }}</template>
       </button>
       <div v-if="!panelCollapsed" id="game-side-panel" class="panel-inner">
-        <header class="panel-heading-row">
-          <h2 class="panel-heading">Игра</h2>
-          <button
-            v-if="snapshot"
-            type="button"
-            class="journal-open-btn"
-            :title="ui.journal.openHint"
-            @click="journalOpen = true"
-          >
-            {{ ui.journal.open }}
-          </button>
-          <div class="panel-heading-meta">
-            <span
-              class="you-mini"
-              :style="youBadgeStyle"
-              :title="`Вы — ${myPlayerName}`"
-            >
-              <span class="you-mini-swatch" aria-hidden="true" />
-              Вы
-            </span>
-            <span
-              v-if="activePlayerName"
-              class="active-mini"
-              :style="phaseAdvanceBtnStyle"
-              :title="`Активный игрок: ${activePlayerName}`"
-            >
-              <span class="active-player-dot" aria-hidden="true" />
-              {{ activePlayerName }}
-            </span>
-          </div>
-        </header>
-
-        <section v-if="turnQueue.length" class="block turn-order-block">
-          <h3 class="block-label">{{ ui.turnOrder.heading }}</h3>
-          <TurnOrderPanel
-            variant="panel"
-            :entries="turnQueue"
-            :my-player-id="playerId"
-          />
-          <p class="hint turn-order-note">{{ ui.turnOrder.note }}</p>
-        </section>
-
         <section v-if="victoryProgress" class="block victory-block">
           <h3 class="block-label">{{ ui.victory.heading }}</h3>
           <VictoryTrackerPanel :progress="victoryProgress" :my-player-id="playerId" :turns-left="turnsLeft" />
@@ -3952,142 +3888,6 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
           />
         </section>
 
-        <section class="block metrics-block" aria-label="Состояние фазы">
-          <div class="metric-row">
-            <span
-              class="metric-pill metric-pill--action"
-              :title="`Маркеры действия: ваши ${myActionMarkerCount}/${myActionMarkerLimit} (три плюс число центров власти на начало хода), на карте ${actionMarkers.length}`"
-            >
-              <span class="metric-glyph metric-glyph--action" aria-hidden="true" />
-              <span class="metric-value">{{ myActionMarkerCount }}/{{ myActionMarkerLimit }}</span>
-              <span class="metric-sub">осталось {{ sidePanelActionRemaining }}</span>
-            </span>
-          </div>
-
-          <div v-if="showActionsControls" class="status-strip">
-            <span
-              v-if="actionMarkerUsedThisTurn"
-              class="status-chip status-chip--warn"
-              :title="ACTION_MARKER_ALREADY_RESOLVED_MSG"
-            >
-              ● исполнен
-            </span>
-            <span
-              v-else
-              class="status-chip status-chip--action"
-              title="Клик по маркеру на карте — перемещение или постройка. Снять — в карточке клетки."
-            >
-              ● клик по маркеру
-            </span>
-            <span
-              v-if="isMyTurn && (snapshot?.phase === 'actions' || snapshot?.phase === 'production') && remainingActionMarkersCount > 0"
-              class="status-chip"
-              :title="`На карте осталось маркеров действия: ${remainingActionMarkersCount}`"
-            >
-              карта · {{ remainingActionMarkersCount }}
-            </span>
-          </div>
-
-          <p v-if="markerHint" class="err" role="alert">{{ markerHint }}</p>
-          <p v-if="participationHint" class="hint participation-hint">{{ participationHint }}</p>
-          <p v-if="markerActionHint" class="hint">{{ markerActionHint }}</p>
-        </section>
-
-        <section class="block">
-          <h3 class="block-label">Доступно</h3>
-          <ul v-if="legalActions.length" class="action-chips" aria-label="Доступные действия">
-            <li
-              v-for="action in legalActions"
-              :key="action.id"
-              class="action-chip"
-              :class="`action-chip--${legalActionChipIcon(action.type)}`"
-              :title="action.description"
-            >
-              <span class="help-icon" aria-hidden="true">{{ helpStepSymbol(legalActionChipIcon(action.type)) }}</span>
-              <span>{{ legalActionChipLabel(action) }}</span>
-            </li>
-          </ul>
-          <p v-else-if="!isMyTurn" class="hint">Не ваш ход</p>
-          <p v-else class="hint">Нет действий</p>
-        </section>
-
-        <section class="block help-block">
-          <div class="help-head">
-            <h3>{{ phaseHelp.title }}</h3>
-            <button
-              type="button"
-              class="help-toggle"
-              :title="showHelp ? 'Свернуть справку' : 'Развернуть справку'"
-              :aria-expanded="showHelp"
-              @click="showHelp = !showHelp"
-            >
-              {{ showHelp ? '−' : '?' }}
-            </button>
-          </div>
-          <ul v-if="showHelp" class="help-steps">
-            <li
-              v-for="(step, idx) in phaseHelp.steps"
-              :key="idx"
-              class="help-step"
-              :class="`help-step--${step.icon}`"
-              :title="step.detail ?? step.label"
-            >
-              <span
-                class="help-icon"
-                :aria-hidden="true"
-              >{{ helpStepSymbol(step.icon) }}</span>
-              <span class="help-step-label">{{ step.label }}</span>
-            </li>
-          </ul>
-        </section>
-
-        <details class="block marker-details">
-          <summary>
-            <span class="metric-glyph metric-glyph--action" aria-hidden="true" />
-            Действие
-            <span class="marker-count">{{ actionMarkers.length }}</span>
-          </summary>
-          <ul v-if="actionMarkers.length" class="marker-cards">
-            <li
-              v-for="m in actionMarkers"
-              :key="m.id"
-              class="marker-card"
-              :title="`${sidePanelPlayerName(m.ownerId)} · (${m.coord.q}, ${m.coord.r}) · ${m.placedInPhase}`"
-            >
-              <span
-                class="owner-swatch"
-                :style="{ background: sidePanelPlayerColor(m.ownerId) }"
-                aria-hidden="true"
-              />
-              <span class="marker-card-name">{{ sidePanelPlayerName(m.ownerId) }}</span>
-              <span class="marker-card-coord">{{ m.coord.q }},{{ m.coord.r }}</span>
-            </li>
-          </ul>
-          <p v-else class="hint">Пусто</p>
-        </details>
-
-        <section class="block block--file">
-          <h3 class="block-label">Файл</h3>
-          <label class="export-name-field">
-            <span class="export-name-label">Имя</span>
-            <input
-              v-model="exportFileName"
-              type="text"
-              class="export-name-input"
-              autocomplete="off"
-              spellcheck="false"
-              @keydown.enter="exportGameSave"
-            />
-          </label>
-          <div class="btn-row">
-            <button type="button" title="Экспорт сохранения" @click="exportGameSave">↓ Экспорт</button>
-            <label class="file-btn" title="Импорт сохранения">
-              ↑ Импорт
-              <input type="file" accept="application/json,.json,.galaxy.json" hidden @change="importGameSave" />
-            </label>
-          </div>
-          <p v-if="loadError" class="err" role="alert">{{ loadError }}</p>
-        </section>
       </div>
     </aside>
   </div>
@@ -4320,9 +4120,6 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
   /* Колонка не должна ловить клики по карте; контролы включают захват сами */
   pointer-events: none;
 }
-.turn-order-note {
-  margin: 0.35rem 0 0;
-}
 .map-pick-banner {
   position: absolute;
   top: calc(var(--hud-header-height) + 0.35rem);
@@ -4419,33 +4216,6 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
   border-color: rgba(147, 197, 253, 0.35);
   background: rgba(30, 41, 59, 0.65);
 }
-.panel-heading-meta {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-  min-width: 0;
-}
-.you-mini {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.3rem;
-  padding: 0.15rem 0.45rem 0.15rem 0.25rem;
-  border-radius: 999px;
-  font-size: 0.68rem;
-  font-weight: 800;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: #f8fafc;
-  background: color-mix(in srgb, var(--my-color, #3b82f6) 28%, rgba(15, 23, 42, 0.9));
-  border: 1px solid color-mix(in srgb, var(--my-color, #3b82f6) 70%, #fff);
-}
-.you-mini-swatch {
-  width: 0.55rem;
-  height: 0.55rem;
-  border-radius: 999px;
-  background: var(--my-color, #3b82f6);
-  box-shadow: 0 0 0 1px #0f172a;
-}
 .server-pill {
   font-size: 0.72rem;
   padding: 0.2rem 0.5rem;
@@ -4491,61 +4261,6 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
   overflow-y: auto;
   padding: 0.65rem 0.7rem 0.85rem;
 }
-.panel-heading-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
-  margin-bottom: 0.65rem;
-}
-.journal-open-btn {
-  margin-left: 0.5rem;
-  padding: 0.15rem 0.55rem;
-  border-radius: 999px;
-  border: 1px solid #475569;
-  background: rgba(30, 41, 59, 0.8);
-  color: #cbd5e1;
-  font-size: 0.75rem;
-  cursor: pointer;
-}
-.journal-open-btn:hover {
-  border-color: #93c5fd;
-  color: #e2e8f0;
-}
-.panel-heading {
-  margin: 0;
-  font-size: 0.95rem;
-  letter-spacing: 0.01em;
-}
-.active-mini {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.3rem;
-  max-width: 9rem;
-  padding: 0.18rem 0.45rem;
-  border-radius: 999px;
-  font-size: 0.7rem;
-  font-weight: 700;
-  color: #fff;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  border: 1px solid color-mix(in srgb, var(--player-color, #3b82f6) 55%, #fff);
-  background: linear-gradient(
-    180deg,
-    color-mix(in srgb, var(--player-color, #3b82f6) 78%, #fff),
-    var(--player-color, #3b82f6)
-  );
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
-}
-.active-player-dot {
-  width: 0.45rem;
-  height: 0.45rem;
-  border-radius: 50%;
-  background: #fff;
-  box-shadow: 0 0 5px rgba(255, 255, 255, 0.75);
-  flex-shrink: 0;
-}
 .block {
   margin-bottom: 0.75rem;
   padding-bottom: 0.65rem;
@@ -4562,159 +4277,6 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
 }
 .block--cell {
   padding-bottom: 0.55rem;
-}
-.block--file {
-  border-bottom: none;
-  margin-bottom: 0;
-  padding-bottom: 0;
-}
-.metrics-block {
-  display: flex;
-  flex-direction: column;
-  gap: 0.4rem;
-}
-.metric-row {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 0.35rem;
-}
-.metric-pill {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  grid-template-rows: auto auto;
-  column-gap: 0.35rem;
-  row-gap: 0.05rem;
-  align-items: center;
-  padding: 0.4rem 0.45rem;
-  border-radius: 8px;
-  border: 1px solid rgba(71, 85, 105, 0.7);
-  background: rgba(15, 23, 42, 0.55);
-  min-width: 0;
-}
-.metric-pill .metric-glyph {
-  grid-row: 1 / span 2;
-}
-.metric-pill--action {
-  border-color: rgba(250, 204, 21, 0.4);
-  background: rgba(66, 32, 6, 0.35);
-}
-.metric-glyph {
-  width: 0.55rem;
-  height: 0.55rem;
-  display: inline-block;
-  vertical-align: middle;
-}
-.metric-glyph--action {
-  border-radius: 50%;
-  background: #facc15;
-  box-shadow: 0 0 0 2px rgba(250, 204, 21, 0.3);
-}
-.metric-value {
-  grid-column: 2;
-  font-size: 0.92rem;
-  font-weight: 800;
-  color: #f8fafc;
-  font-variant-numeric: tabular-nums;
-  line-height: 1.2;
-}
-.metric-sub {
-  grid-column: 2;
-}
-.metric-pill--action .metric-value {
-  color: #fef08a;
-}
-.metric-pill .metric-sub {
-  font-size: 0.66rem;
-  color: #94a3b8;
-}
-.status-strip {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.3rem;
-}
-.status-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.25rem;
-  padding: 0.2rem 0.45rem;
-  border-radius: 999px;
-  border: 1px solid rgba(100, 116, 139, 0.45);
-  background: rgba(30, 41, 59, 0.7);
-  font-size: 0.68rem;
-  font-weight: 600;
-  color: #cbd5e1;
-}
-.status-chip--action {
-  border-color: rgba(250, 204, 21, 0.45);
-  color: #fef08a;
-  background: rgba(113, 63, 18, 0.4);
-}
-.status-chip--warn {
-  border-color: rgba(251, 191, 36, 0.55);
-  color: #fcd34d;
-  background: rgba(120, 53, 15, 0.45);
-}
-.action-chips {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.3rem;
-}
-.action-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.3rem;
-  padding: 0.28rem 0.5rem;
-  border-radius: 7px;
-  border: 1px solid rgba(71, 85, 105, 0.75);
-  background: rgba(15, 23, 42, 0.7);
-  font-size: 0.72rem;
-  font-weight: 600;
-  color: #e2e8f0;
-}
-.action-chip--marker-action,
-.action-chip--fight {
-  border-color: rgba(250, 204, 21, 0.4);
-}
-.action-chip--build {
-  border-color: rgba(244, 114, 182, 0.4);
-}
-.action-chip--event {
-  border-color: rgba(167, 139, 250, 0.4);
-}
-.action-chip--pass {
-  border-color: rgba(56, 189, 248, 0.4);
-}
-.btn-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.45rem;
-}
-.export-name-field {
-  display: flex;
-  flex-direction: column;
-  gap: 0.2rem;
-  margin-bottom: 0.4rem;
-}
-.export-name-label {
-  font-size: 0.68rem;
-  color: #94a3b8;
-}
-.export-name-input {
-  width: 100%;
-  box-sizing: border-box;
-  padding: 0.3rem 0.45rem;
-  border-radius: 6px;
-  border: 1px solid #475569;
-  background: #1e293b;
-  color: #f8fafc;
-  font-size: 0.78rem;
-}
-.export-name-input:focus {
-  outline: none;
-  border-color: #64748b;
 }
 button,
 .file-btn {
@@ -4739,167 +4301,8 @@ button,
   font-size: 0.76rem;
   color: #f87171;
 }
-.marker-details summary {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-  color: #cbd5e1;
-  font-size: 0.76rem;
-  font-weight: 600;
-  cursor: pointer;
-  user-select: none;
-  list-style: none;
-}
-.marker-details summary::-webkit-details-marker {
-  display: none;
-}
 .marker-details[open] summary {
   margin-bottom: 0.4rem;
-}
-.marker-count {
-  margin-left: auto;
-  min-width: 1.25rem;
-  padding: 0.05rem 0.35rem;
-  border-radius: 999px;
-  background: rgba(51, 65, 85, 0.85);
-  font-size: 0.68rem;
-  font-weight: 700;
-  text-align: center;
-  font-variant-numeric: tabular-nums;
-  color: #e2e8f0;
-}
-.marker-cards {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 0.3rem;
-}
-.marker-card {
-  display: grid;
-  grid-template-columns: auto 1fr auto;
-  align-items: center;
-  gap: 0.4rem;
-  padding: 0.3rem 0.4rem;
-  border-radius: 7px;
-  border: 1px solid rgba(71, 85, 105, 0.55);
-  background: rgba(15, 23, 42, 0.6);
-  font-size: 0.72rem;
-}
-.marker-card-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: #e2e8f0;
-  font-weight: 600;
-}
-.marker-card-coord {
-  font-variant-numeric: tabular-nums;
-  color: #94a3b8;
-  font-weight: 600;
-}
-.owner-swatch {
-  display: inline-block;
-  width: 0.6rem;
-  height: 0.6rem;
-  border-radius: 2px;
-  border: 1px solid rgba(0, 0, 0, 0.25);
-  flex-shrink: 0;
-}
-.help-block {
-  background: rgba(15, 23, 42, 0.5);
-  border-radius: 8px;
-  border: 1px solid rgba(51, 65, 85, 0.85);
-  padding: 0.45rem 0.5rem;
-  margin-bottom: 0.65rem;
-}
-.help-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
-}
-.help-head h3 {
-  margin: 0;
-  text-transform: none;
-  letter-spacing: 0;
-  font-size: 0.8rem;
-  color: #e2e8f0;
-}
-.help-toggle {
-  padding: 0.12rem 0.4rem;
-  font-size: 0.85rem;
-  line-height: 1;
-}
-.help-steps {
-  list-style: none;
-  margin: 0.4rem 0 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 0.28rem;
-}
-.help-step {
-  display: grid;
-  grid-template-columns: 1.35rem 1fr;
-  gap: 0.4rem;
-  align-items: start;
-  font-size: 0.74rem;
-  line-height: 1.3;
-  color: #cbd5e1;
-}
-.help-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 1.25rem;
-  height: 1.25rem;
-  border-radius: 5px;
-  background: rgba(51, 65, 85, 0.85);
-  border: 1px solid rgba(100, 116, 139, 0.45);
-  font-size: 0.68rem;
-  font-weight: 800;
-  color: #e2e8f0;
-  flex-shrink: 0;
-}
-.help-step--marker-action .help-icon,
-.action-chip--marker-action .help-icon {
-  color: #facc15;
-  border-color: rgba(250, 204, 21, 0.4);
-  background: rgba(113, 63, 18, 0.45);
-}
-.help-step--build .help-icon,
-.action-chip--build .help-icon {
-  color: #f472b6;
-  border-color: rgba(244, 114, 182, 0.4);
-  background: rgba(131, 24, 67, 0.4);
-}
-.help-step--fight .help-icon,
-.action-chip--fight .help-icon {
-  color: #fca5a5;
-  border-color: rgba(248, 113, 113, 0.4);
-  background: rgba(127, 29, 29, 0.4);
-}
-.help-step--event .help-icon,
-.action-chip--event .help-icon {
-  color: #c4b5fd;
-  border-color: rgba(167, 139, 250, 0.4);
-  background: rgba(76, 29, 149, 0.35);
-}
-.help-step--pass .help-icon,
-.action-chip--pass .help-icon {
-  color: #7dd3fc;
-  border-color: rgba(56, 189, 248, 0.4);
-  background: rgba(12, 74, 110, 0.45);
-}
-.help-step--ship .help-icon {
-  color: #86efac;
-  border-color: rgba(74, 222, 128, 0.35);
-  background: rgba(20, 83, 45, 0.4);
-}
-.help-step-label {
-  padding-top: 0.1rem;
 }
 .phase-advance-btn {
   display: block;
@@ -4944,9 +4347,6 @@ button,
   animation: none;
   opacity: 0.55;
   cursor: wait;
-}
-.active-mini .active-player-dot {
-  animation: active-player-dot 1.25s ease-in-out infinite;
 }
 @keyframes active-player-dot {
   0%,
@@ -5131,11 +4531,6 @@ button,
   background: #9a3412;
 }
 
-.rules-help-wrap {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-}
 
 .rules-help-btn:hover {
   border-color: #94a3b8;
