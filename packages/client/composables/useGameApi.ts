@@ -174,10 +174,14 @@ export async function fetchCatalogMap(id: string): Promise<MapDefinition | null>
   }
 }
 
-export async function createRoomFromCatalog(catalogMapId: string, maxPlayers = 6): Promise<RoomCreated> {
+export async function createRoomFromCatalog(
+  catalogMapId: string,
+  maxPlayers = 6,
+  coachId?: string,
+): Promise<RoomCreated> {
   return apiFetch<RoomCreated>('/rooms', {
     method: 'POST',
-    body: JSON.stringify({ catalogMapId, maxPlayers }),
+    body: JSON.stringify({ catalogMapId, maxPlayers, coachId }),
   })
 }
 
@@ -195,10 +199,14 @@ export async function submitMapForModeration(nickname: string, save: GalaxySaveF
   })
 }
 
-export async function createRoom(map: MapDefinition, maxPlayers = 6): Promise<RoomCreated> {
+export async function createRoom(
+  map: MapDefinition,
+  maxPlayers = 6,
+  coachId?: string,
+): Promise<RoomCreated> {
   return apiFetch<RoomCreated>('/rooms', {
     method: 'POST',
-    body: JSON.stringify({ map, maxPlayers }),
+    body: JSON.stringify({ map, maxPlayers, coachId }),
   })
 }
 
@@ -359,6 +367,18 @@ export async function advanceScenarioStep(
   return apiFetch(`/rooms/${roomId}/scenario/next`, {
     method: 'POST',
     body: JSON.stringify({ playerId }),
+  })
+}
+
+/** Выключить или снова включить подсказки обычной партии. */
+export async function setScenarioHints(
+  roomId: string,
+  playerId: string,
+  dismissed: boolean,
+): Promise<GameObservation> {
+  return apiFetch(`/rooms/${roomId}/scenario/hints`, {
+    method: 'POST',
+    body: JSON.stringify({ playerId, dismissed }),
   })
 }
 

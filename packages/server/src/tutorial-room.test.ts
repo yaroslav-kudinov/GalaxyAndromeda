@@ -2,6 +2,13 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import { surrenderPlayer, TUTORIAL_TURN_LIMIT } from '@galaxy/rules'
 
+import { mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+
+// Своё хранилище на файл теста: node --test гоняет файлы параллельно, а одна
+// база SQLite на двоих даёт «database is locked».
+process.env.GALAXY_DATA_DIR = mkdtempSync(join(tmpdir(), 'galaxy-tutorial-room-'))
 // Комнаты теста на диск не пишем.
 process.env.GALAXY_DEV_ROOMS = '0'
 const rooms = await import('./room.js')

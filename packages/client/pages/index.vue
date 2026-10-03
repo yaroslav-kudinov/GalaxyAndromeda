@@ -33,11 +33,19 @@ definePageMeta({
 const MAPS_STORAGE_KEY = 'galaxy-maps'
 const DRAFT_STORAGE_KEY = 'galaxy-editor-draft'
 const TERMS_KEY = 'galaxy-terms-accepted'
+/**
+ * Подсказчик первой партии. Включён по умолчанию, пока игрок сам его не выключил: новичку он
+ * нужен, а привыкшему игроку хватает одного снятия галочки, которое запоминается.
+ */
+const FIRST_MATCH_COACH_ID = 'coach-first-match'
+const COACH_OFF_KEY = 'galaxy-coach-off'
 
 const { officialMaps, refreshOfficialMaps, loadOfficialMap } = useCatalogMaps()
 const termsAccepted = ref(false)
 const termsDraft = ref(false)
 const tutorialBusy = ref(false)
+/** Подсказки в создаваемой партии; выбор игрока запоминается между партиями. */
+const coachEnabled = ref(true)
 const tutorialSetupOpen = ref(false)
 const tutorialInDevelopment = false
 const menuError = ref<string | null>(null)
@@ -394,9 +402,10 @@ async function startGame() {
 
     if (serverOnline.value) {
       const mapMax = resolveMapPlayerCount(map)
+      const coachId = coachEnabled.value ? FIRST_MATCH_COACH_ID : undefined
       const create = option?.official
-        ? await createRoomFromCatalog(map.id, Math.min(MAX_LOBBY_PLAYERS, mapMax))
-        : await createRoom(map, Math.min(MAX_LOBBY_PLAYERS, mapMax))
+        ? await createRoomFromCatalog(map.id, Math.min(MAX_LOBBY_PLAYERS, mapMax), coachId)
+        : await createRoom(map, Math.min(MAX_LOBBY_PLAYERS, mapMax), coachId)
       const { roomId, code } = create
       const { playerId } = await joinRoom(roomId, name, preferredPlayerId)
       const save = galaxySaveFromMap(map)
@@ -649,10 +658,17 @@ async function startTutorial() {
   }
 }
 
+watch(coachEnabled, (enabled) => {
+  if (!import.meta.client) return
+  if (enabled) localStorage.removeItem(COACH_OFF_KEY)
+  else localStorage.setItem(COACH_OFF_KEY, '1')
+})
+
 onMounted(async () => {
   if (import.meta.client) {
     termsAccepted.value = localStorage.getItem(TERMS_KEY) === '1'
     termsDraft.value = termsAccepted.value
+    coachEnabled.value = localStorage.getItem(COACH_OFF_KEY) !== '1'
   }
   await refreshMapList()
   syncCreatorDefaultSlot()
@@ -890,6 +906,17 @@ onUnmounted(() => {
           </p>
         </div>
 
+        <label v-if="serverOnline" class="field coach-field">
+          <span class="coach-field__row">
+            <input v-model="coachEnabled" type="checkbox" :disabled="busy">
+            <span>Подсказки во время партии</span>
+          </span>
+          <span class="hint">
+            Короткие объяснения правил по ходу партии: из чего состоит ход, зачем ресурсы,
+            как работает поддержка в бою. Ничего не запрещают, выключаются одной кнопкой.
+          </span>
+        </label>
+
         <p v-if="error" class="err">{{ error }}</p>
 
         <button type="button" class="primary" :disabled="busy" @click="startGame">
@@ -989,6 +1016,19 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
+.coach-field {
+  gap: 0.3rem;
+}
+.coach-field__row {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+.coach-field__row input {
+  width: auto;
+  margin: 0;
+}
+
 .landing {
   position: relative;
   z-index: 1;

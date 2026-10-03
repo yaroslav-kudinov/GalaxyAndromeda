@@ -64,6 +64,81 @@ describe('tutorial corridor', () => {
     expect(scenario.steps[battleWait + 1]?.advanceWhen).toEqual({ type: 'manual' })
   })
 
+  it('урок про фазы стоит сразу после завершения первого планирования', () => {
+    const scenario = loadTutorialScenario()
+    const ids = scenario.steps.map((step) => step.id)
+    expect(ids[ids.indexOf('finish-planning-one') + 1]).toBe('phases-explained')
+    const step = scenario.steps.find((s) => s.id === 'phases-explained')!
+    // Шаг обязан назвать признак, по которому игрок отличит фазы в своей партии: плашку
+    // фазы, её цвет и названия фаз. На рамку экрана ссылаться нельзя — она работает
+    // боковым зрением, а не чтением (согласовано с блоком A плана).
+    const text = [step.objective, step.why, step.hint].join(' ')
+    expect(text).toContain('плашка')
+    expect(text).toContain('янтарный')
+    expect(text).toContain('Планирование')
+    expect(text).toContain('Действия')
+    expect(text).not.toContain('рамка')
+    expect(step.highlight).toBe('phase-panel')
+    expect(step.advanceWhen).toEqual({ type: 'manual' })
+  })
+
+  it('последняя треть — свободный ход, а не четыре экрана текста', () => {
+    const scenario = loadTutorialScenario()
+    const ids = scenario.steps.map((step) => step.id)
+    for (const removed of ['shield-carrier', 'battleship-hyper', 'regions-resources', 'victory-surrender']) {
+      expect(ids).not.toContain(removed)
+    }
+    const free = scenario.steps.find((step) => step.id === 'free-play')!
+    // Свободный шаг ничего не запрещает и ждёт результата, а не нажатия в нужную клетку.
+    expect(free.allowedActions).toBeUndefined()
+    expect(free.advanceWhen).toEqual({
+      type: 'power-centers',
+      playerId: 'player-1',
+      atLeast: 2,
+    })
+    expect(free.hint).toBeTruthy()
+    expect(ids[ids.length - 1]).toBe('complete')
+  })
+
+  it('шаги про кнопку фазы не цитируют её подпись: подписи задаёт turn.ts', () => {
+    const scenario = loadTutorialScenario()
+    for (const id of ['finish-planning-one', 'finish-planning-two', 'finish-planning-three']) {
+      const step = scenario.steps.find((s) => s.id === id)!
+      for (const text of [step.objective, step.hint]) {
+        expect(text).not.toContain('«Далее»')
+        expect(text).not.toContain('Передать ход')
+      }
+    }
+  })
+
+  it('подсказчик первой партии не привязан ни к карте, ни к координатам', () => {
+    const coach = parseScenarioScript(
+      JSON.parse(
+        readFileSync(resolve(process.cwd(), '../../scenarios/coach-first-match.json'), 'utf8'),
+      ),
+    )
+    expect(coach.kind).toBe('coach')
+    expect(coach.mapId).toBeUndefined()
+    expect(coach.steps.length).toBeGreaterThanOrEqual(5)
+    // Ни одного запрета и ни одной координаты: иначе подсказчик не поедет на чужой карте.
+    const dump = JSON.stringify(coach.steps)
+    expect(dump).not.toContain('allowedActions')
+    expect(dump).not.toContain('"coord"')
+    expect(dump).not.toContain('player-1')
+    for (const step of coach.steps) {
+      expect(step.advanceWhen).toEqual({ type: 'manual' })
+      expect(step.showWhen).toBeDefined()
+    }
+    // Темы, которых игроку не хватило в разборе, должны быть названы.
+    const ids = coach.steps.map((step) => step.id)
+    expect(ids).toContain('phases-split')
+    expect(ids).toContain('arrived-can-attack')
+    expect(ids).toContain('resources-what-for')
+    expect(ids).toContain('support-neighbours')
+    expect(ids).toContain('regions-production')
+    expect(ids).toContain('claim-connectivity')
+  })
+
   it('неактивный защитник и поддержка получают готовность к бою в legalActions', () => {
     const map = loadTutorialMap()
     const game = gameSnapshotFromMap(map)

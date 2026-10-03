@@ -9,9 +9,11 @@ const props = defineProps<{
   manual?: boolean
   stepNumber?: number
   stepCount?: number
+  /** Подсказчик обычной партии: ничего не требует, и его можно выключить. */
+  coach?: boolean
 }>()
 
-const emit = defineEmits<{ next: [] }>()
+const emit = defineEmits<{ next: []; dismiss: [] }>()
 const t = useUiStrings().coach
 const { panelRef, panelStyle, isDragging, onDragHandlePointerDown } = useDraggablePanel()
 </script>
@@ -26,7 +28,7 @@ const { panelRef, panelStyle, isDragging, onDragHandlePointerDown } = useDraggab
   >
     <header class="coach-head">
       <p class="coach-badge">
-        {{ t.badge }}
+        {{ coach ? t.coachBadge : t.badge }}
         <span v-if="stepNumber && stepCount">· {{ stepNumber }}/{{ stepCount }}</span>
         <!-- Панель пропускает клики к карте, поэтому тянем за отдельную ручку -->
         <span
@@ -50,7 +52,11 @@ const { panelRef, panelStyle, isDragging, onDragHandlePointerDown } = useDraggab
       <p v-if="hint"><strong>{{ t.hint }}</strong> {{ hint }}</p>
     </details>
     <button v-if="manual" type="button" class="coach-next" @click="emit('next')">
-      {{ stepNumber === stepCount ? t.finish : t.next }}
+      <template v-if="coach">{{ stepNumber === stepCount ? t.coachFinish : t.coachNext }}</template>
+      <template v-else>{{ stepNumber === stepCount ? t.finish : t.next }}</template>
+    </button>
+    <button v-if="coach" type="button" class="coach-dismiss" @click="emit('dismiss')">
+      {{ t.coachDismiss }}
     </button>
   </aside>
 </template>
@@ -69,6 +75,7 @@ const { panelRef, panelStyle, isDragging, onDragHandlePointerDown } = useDraggab
   pointer-events: none;
 }
 .coach-panel .coach-next,
+.coach-panel .coach-dismiss,
 .coach-panel .coach-more {
   pointer-events: auto;
 }
@@ -173,5 +180,21 @@ const { panelRef, panelStyle, isDragging, onDragHandlePointerDown } = useDraggab
 }
 .coach-next:hover {
   filter: brightness(1.08);
+}
+.coach-dismiss {
+  display: block;
+  width: 100%;
+  margin-top: 0.35rem;
+  padding: 0.3rem 0.75rem;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: #94a3b8;
+  font-size: 0.74rem;
+  cursor: pointer;
+}
+.coach-dismiss:hover {
+  color: #e2e8f0;
+  text-decoration: underline;
 }
 </style>

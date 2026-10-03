@@ -56,7 +56,7 @@ import {
   formatRechargeBudgetHint,
   getCombatRetreatDestinations,
 } from '@galaxy/rules'
-import { advanceScenarioStep, fetchObservation, fetchRoomBootstrap, GameApiError, joinRoom, rejoinRoom, startRoom, closeRoom, addRoomBot, removeRoomBot, setRoomBotDifficulty, markCombatResultSeen, submitGameAction, updateCombatPrepAction } from '~/composables/useGameApi'
+import { advanceScenarioStep, fetchObservation, fetchRoomBootstrap, GameApiError, joinRoom, rejoinRoom, startRoom, closeRoom, addRoomBot, removeRoomBot, setRoomBotDifficulty, markCombatResultSeen, setScenarioHints, submitGameAction, updateCombatPrepAction } from '~/composables/useGameApi'
 import { loadGameSessionForRoom, saveGameSession, persistLocalGalaxySave, clearLocalGalaxySave, loadLocalGalaxySaveRaw, pruneOnlineGalaxySaveCache } from '~/composables/useGameSession'
 import { loadPlayerClaim, savePlayerClaim } from '~/composables/usePlayerClaim'
 import { bootstrapToLobbySlots, defaultSlotForRoom, roomHasFreeSlot } from '~/utils/lobby-slot'
@@ -175,6 +175,10 @@ const cellPeek = computed(
 
 const legalActions = ref<LegalAction[]>([])
 const tutorialMode = ref(false)
+/** Какой сценарий везёт комната: полигон, подсказчик обычной партии или ничего. */
+const coachKind = ref<'tutorial' | 'coach' | null>(null)
+const coachHintsDismissed = ref(false)
+const coachMode = computed(() => coachKind.value === 'coach')
 const serverStatus = ref<'idle' | 'loading' | 'online' | 'offline'>('idle')
 const loadError = ref<string | null>(null)
 const participationHint = ref<string | null>(null)
@@ -1382,6 +1386,40 @@ async function onScenarioCoachNext() {
   }
 }
 
+/**
+ * Обучение пройдено. Окно с двумя исходами: создать партию или остаться на полигоне. Исхода
+ * «ничего не делать» нет — после отказа кнопка выхода остаётся на виду, чтобы полигон не
+ * превращался в комнату, из которой некуда деться.
+ */
+const tutorialDoneOffered = ref(false)
+const tutorialCompleted = ref(false)
+async function onTutorialCompleted() {
+  tutorialCompleted.value = true
+  if (tutorialDoneOffered.value) return
+  tutorialDoneOffered.value = true
+  const createGame = await gameConfirm({
+    title: 'Обучение пройдено',
+    message:
+      'Вы прошли полный ход: план, исполнение маркеров, захват, постройка, обстрел и бой. '
+      + 'Можно создать свою партию — подсказки по ходу партии там останутся, если не выключите, — '
+      + 'или остаться на полигоне и попробовать то, что не успели.',
+    confirmLabel: 'Создать партию',
+    cancelLabel: 'Остаться на полигоне',
+  })
+  if (createGame) await navigateTo('/')
+}
+
+async function onScenarioHintsToggle(dismissed: boolean) {
+  if (!roomId.value || !playerId.value) return
+  try {
+    const obs = await setScenarioHints(roomId.value, playerId.value, dismissed)
+    applyObservation(obs, undefined, 'action')
+    persistLocal()
+  } catch (e) {
+    loadError.value = e instanceof Error ? e.message : String(e)
+  }
+}
+
 /** Очередь хода текущего круга: цвет, место и состояние каждого игрока */
 const turnQueue = computed(() => {
   const save = saveFile.value
@@ -1424,6 +1462,9 @@ function applyObservation(
   legalActions.value = obs.legalActions ?? []
   const tutorial = (obs as {
     tutorial?: {
+      kind?: 'tutorial' | 'coach'
+      hintsDismissed?: boolean
+      completed?: boolean
       scenarioStep?: {
         id: string
         title: string
@@ -1439,7 +1480,11 @@ function applyObservation(
       }
     }
   }).tutorial
-  tutorialMode.value = Boolean(tutorial)
+  // Подсказчик обычной партии ничего не запрещает: учебные ограничения включает только полигон.
+  coachKind.value = tutorial?.kind ?? null
+  tutorialMode.value = Boolean(tutorial) && tutorial!.kind !== 'coach'
+  coachHintsDismissed.value = Boolean(tutorial?.hintsDismissed)
+  if (tutorial?.completed && tutorial.kind !== 'coach') void onTutorialCompleted()
   if (tutorial?.scenarioStep) {
     tutorialCoach.value = {
       title: tutorial.scenarioStep.title,
@@ -3789,6 +3834,14 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
               Баг
             </button>
             <button
+              v-if="coachMode && coachHintsDismissed"
+              type="button"
+              class="sfx-mute-btn"
+              @click="onScenarioHintsToggle(false)"
+            >
+              {{ ui.coach.coachRestore }}
+            </button>
+            <button
               v-if="snapshot"
               type="button"
               class="rules-help-btn"
@@ -3851,8 +3904,19 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
             :manual="tutorialCoach.manual"
             :step-number="tutorialCoach.stepNumber"
             :step-count="tutorialCoach.stepCount"
+            :coach="coachMode"
             @next="onScenarioCoachNext"
+            @dismiss="onScenarioHintsToggle(true)"
           />
+          <!-- Запасной выход с полигона: окно «Обучение пройдено» игрок мог закрыть. -->
+          <button
+            v-else-if="tutorialCompleted"
+            type="button"
+            class="phase-advance-btn phase-advance-btn--secondary coach-exit"
+            @click="navigateTo('/')"
+          >
+            Обучение пройдено — создать партию
+          </button>
         </div>
       </div>
     </div>
@@ -4289,6 +4353,13 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
 .back-link:hover {
   border-color: rgba(147, 197, 253, 0.35);
   background: rgba(30, 41, 59, 0.65);
+}
+/* Запасной выход с полигона: та же форма, что у кнопки фазы, но не во всю ширину. */
+.coach-exit {
+  width: auto;
+  align-self: flex-start;
+  margin-top: var(--g-s-2);
+  pointer-events: auto;
 }
 .server-pill {
   font-size: 0.72rem;
