@@ -128,6 +128,15 @@ function bumpObservationEpoch(): void {
 const saveFile = ref<GalaxySaveFile | null>(null)
 const selectedKey = ref<string | null>(null)
 const panelCollapsed = ref(false)
+/**
+ * Телефон: карточка выбранной клетки приподнимается шторкой на треть экрана.
+ *
+ * Раньше нажатие на клетку на телефоне не давало ничего видимого — карточка
+ * лежала в свёрнутой панели «Игра», и чтобы увидеть, что на клетке, нужно было
+ * отдельно открыть панель во весь экран поверх карты. Основное действие игры
+ * стоило двух лишних шагов и закрывало поле.
+ */
+const cellPeekOpen = ref(false)
 const hudToolsOpen = ref(false)
 const NARROW_UI_MQ = '(max-width: 900px)'
 const isNarrowUi = ref(false)
@@ -142,6 +151,11 @@ function syncNarrowUi() {
     hudToolsOpen.value = false
   }
 }
+/** Шторка клетки видна только на телефоне, при свёрнутой панели и выбранной клетке. */
+const cellPeek = computed(
+  () => isNarrowUi.value && panelCollapsed.value && cellPeekOpen.value && !!selectedKey.value,
+)
+
 const legalActions = ref<LegalAction[]>([])
 const tutorialMode = ref(false)
 const serverStatus = ref<'idle' | 'loading' | 'online' | 'offline'>('idle')
@@ -2962,6 +2976,9 @@ async function tryLoadFromServer() {
 async function selectCell(q: number, r: number) {
   selectedKey.value = hexKey(q, r)
   markerHint.value = null
+  // Шторка с карточкой клетки — только когда панель свёрнута: если игрок сам
+  // открыл её целиком, подменять содержимое под ним не надо.
+  if (isNarrowUi.value && panelCollapsed.value) cellPeekOpen.value = true
 
   if (buildTokenPick.value.active) {
     buildTokenClickSeq += 1
@@ -3260,7 +3277,10 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
   <div
     ref="gameViewportRef"
     class="game-viewport"
-    :class="isMyTurn ? `game-viewport--${snapshot?.phase === 'actions' || snapshot?.phase === 'production' ? 'actions' : 'planning'}` : null"
+    :class="[
+      isMyTurn ? `game-viewport--${snapshot?.phase === 'actions' || snapshot?.phase === 'production' ? 'actions' : 'planning'}` : null,
+      cellPeek ? 'game-viewport--peek' : null,
+    ]"
   >
     <div v-if="showLobbyOverlay" class="join-overlay">
       <div class="join-card join-card--lobby">
@@ -3835,9 +3855,10 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
       v-show="!mobileOverlayOpen"
       class="hud-right"
       :class="{
-        collapsed: panelCollapsed,
+        collapsed: panelCollapsed && !cellPeek,
         'hud-right--sheet': isNarrowUi,
-        'hud-right--fab': isNarrowUi && panelCollapsed,
+        'hud-right--fab': isNarrowUi && panelCollapsed && !cellPeek,
+        'hud-right--peek': cellPeek,
       }"
     >
       <button
@@ -3848,6 +3869,7 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
         @click="panelCollapsed = true"
       />
       <button
+        v-if="!cellPeek"
         type="button"
         class="panel-toggle"
         :title="panelCollapsed ? 'Развернуть панель' : 'Свернуть панель'"
@@ -3858,7 +3880,27 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
         <template v-if="isNarrowUi">{{ panelCollapsed ? 'Игра' : 'Закрыть' }}</template>
         <template v-else>{{ panelCollapsed ? '«' : '»' }}</template>
       </button>
-      <div v-if="!panelCollapsed" id="game-side-panel" class="panel-inner">
+      <!-- Шапка шторки клетки: карта остаётся видна, под рукой — раскрыть и закрыть -->
+      <div v-else class="peek-head">
+        <button type="button" class="peek-expand" @click="panelCollapsed = false; cellPeekOpen = false">
+          Вся панель
+        </button>
+        <button type="button" class="peek-close" aria-label="Закрыть карточку клетки" @click="cellPeekOpen = false">
+          ×
+        </button>
+      </div>
+      <div v-if="cellPeek" class="panel-inner panel-inner--peek">
+        <section class="block block--cell">
+          <CellDetailPanel
+            :cell="selectedCell"
+            :cell-key="selectedKey"
+            :players="snapshot?.players"
+            :can-remove-action-marker="canRemoveActionMarkerOnSelected"
+            @remove-action-marker="removeSelectedActionMarker"
+          />
+        </section>
+      </div>
+      <div v-else-if="!panelCollapsed" id="game-side-panel" class="panel-inner">
         <section v-if="victoryProgress" class="block victory-block">
           <h3 class="block-label">{{ ui.victory.heading }}</h3>
           <VictoryTrackerPanel :progress="victoryProgress" :my-player-id="playerId" :turns-left="turnsLeft" />
@@ -4621,6 +4663,55 @@ button,
     z-index: 56;
     padding-bottom: max(0.25rem, env(safe-area-inset-bottom, 0px));
     transition: none;
+  }
+  /*
+   * Шторка клетки: треть экрана снизу, карта над ней остаётся видна. Нижний ряд
+   * с кнопкой фазы шторка не закрывает — он поднимается над ней, см.
+   * `.mobile-phase-dock--peek`.
+   */
+  /* Нижний ряд и чат поднимаются над шторкой: кнопка фазы должна оставаться
+     нажимаемой, пока игрок смотрит карточку клетки. */
+  .game-viewport--peek {
+    --mobile-fab-bottom: calc(34dvh + 0.45rem);
+  }
+  .hud-right--peek {
+    max-height: 34dvh;
+    z-index: var(--g-z-sheet);
+  }
+  .hud-right--peek .panel-inner--peek {
+    max-height: calc(34dvh - 2.6rem);
+    padding: 0 0.75rem 0.5rem;
+    overflow-y: auto;
+    pointer-events: auto;
+  }
+  .peek-head {
+    display: flex;
+    align-items: center;
+    gap: var(--g-s-2);
+    padding: 0.35rem 0.6rem 0.3rem;
+    border-bottom: 1px solid var(--g-border);
+    pointer-events: auto;
+  }
+  .peek-expand {
+    flex: 1 1 auto;
+    min-height: 2.2rem;
+    border: 1px solid var(--g-border-strong);
+    border-radius: var(--g-r-pill);
+    background: var(--g-surface-1);
+    color: var(--g-text);
+    font-size: var(--g-text-sm);
+    font-weight: 600;
+  }
+  .peek-close {
+    flex: 0 0 auto;
+    width: 2.2rem;
+    min-height: 2.2rem;
+    border: 1px solid var(--g-border-strong);
+    border-radius: var(--g-r-pill);
+    background: var(--g-surface-1);
+    color: var(--g-text);
+    font-size: 1.1rem;
+    line-height: 1;
   }
   /* Свёрнутая панель = только FAB справа в одном ряду с чатом и фазой */
   .hud-right--sheet.collapsed,
