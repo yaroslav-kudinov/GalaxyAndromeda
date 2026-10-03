@@ -1,17 +1,17 @@
 import type {
+  BattleForecast,
   BombardmentPlan,
   CombatPreview,
   GameSnapshot,
   HexCoord,
-  BattleOutcomeOdds,
   ShipMovePlan,
 } from '@galaxy/rules'
 import {
   ONE_BATTLE_PER_MARKER_MSG,
   buildBombardmentPreview,
-  buildCombatPreview,
+  buildCombatPreviewForMoves,
   detectCombatsFromMoves,
-  estimateBattleOutcome,
+  forecastBattle,
   getCombatDestinationKeysFromMoves,
   hexKey,
   isCombatDestination,
@@ -99,15 +99,30 @@ export function useActionOrderDraft(
     draftMoves.value.filter((m) => m.combat).map((m) => hexKey(m.to.q, m.to.r)),
   )
 
+  /**
+   * Выбранные корабли, которым клетка назначения ещё не указана. Пока их больше нуля, приказ
+   * неполон, и прогноз описывает не весь бой — об этом надо сказать прямо.
+   */
+  const unassignedShipIds = computed(() =>
+    selectedShipIds.value.filter((id) => assignments.value[id] == null),
+  )
+
+  /**
+   * Превью боя для приказа. Собирается тем же помощником правил, которым бой построит сервер
+   * (`buildCombatPreviewForMoves`), а не из своего разбора черновика: раньше прогноз брал только
+   * корабли с признаком `combat` и занижал сторону атакующего — два эсминца шли в бой, а в окне
+   * стоял один кубик.
+   */
   const orderCombatPreview = computed((): CombatPreview | null => {
-    if (!snapshot.value || !pendingCombatCoord.value || !source.value) return null
-    const coord = pendingCombatCoord.value
-    const fromCell = snapshot.value.cells.find(
-      (c) => hexKey(c.coord.q, c.coord.r) === hexKey(source.value!.q, source.value!.r),
-    )
-    if (!fromCell) return null
+    if (!snapshot.value || !source.value) return null
 
     if (mode.value === 'bombardment') {
+      const coord = pendingCombatCoord.value
+      if (!coord) return null
+      const fromCell = snapshot.value.cells.find(
+        (c) => hexKey(c.coord.q, c.coord.r) === hexKey(source.value!.q, source.value!.r),
+      )
+      if (!fromCell) return null
       const bombardingShips = fromCell.ships.filter((s) =>
         selectedShipIds.value.includes(s.id),
       )
@@ -120,17 +135,23 @@ export function useActionOrderDraft(
       )
     }
 
-    const incomingIds = draftMoves.value
-      .filter((m) => m.combat && hexKey(m.to.q, m.to.r) === hexKey(coord.q, coord.r))
-      .map((m) => m.shipId)
-    const incomingShips = fromCell.ships.filter((s) => incomingIds.includes(s.id))
-    return buildCombatPreview(snapshot.value, coord, playerId.value, incomingShips)
+    const moves: ShipMovePlan[] = Object.entries(assignments.value).map(([shipId, plan]) => ({
+      shipId,
+      to: plan.to,
+      ...(plan.declareControl ? { declareControl: true } : {}),
+    }))
+    if (!moves.length) return null
+    return buildCombatPreviewForMoves(snapshot.value, playerId.value, source.value, moves)
   })
 
-  const battleOdds = computed((): BattleOutcomeOdds | null => {
+  /**
+   * Прогноз боя: урон за раунд и исход до конца. Считается точно, поэтому при каждом
+   * пересчёте выходит одно и то же число.
+   */
+  const battleForecast = computed((): BattleForecast | null => {
     const preview = orderCombatPreview.value
     if (!preview) return null
-    return estimateBattleOutcome(preview)
+    return forecastBattle(preview)
   })
 
   function pushUndoSnapshot(
@@ -247,7 +268,8 @@ export function useActionOrderDraft(
     destinationKeys,
     contestedDestinationKeys,
     orderCombatPreview,
-    battleOdds,
+    battleForecast,
+    unassignedShipIds,
     pushUndoSnapshot,
     clear,
     wouldViolateSingleCombatRule,

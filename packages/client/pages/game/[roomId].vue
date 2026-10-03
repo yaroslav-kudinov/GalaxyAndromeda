@@ -402,7 +402,8 @@ const markerMapPickBannerSlots = computed(() => {
 })
 const markerMapPickError = markerMapPick.error
 const markerMapPickCombatPreview = markerMapPick.combatPreview
-const markerMapPickBattleOdds = markerMapPick.battleOdds
+const markerMapPickBattleForecast = markerMapPick.battleForecast
+const markerMapPickUnassignedShipIds = markerMapPick.unassignedShipIds
 const markerMapPickOrderReady = markerMapPick.orderReady
 const markerMapPickHasPendingCombat = markerMapPick.hasPendingCombat
 const markerMapPickConfirmLabel = markerMapPick.confirmButtonLabel
@@ -3378,7 +3379,8 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
       <CombatPreviewPanel
         v-if="markerMapPickActive && markerMapPickHasPendingCombat && markerMapPickCombatPreview && snapshot"
         :preview="markerMapPickCombatPreview"
-        :battle-odds="markerMapPickBattleOdds"
+        :forecast="markerMapPickBattleForecast"
+        :unassigned-ships="markerMapPickUnassignedShipIds.length"
         :player-names="playerNameById"
       />
     </section>

@@ -16,7 +16,9 @@ import {
   applyCombatResultToSnapshot,
   beginOrAwaitCombatContinuation,
   buildCombatPreview,
+  buildCombatPreviewForMoves,
   buildCombatPreviewFromPending,
+  combatOrderFromMoves,
   combatPrepOf,
   combatResolutionFingerprint,
   combatResolutionFromPending,
@@ -32,6 +34,7 @@ import {
   ONE_BATTLE_PER_MARKER_MSG,
   pendingCombatInvariantViolations,
   releaseInvalidPendingCombat,
+  removeShipsFromSnapshot,
   resolveCombatAtCell,
   rollCombatRound,
   setupCombatPrepForMovement,
@@ -57,6 +60,8 @@ import {
   validateMarkerBombardment,
 } from './bombardment.js'
 import { addActionMarker } from './markers.js'
+import { combatDiceReport } from './combat-dice-report.js'
+import { forecastBattle, forecastRoundDamage } from './combat-forecast.js'
 
 function addShip(
   game: GameSnapshot,
@@ -1484,5 +1489,335 @@ describe('прочность гиперорудия', () => {
       { q: 0, r: 0 },
     )!
     expect(bombardment.defender.ships[0]?.hull).toBe(2)
+  })
+})
+
+describe('прогноз боя', () => {
+  /** Разыгрывает бой до конца так, как это делает движок: превью пересобирается каждый раунд. */
+  function playBattleToEnd(
+    game: GameSnapshot,
+    coord: { q: number; r: number },
+    attackerId: string,
+    attackerCell: { q: number; r: number },
+    rng: () => number,
+  ): 'win' | 'draw' | 'defeat' {
+    let damage: Record<string, number> = {}
+    for (let round = 0; round < 64; round++) {
+      const incoming = cellAt(game, attackerCell.q, attackerCell.r).ships.filter(
+        (ship) => ship.ownerId === attackerId,
+      )
+      const preview = buildCombatPreview(game, coord, attackerId, incoming, { damageByShipId: damage })
+      if (!preview) break
+      const result = rollCombatRound(preview, damage, {}, rng)
+      damage = result.damageByShipId
+      removeShipsFromSnapshot(game, result.destroyedShipIds)
+      const attackersAlive = cellAt(game, attackerCell.q, attackerCell.r).ships.some(
+        (ship) => ship.ownerId === attackerId,
+      )
+      const defendersAlive = cellAt(game, coord.q, coord.r).ships.some((ship) => ship.ownerId !== attackerId)
+      if (!defendersAlive && attackersAlive) return 'win'
+      if (!attackersAlive && defendersAlive) return 'defeat'
+      if (!attackersAlive && !defendersAlive) return 'draw'
+      if (preview.attacker.diceTotal === 0 && preview.defender.diceTotal === 0) return 'draw'
+    }
+    return 'draw'
+  }
+
+  it('считает точно и даёт одно и то же число при каждом пересчёте', () => {
+    const { game } = duelBoard()
+    addShip(game, 0, 0, 'player-1', 'cruiser', 'att-cr-1')
+    addShip(game, 0, 0, 'player-1', 'cruiser', 'att-cr-2')
+    addShip(game, 1, 0, 'player-2', 'cruiser', 'def-cr-1')
+    addShip(game, 1, 0, 'player-2', 'cruiser', 'def-cr-2')
+    const preview = buildCombatPreview(game, { q: 1, r: 0 }, 'player-1', [
+      { id: 'att-cr-1', type: 'cruiser', ownerId: 'player-1' },
+      { id: 'att-cr-2', type: 'cruiser', ownerId: 'player-1' },
+    ])!
+
+    const first = forecastBattle(preview)
+    const second = forecastBattle(preview)
+    expect(first.exact).toBe(true)
+    expect(second.outcome).toEqual(first.outcome)
+    expect(second.round).toEqual(first.round)
+    expect(first.outcome.win + first.outcome.draw + first.outcome.defeat).toBeCloseTo(1, 10)
+    // Равные флоты — симметричный исход.
+    expect(first.outcome.win).toBeCloseTo(first.outcome.defeat, 10)
+  })
+
+  it('линкор против эсминца: победа без потерь считается точно', () => {
+    const { game } = duelBoard()
+    addShip(game, 0, 0, 'player-1', 'battleship', 'att-bb')
+    addShip(game, 1, 0, 'player-2', 'destroyer', 'def-dd')
+    const preview = buildCombatPreview(game, { q: 1, r: 0 }, 'player-1', [
+      { id: 'att-bb', type: 'battleship', ownerId: 'player-1' },
+    ])!
+    const forecast = forecastBattle(preview)
+    expect(forecast.exact).toBe(true)
+    // Эсминец ещё может трижды попасть, пока линкор промахивается, — но это доли процента.
+    expect(forecast.outcome.win).toBeGreaterThan(0.999)
+    expect(forecast.outcome.defeat).toBeLessThan(0.001)
+    // Три кубика на 4+: хотя бы одно попадание — 1 − (1/2)³ = 7/8, прочность эсминца 1.
+    expect(forecast.round.defenderLosses).toBeCloseTo(7 / 8, 10)
+    expect(forecast.round.attackerLosses).toBe(0)
+  })
+
+  it('эсминец против эсминца: разбор вручную', () => {
+    const { game } = duelBoard()
+    addShip(game, 0, 0, 'player-1', 'destroyer', 'att-dd')
+    addShip(game, 1, 0, 'player-2', 'destroyer', 'def-dd')
+    const preview = buildCombatPreview(game, { q: 1, r: 0 }, 'player-1', [
+      { id: 'att-dd', type: 'destroyer', ownerId: 'player-1' },
+    ])!
+    const forecast = forecastBattle(preview)
+    expect(forecast.round.defenderLosses).toBeCloseTo(1 / 6, 10)
+    expect(forecast.round.attackerLosses).toBeCloseTo(1 / 6, 10)
+    // За раунд: попали оба — 1/36, один из двух — 10/36, никто — 25/36. Промах обоих повторяет
+    // раунд, поэтому исходы делятся как 5 : 1 : 5.
+    expect(forecast.outcome.win).toBeCloseTo(5 / 11, 6)
+    expect(forecast.outcome.draw).toBeCloseTo(1 / 11, 6)
+    expect(forecast.outcome.defeat).toBeCloseTo(5 / 11, 6)
+  })
+
+  it('точный расчёт совпадает с живым боем, включая поддержку с соседней клетки', () => {
+    const makeBoard = () => {
+      const { game } = duelBoard([{ q: 2, r: 0 }])
+      addShip(game, 0, 0, 'player-1', 'destroyer', 'att-dd-1')
+      addShip(game, 0, 0, 'player-1', 'destroyer', 'att-dd-2')
+      addShip(game, 1, 0, 'player-2', 'destroyer', 'def-dd')
+      addShip(game, 2, 0, 'player-2', 'cruiser', 'sup-cr')
+      cellAt(game, 2, 0).controlOwnerId = 'player-2'
+      return game
+    }
+    const preview = buildCombatPreview(makeBoard(), { q: 1, r: 0 }, 'player-1', [
+      { id: 'att-dd-1', type: 'destroyer', ownerId: 'player-1' },
+      { id: 'att-dd-2', type: 'destroyer', ownerId: 'player-1' },
+    ])!
+    const forecast = forecastBattle(preview)
+    expect(forecast.exact).toBe(true)
+
+    let seed = 1
+    const rng = () => {
+      seed = (seed * 1103515245 + 12345) % 2147483648
+      return seed / 2147483648
+    }
+    const runs = 4000
+    const tally = { win: 0, draw: 0, defeat: 0 }
+    for (let i = 0; i < runs; i++) {
+      tally[playBattleToEnd(makeBoard(), { q: 1, r: 0 }, 'player-1', { q: 0, r: 0 }, rng)] += 1
+    }
+    expect(tally.win / runs).toBeCloseTo(forecast.outcome.win, 1)
+    expect(tally.defeat / runs).toBeCloseTo(forecast.outcome.defeat, 1)
+    expect(tally.draw / runs).toBeCloseTo(forecast.outcome.draw, 1)
+  })
+
+  it('выбитый корабль больше не стреляет', () => {
+    const { game } = duelBoard()
+    addShip(game, 0, 0, 'player-1', 'destroyer', 'att-dd')
+    addShip(game, 1, 0, 'player-2', 'destroyer', 'def-dd-1')
+    addShip(game, 1, 0, 'player-2', 'destroyer', 'def-dd-2')
+    const preview = buildCombatPreview(
+      game,
+      { q: 1, r: 0 },
+      'player-1',
+      [{ id: 'att-dd', type: 'destroyer', ownerId: 'player-1' }],
+      { damageByShipId: { 'def-dd-1': 1 } },
+    )!
+    // Первый эсминец защитника уже выбит: кубик у стороны остался один.
+    expect(forecastRoundDamage(preview).defenderHits).toBeCloseTo(1 / 6, 10)
+    expect(combatDiceReport(preview, 'defender').total).toBe(1)
+  })
+
+  it('большой флот честно помечается оценкой', () => {
+    const { game } = duelBoard()
+    const incoming: { id: string; type: ShipType; ownerId: string }[] = []
+    for (let i = 0; i < 6; i++) {
+      const attId = 'att-bb-' + i
+      addShip(game, 0, 0, 'player-1', 'battleship', attId)
+      incoming.push({ id: attId, type: 'battleship', ownerId: 'player-1' })
+      addShip(game, 1, 0, 'player-2', 'battleship', 'def-bb-' + i)
+    }
+    const preview = buildCombatPreview(game, { q: 1, r: 0 }, 'player-1', incoming)!
+    const forecast = forecastBattle(preview, { samples: 200 })
+    expect(forecast.exact).toBe(false)
+    expect(forecast.samples).toBe(200)
+    // Итог раунда остаётся точным и на большом флоте.
+    expect(forecast.round.defenderLosses).toBeGreaterThan(0)
+  })
+
+  it('бой, в котором никто не может стрелять, — размен без вариантов', () => {
+    const { game } = duelBoard()
+    addShip(game, 0, 0, 'player-1', 'carrier', 'att-cv')
+    addShip(game, 1, 0, 'player-2', 'carrier', 'def-cv')
+    const preview = buildCombatPreview(game, { q: 1, r: 0 }, 'player-1', [
+      { id: 'att-cv', type: 'carrier', ownerId: 'player-1' },
+    ])!
+    const forecast = forecastBattle(preview)
+    expect(forecast.outcome).toEqual({ win: 0, draw: 1, defeat: 0 })
+    expect(forecast.exact).toBe(true)
+  })
+})
+
+describe('состав сторон в прогнозе', () => {
+  /**
+   * Баг-репорт живого игрока: «два эсминца атакуют один, но поражение 68%, у меня 1 кубик, у него
+   * 3». Три кубика у защитника — эсминец на клетке плюс крейсер поддержки с соседней. Один кубик у
+   * атакующего получался потому, что прогноз строился из незавершённого черновика назначений:
+   * второй эсминец в него ещё не попал, а в бой шли оба.
+   */
+  function twoDestroyersVersusSupportedDestroyer() {
+    const { map, game } = duelBoard([{ q: 2, r: 0 }])
+    addShip(game, 0, 0, 'player-1', 'destroyer', 'att-dd-1')
+    addShip(game, 0, 0, 'player-1', 'destroyer', 'att-dd-2')
+    addShip(game, 1, 0, 'player-2', 'destroyer', 'def-dd')
+    addShip(game, 2, 0, 'player-2', 'cruiser', 'sup-cr')
+    cellAt(game, 2, 0).controlOwnerId = 'player-2'
+    return { map, game }
+  }
+
+  it('в прогноз по приказу идут все корабли приказа, а не часть', () => {
+    const { game } = twoDestroyersVersusSupportedDestroyer()
+    const moves = [
+      { shipId: 'att-dd-1', to: { q: 1, r: 0 } },
+      { shipId: 'att-dd-2', to: { q: 1, r: 0 } },
+    ]
+    const preview = buildCombatPreviewForMoves(game, 'player-1', { q: 0, r: 0 }, moves)!
+    expect(preview.attacker.ships.map((s) => s.shipId)).toEqual(['att-dd-1', 'att-dd-2'])
+    expect(preview.attacker.diceTotal).toBe(2)
+    expect(preview.defender.diceTotal).toBe(3)
+
+    const forecast = forecastBattle(preview)
+    expect(forecast.exact).toBe(true)
+    expect(forecast.outcome.defeat).toBeLessThan(0.4)
+    expect(forecast.outcome.win).toBeGreaterThan(0.55)
+  })
+
+  it('прогноз одного эсминца и прогноз двух — разные числа', () => {
+    const { game } = twoDestroyersVersusSupportedDestroyer()
+    const one = buildCombatPreviewForMoves(game, 'player-1', { q: 0, r: 0 }, [
+      { shipId: 'att-dd-1', to: { q: 1, r: 0 } },
+    ])!
+    const both = buildCombatPreviewForMoves(game, 'player-1', { q: 0, r: 0 }, [
+      { shipId: 'att-dd-1', to: { q: 1, r: 0 } },
+      { shipId: 'att-dd-2', to: { q: 1, r: 0 } },
+    ])!
+    expect(one.attacker.diceTotal).toBe(1)
+    expect(both.attacker.diceTotal).toBe(2)
+    // Ровно то поражение, которое видел игрок, когда в прогноз попадал один эсминец из двух.
+    expect(forecastBattle(one).outcome.defeat).toBeCloseTo(0.68, 2)
+    expect(forecastBattle(both).outcome.defeat).toBeLessThan(0.35)
+  })
+
+  it('корабль, пришедший в клетку маркера вторым действием, попадает в прогноз', () => {
+    const { game } = twoDestroyersVersusSupportedDestroyer()
+    // Два эсминца уже стояли в клетке с маркером, третий пришёл туда предыдущим действием —
+    // в бой одним приказом уходят все три.
+    addShip(game, 0, 0, 'player-1', 'destroyer', 'att-dd-3')
+    const moves = cellAt(game, 0, 0).ships
+      .filter((ship) => ship.ownerId === 'player-1')
+      .map((ship) => ({ shipId: ship.id, to: { q: 1, r: 0 } }))
+    const order = combatOrderFromMoves(game, 'player-1', { q: 0, r: 0 }, moves)!
+    expect(order.incomingShips.map((s) => s.id)).toEqual(['att-dd-1', 'att-dd-2', 'att-dd-3'])
+    const preview = buildCombatPreviewForMoves(game, 'player-1', { q: 0, r: 0 }, moves)!
+    expect(preview.attacker.diceTotal).toBe(3)
+  })
+
+  it('прогноз и бой собирают состав одним помощником — расхождения нет', () => {
+    const { map, game } = twoDestroyersVersusSupportedDestroyer()
+    const moves = [
+      { shipId: 'att-dd-1', to: { q: 1, r: 0 } },
+      { shipId: 'att-dd-2', to: { q: 1, r: 0 } },
+    ]
+    placeActionMarker(game, 'player-1', { q: 0, r: 0 })
+    const before = buildCombatPreviewForMoves(game, 'player-1', { q: 0, r: 0 }, moves)!
+    expect(executeMarkerMovement(game, map, 'player-1', { q: 0, r: 0 }, moves).errors).toEqual([])
+    const prep = buildCombatPreviewFromPending(game)!
+    expect(prep.attacker.ships.map((s) => s.shipId)).toEqual(before.attacker.ships.map((s) => s.shipId))
+    expect(prep.attacker.diceTotal).toBe(before.attacker.diceTotal)
+    expect(prep.defender.diceTotal).toBe(before.defender.diceTotal)
+  })
+
+  it('мирный ход того же приказа учитывается в прогнозе как сделанный', () => {
+    const map = createEmptyMap('order-support', 'Order support')
+    map.cells.push({ q: 1, r: 0 })
+    const game = gameSnapshotFromMap(map)
+    game.phase = 'actions'
+    game.activePlayerId = 'player-1'
+    game.participatingPlayerIds = ['player-1', 'player-2']
+    cellAt(game, 1, 0).controlOwnerId = 'player-2'
+    addShip(game, 0, 0, 'player-1', 'destroyer', 'att-dd')
+    addShip(game, 0, 0, 'player-1', 'cruiser', 'att-cr')
+    addShip(game, 1, 0, 'player-2', 'destroyer', 'def-dd')
+
+    // Крейсер остаётся на (0,0) — это соседняя клетка, его два кубика идут поддержкой.
+    const preview = buildCombatPreviewForMoves(game, 'player-1', { q: 0, r: 0 }, [
+      { shipId: 'att-dd', to: { q: 1, r: 0 } },
+      { shipId: 'att-cr', to: { q: 0, r: 0 } },
+    ])!
+    expect(preview.attacker.supportingShips.map((s) => s.shipId)).toEqual(['att-cr'])
+    expect(preview.attacker.diceTotal).toBe(3)
+  })
+})
+
+describe('расшифровка кубиков', () => {
+  it('называет каждый корабль, откуда он стреляет и сколько даёт кубиков', () => {
+    const { game } = duelBoard([{ q: 2, r: 0 }])
+    addShip(game, 0, 0, 'player-1', 'destroyer', 'att-dd')
+    addShip(game, 1, 0, 'player-2', 'destroyer', 'def-dd')
+    addShip(game, 2, 0, 'player-2', 'cruiser', 'sup-cr')
+    cellAt(game, 2, 0).controlOwnerId = 'player-2'
+    const preview = buildCombatPreview(game, { q: 1, r: 0 }, 'player-1', [
+      { id: 'att-dd', type: 'destroyer', ownerId: 'player-1' },
+    ])!
+
+    const attacker = combatDiceReport(preview, 'attacker')
+    expect(attacker.sources).toEqual([
+      expect.objectContaining({ shipId: 'att-dd', type: 'destroyer', distance: 0, dice: 1, threshold: 6 }),
+    ])
+    expect(attacker.total).toBe(1)
+
+    const defender = combatDiceReport(preview, 'defender')
+    expect(defender.sources.map((s) => [s.shipId, s.distance, s.dice, s.threshold])).toEqual([
+      ['def-dd', 0, 1, 6],
+      ['sup-cr', 1, 2, 6],
+    ])
+    expect(defender.sources[1]?.fromCoord).toEqual({ q: 2, r: 0 })
+    expect(defender.total).toBe(3)
+    expect(defender.total).toBe(preview.defender.diceTotal)
+  })
+
+  it('прибавку авианосца видно в разбивке', () => {
+    const { game } = duelBoard()
+    addShip(game, 0, 0, 'player-1', 'cruiser', 'att-cr')
+    addShip(game, 0, 0, 'player-1', 'carrier', 'att-cv')
+    addShip(game, 1, 0, 'player-2', 'destroyer', 'def-dd')
+    const preview = buildCombatPreview(game, { q: 1, r: 0 }, 'player-1', [
+      { id: 'att-cr', type: 'cruiser', ownerId: 'player-1' },
+      { id: 'att-cv', type: 'carrier', ownerId: 'player-1' },
+    ])!
+    const report = combatDiceReport(preview, 'attacker')
+    expect(report.sources).toEqual([
+      expect.objectContaining({ shipId: 'att-cr', dice: 4, bonusDice: 2 }),
+    ])
+    // Авианосец в бою есть, но кубиков не даёт — об этом надо сказать, иначе он «пропал».
+    expect(report.silent).toEqual([
+      expect.objectContaining({ shipId: 'att-cv', reason: 'no-weapon' }),
+    ])
+    expect(report.total).toBe(4)
+  })
+
+  it('защитник под обстрелом не отвечает — кубиков ноль', () => {
+    const { game } = duelBoard([{ q: 2, r: 0 }])
+    addShip(game, 0, 0, 'player-1', 'battleship', 'att-bb')
+    addShip(game, 2, 0, 'player-2', 'destroyer', 'def-dd')
+    cellAt(game, 2, 0).controlOwnerId = 'player-2'
+    const preview = buildBombardmentPreview(
+      game,
+      { q: 2, r: 0 },
+      'player-1',
+      [{ id: 'att-bb', type: 'battleship', ownerId: 'player-1' }],
+      { q: 0, r: 0 },
+    )!
+    expect(combatDiceReport(preview, 'defender').total).toBe(0)
+    expect(combatDiceReport(preview, 'attacker').total).toBe(3)
   })
 })
