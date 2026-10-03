@@ -2,7 +2,7 @@ import type { GameSnapshot, Phase } from '@galaxy/rules'
 
 export interface GameToast {
   id: number
-  kind: 'identity' | 'phase' | 'turn' | 'gameover' | 'error'
+  kind: 'identity' | 'phase' | 'turn' | 'gameover' | 'error' | 'connection'
   title: string
   detail?: string
   accent?: boolean
@@ -23,6 +23,7 @@ const GAME_OVER_REASON_LABELS: Record<string, string> = {
   power_centers: 'Большинство центров власти',
   last_standing: 'Последний игрок на карте',
   turn_limit: 'Лимит ходов',
+  stalemate: 'Партия встала: ходов ни у кого не осталось',
 }
 
 export function useGameStatusToasts(
@@ -135,9 +136,11 @@ export function useGameStatusToasts(
     (current, previous) => {
       if (!current || !snapshot.value) return
       if (previous?.winnerId === current.winnerId && previous?.reason === current.reason) return
-      const winner = playerLabel(current.winnerId)
       const reason = GAME_OVER_REASON_LABELS[current.reason] ?? current.reason
-      pushToast('gameover', 'Игра окончена', `Победитель: ${winner} · ${reason}`, true)
+      const outcome = current.winnerId
+        ? `Победитель: ${playerLabel(current.winnerId)}`
+        : 'Победителя нет'
+      pushToast('gameover', 'Игра окончена', `${outcome} · ${reason}`, true)
     },
   )
 

@@ -341,6 +341,25 @@ describe('раунд боя', () => {
     expect(formatCombatRoundSummary(round, 2)).toBe('Раунд 2 — попаданий: атакующий 3, защитник 3')
   })
 
+  /**
+   * Баг-репорт Serafal от 2026-09-26: уничтоженный авианосец подписывался служебным номером
+   * корабля вместо класса. Авианосец не бросает кубиков, поэтому в бросках раунда его нет, а с
+   * доски он после боя пропадает — подписать его можно только по классам из итога раунда.
+   */
+  it('классы уничтоженных есть в итоге раунда — даже у тех, кто не стрелял', () => {
+    const { game } = duelBoard()
+    addShip(game, 0, 0, 'player-1', 'battleship', 'att-bb')
+    addShip(game, 1, 0, 'player-2', 'carrier', 'def-cv')
+    const preview = buildCombatPreview(game, { q: 1, r: 0 }, 'player-1', [
+      { id: 'att-bb', type: 'battleship', ownerId: 'player-1' },
+    ])!
+
+    const round = rollCombatRound(preview, {}, {}, allSixes)
+    expect(round.destroyedShipIds).toEqual(['def-cv'])
+    expect(round.shipRolls.some((roll) => roll.shipId === 'def-cv')).toBe(false)
+    expect(round.destroyedShipTypes).toEqual({ 'def-cv': 'carrier' })
+  })
+
   it('урон, полученный раньше в этом бою, учитывается', () => {
     const { preview } = bbVersusDestroyerAndCruiser()
     // Линкор уже получил два попадания; эсминец защиты добивает его единственной шестёркой.
@@ -1819,5 +1838,84 @@ describe('расшифровка кубиков', () => {
     )!
     expect(combatDiceReport(preview, 'defender').total).toBe(0)
     expect(combatDiceReport(preview, 'attacker').total).toBe(3)
+  })
+})
+
+/**
+ * Разбор баг-репортов Крапивы от 2026-09-28: «гиперорудие в 3 клетках от боя не пришло ко мне на
+ * помощь» и «гиперорудие стреляет на 3 и через чёрные пространства, разве это правильно?».
+ *
+ * Правило: дальность выводится из точности (`6 − hit`), у гиперорудия hit = 3, значит предел —
+ * ровно три клетки, и это задумано. Поля зрения в игре нет нигде — ни у поддержки, ни у обстрела,
+ * — поэтому выстрел идёт и над клетками, которых на карте нет. Единственное, что сокращает
+ * дальность, — поправка к броску: чужая «Оборона» на своей клетке отнимает у поддержки клетку,
+ * и гиперорудие с третьей клетки в бой уже не попадает. Отсюда и впечатление «не пришло».
+ */
+describe('дальность поддержки гиперорудия', () => {
+  /** Поддержка гиперорудия защитника с клетки `from` в бой на (1,0). */
+  function hyperSupport(from: { q: number; r: number }, extraCells: { q: number; r: number }[] = []) {
+    const { game } = duelBoard([from, ...extraCells])
+    addShip(game, 0, 0, 'player-1', 'battleship', 'att-bb')
+    addShip(game, 1, 0, 'player-2', 'destroyer', 'def-dd')
+    addShip(game, from.q, from.r, 'player-2', 'hyper', 'def-hy')
+    cellAt(game, from.q, from.r).controlOwnerId = 'player-2'
+    return { game }
+  }
+
+  it('с трёх клеток поддерживает: нужна шестёрка — предел дальности', () => {
+    const { game } = hyperSupport({ q: 4, r: 0 }, [{ q: 2, r: 0 }, { q: 3, r: 0 }])
+    const preview = buildCombatPreview(game, { q: 1, r: 0 }, 'player-1', [
+      { id: 'att-bb', type: 'battleship', ownerId: 'player-1' },
+    ])!
+    expect(preview.defender.supportingShips).toEqual([
+      expect.objectContaining({ shipId: 'def-hy', distance: 3, dice: 3, threshold: 6 }),
+    ])
+  })
+
+  it('с четырёх клеток не поддерживает: нужно семь', () => {
+    const { game } = hyperSupport({ q: 5, r: 0 }, [{ q: 2, r: 0 }, { q: 3, r: 0 }, { q: 4, r: 0 }])
+    const preview = buildCombatPreview(game, { q: 1, r: 0 }, 'player-1', [
+      { id: 'att-bb', type: 'battleship', ownerId: 'player-1' },
+    ])!
+    expect(preview.defender.supportingShips).toEqual([])
+  })
+
+  it('с соседней клетки не поддерживает: минимальная дальность — две клетки', () => {
+    const { game } = hyperSupport({ q: 2, r: 0 })
+    const preview = buildCombatPreview(game, { q: 1, r: 0 }, 'player-1', [
+      { id: 'att-bb', type: 'battleship', ownerId: 'player-1' },
+    ])!
+    expect(preview.defender.supportingShips).toEqual([])
+  })
+
+  it('стреляет над клетками, которых нет на карте: поля зрения в игре нет', () => {
+    // Между (1,0) и (4,0) карта пуста — ни одной клетки. Расстояние считается по прямой.
+    const { game } = hyperSupport({ q: 4, r: 0 })
+    expect(game.cells.some((cell) => cell.coord.q === 2 || cell.coord.q === 3)).toBe(false)
+    const preview = buildCombatPreview(game, { q: 1, r: 0 }, 'player-1', [
+      { id: 'att-bb', type: 'battleship', ownerId: 'player-1' },
+    ])!
+    expect(preview.defender.supportingShips.map((ship) => ship.shipId)).toEqual(['def-hy'])
+  })
+
+  it('чужая «Оборона» на своей клетке отнимает у поддержки клетку дальности', () => {
+    const { game } = duelBoard([{ q: 2, r: 0 }, { q: 3, r: 0 }, { q: 4, r: 0 }])
+    addShip(game, 0, 0, 'player-1', 'destroyer', 'att-dd')
+    addShip(game, 4, 0, 'player-1', 'hyper', 'att-hy')
+    addShip(game, 1, 0, 'player-2', 'destroyer', 'def-dd')
+    cellAt(game, 4, 0).controlOwnerId = 'player-1'
+    const attackerShips = [{ id: 'att-dd', type: 'destroyer' as const, ownerId: 'player-1' }]
+
+    // Бой на клетке player-2 (её задаёт duelBoard), и у него «Оборона»: нужное значение
+    // гиперорудию поднимается с шести до семи — выстрел невозможен.
+    game.doctrineWindow = 3
+    game.doctrineByPlayer = { 'player-2': { doctrineId: 'defense', fromTurn: 1 } }
+    const underDefense = buildCombatPreview(game, { q: 1, r: 0 }, 'player-1', attackerShips)!
+    expect(underDefense.attacker.supportingShips).toEqual([])
+
+    // Та же доска без доктрины: гиперорудие с трёх клеток в бой попадает.
+    delete game.doctrineByPlayer
+    const plain = buildCombatPreview(game, { q: 1, r: 0 }, 'player-1', attackerShips)!
+    expect(plain.attacker.supportingShips.map((ship) => ship.shipId)).toEqual(['att-hy'])
   })
 })

@@ -73,6 +73,15 @@ defineProps<{
   border-color: rgba(248, 113, 113, 0.75);
   background: linear-gradient(180deg, rgba(69, 10, 10, 0.92), rgba(15, 23, 42, 0.94));
 }
+/* Связь потеряна — тревожно, но не как ошибка; восстановлена — спокойный зелёный акцент. */
+.game-toast--connection {
+  border-color: rgba(251, 146, 60, 0.7);
+  background: linear-gradient(180deg, rgba(69, 39, 10, 0.92), rgba(15, 23, 42, 0.94));
+}
+.game-toast--connection.game-toast--accent {
+  border-color: rgba(134, 239, 172, 0.6);
+  background: linear-gradient(180deg, rgba(22, 78, 50, 0.92), rgba(15, 23, 42, 0.94));
+}
 .game-toast-title {
   margin: 0;
   font-size: 0.95rem;

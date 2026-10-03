@@ -6,6 +6,7 @@ import {
   canPerformScenarioAction,
   filterScenarioLegalActions,
   initScenarioProgress,
+  scenarioActionError,
   shouldAdvanceScenario,
 } from './scenario-runner.js'
 import { parseScenarioScript, type ScenarioScript, type ScenarioStep } from './scenario.js'
@@ -53,6 +54,25 @@ describe('scenario runner', () => {
       { id: 'execute-recharge-picks', type: 'rechargePicks', description: 'Фишки' },
       { id: 'advance-phase', type: 'phase', description: 'Далее' },
     ]).map((action) => action.id)).toEqual(['execute-recharge-picks'])
+  })
+
+  it('«сдаться» в обучении не разрешено — ни на шаге, ни после прохождения сценария', () => {
+    const surrender = { id: 'surrender', type: 'surrender' as const, description: 'Сдаться' }
+    const marker = { id: 'toggle-marker', type: 'marker' as const, description: 'Маркер' }
+    const markerStep: ScenarioStep = { ...manualStep, id: 'marker', allowedActions: ['toggle-marker'] }
+
+    expect(canPerformScenarioAction(markerStep, 'surrender')).toBe(false)
+    // Шага нет: сценарий пройден, полигон свободный — но сдаваться на нём всё равно нельзя.
+    expect(canPerformScenarioAction(null, 'surrender')).toBe(false)
+    expect(canPerformScenarioAction(null, 'toggle-marker')).toBe(true)
+
+    expect(filterScenarioLegalActions(markerStep, [surrender, marker]).map((a) => a.id))
+      .toEqual(['toggle-marker'])
+    expect(filterScenarioLegalActions(null, [surrender, marker]).map((a) => a.id))
+      .toEqual(['toggle-marker'])
+
+    expect(scenarioActionError(null, 'surrender')).toMatch(/сдаться нельзя/)
+    expect(scenarioActionError(null, 'toggle-marker')).toBeNull()
   })
 
   it('сверяет только важную часть вложенных параметров действия', () => {

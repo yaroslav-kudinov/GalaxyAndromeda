@@ -61,6 +61,8 @@ import { loadGameSessionForRoom, saveGameSession, persistLocalGalaxySave, clearL
 import { loadPlayerClaim, savePlayerClaim } from '~/composables/usePlayerClaim'
 import { bootstrapToLobbySlots, defaultSlotForRoom, roomHasFreeSlot } from '~/utils/lobby-slot'
 import { ownDoctrineSummary, playerConditions } from '~/utils/player-conditions'
+import { tutorialAllowsAction as tutorialAllowsActionFor } from '~/utils/tutorial-actions'
+import { connectionToastFor, isConnectionLost } from '~/utils/connection-status'
 import { gameConfirm } from '~/composables/useGameDialog'
 import { useGamePresence } from '~/composables/useGamePresence'
 import { usePlayerProfile } from '~/composables/usePlayerProfile'
@@ -195,17 +197,11 @@ const tutorialHighlightKeys = computed(() => {
     : []
 })
 function tutorialAllowsAction(actionId: string): boolean {
-  if (!tutorialMode.value) return true
-  const allowed = tutorialCoach.value?.allowedActions
-  // Пока шаг не пришёл — опираемся на отфильтрованные legalActions.
-  if (allowed === undefined) {
-    return legalActions.value.some((action) => action.id === actionId)
-  }
-  // Пустой список = информационный шаг без действий игрока.
-  if (allowed.length === 0) return false
-  return allowed.some((entry) =>
-    (typeof entry === 'string' ? entry : entry.actionId) === actionId,
-  )
+  return tutorialAllowsActionFor(actionId, {
+    tutorialMode: tutorialMode.value,
+    allowedActions: tutorialCoach.value?.allowedActions,
+    legalActions: legalActions.value,
+  })
 }
 const tutorialAllowedSourceKeys = computed(() => {
   if (!tutorialMode.value) return [] as string[]
@@ -514,6 +510,20 @@ const { toasts: statusToasts, pushToast: pushStatusToast } = useGameStatusToasts
 )
 const { play: playGameSfx, muted: sfxMuted, toggleMute: toggleSfxMute } = useGameSfx()
 
+/** Обрыв связи не должен проходить молча — см. `utils/connection-status.ts`. */
+const connectionLost = computed(() =>
+  isConnectionLost({
+    roomId: roomId.value,
+    serverStatus: serverStatus.value,
+    syncWarningVisible: syncWarningVisible.value,
+  }),
+)
+
+watch(connectionLost, (lost, wasLost) => {
+  const toast = connectionToastFor(lost, wasLost)
+  if (toast) pushStatusToast('connection', toast.title, toast.detail, toast.accent)
+})
+
 const activePlayerName = computed(() => {
   const id = snapshot.value?.activePlayerId
   if (!id || !snapshot.value) return null
@@ -568,6 +578,7 @@ const gameOverState = computed(() => snapshot.value?.gameOver ?? null)
 const gameOverWinnerName = computed(() => {
   const go = gameOverState.value
   if (!go) return null
+  if (!go.winnerId) return null
   return snapshot.value?.players.find((p) => p.id === go.winnerId)?.name ?? go.winnerId
 })
 
@@ -575,6 +586,7 @@ const GAME_OVER_REASON_LABELS: Record<string, string> = {
   power_centers: 'Большинство центров власти',
   last_standing: 'Последний игрок на карте',
   turn_limit: 'Лимит ходов',
+  stalemate: 'Партия встала: ходов ни у кого не осталось',
 }
 
 const gameOverReasonLabel = computed(() => {
@@ -3444,7 +3456,9 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
     <div v-if="gameOverState" class="game-over-overlay" role="alert">
       <div class="game-over-card">
         <h2>Игра окончена</h2>
-        <p class="game-over-winner">Победитель: {{ gameOverWinnerName }}</p>
+        <p class="game-over-winner">
+          {{ gameOverWinnerName ? `Победитель: ${gameOverWinnerName}` : 'Победителя нет' }}
+        </p>
         <p class="game-over-reason">{{ gameOverReasonLabel }}</p>
         <p v-if="gameOverCountdown != null" class="game-over-close-hint">
           Комната закроется через {{ gameOverCountdown }} с — вы вернётесь на главную.

@@ -17,7 +17,7 @@ import {
   rechargePicksRemaining,
 } from './resource-recharge.js'
 import { applySiegeTick, autoResolveAllSiegeLosses, siegeLossesOwedBy } from './siege.js'
-import { applyVictoryAndDefeatChecks, isTurnLimitReached } from './victory.js'
+import { applyVictoryAndDefeatChecks, finishStalledMatch, isTurnLimitReached } from './victory.js'
 import type { GameSnapshot } from './save-file.js'
 import { gameStateFromSnapshot } from './save-file.js'
 import type { GameState, Phase, PlayerState } from './types.js'
@@ -435,6 +435,29 @@ export function settleAfterDoctrines(game: GameSnapshot, mapId: string, revealed
  *
  * Игрок решает в том же порядке — см. `planningStepFor`.
  */
+/**
+ * Остались в партии: не выбывшие из участвующих. Без списка участников — все не выбывшие.
+ */
+function remainingPlayerIds(game: GameSnapshot): string[] {
+  const ids = game.participatingPlayerIds?.length
+    ? game.participatingPlayerIds
+    : game.players.map((player) => player.id)
+  return ids.filter((id) => game.players.find((player) => player.id === id)?.eliminated !== true)
+}
+
+/**
+ * Партия встала: в начале хода ни у кого из оставшихся нет действия планирования — ни маркер
+ * поставить, ни долг закрыть. Маркеров не будет, значит и фаза действий ничего не изменит, и
+ * следующий ход повторит этот в точности. Такую партию надо закрывать: иначе счётчик ходов растёт
+ * без конца (так и случилось после сдачи живого игрока в учебной партии с пассивными ботами).
+ */
+export function isMatchStalled(game: GameSnapshot, mapId: string): boolean {
+  if (game.gameOver || game.phase !== 'planning' || game.pendingCombat) return false
+  const state = gameStateFromSnapshot(game, mapId)
+  if (state.phase !== 'planning') return false
+  return remainingPlayerIds(game).every((id) => !canPlayerActInPhase(game, state, id))
+}
+
 export function beginTurnPlanning(game: GameSnapshot, mapId: string): void {
   refreshActionMarkerCapacity(game)
   applySiegeTick(game)
@@ -446,6 +469,8 @@ export function beginTurnPlanning(game: GameSnapshot, mapId: string): void {
   if (!game.doctrineChoice) settleTurnClaimsAndBudgets(game, mapId)
   // Выбирать клетки уже некому, а захват последнего хода должен войти в итог.
   if (lastTurnPlayed) autoResolveAllClaimPicks(game, mapId)
+  // Последним: ход начался, и видно, что играть в нём некому.
+  if (isMatchStalled(game, mapId)) finishStalledMatch(game, mapId)
 }
 
 /**
