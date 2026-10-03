@@ -151,9 +151,24 @@ function syncNarrowUi() {
     hudToolsOpen.value = false
   }
 }
-/** Шторка клетки видна только на телефоне, при свёрнутой панели и выбранной клетке. */
+/**
+ * Шторка клетки видна только на телефоне, при свёрнутой панели и выбранной
+ * клетке — и только когда экран ничем больше не занят.
+ *
+ * Правило одного слоя. На телефоне одновременно открывались карточка обучения,
+ * объявление хода, окно решений, окно маркера и шторка клетки: четыре слоя, под
+ * которыми карты не видно вовсе. Пока сверху лежит что-то, требующее ответа,
+ * шторка уходит сама и возвращается, когда игрок закрыл верхний слой.
+ */
 const cellPeek = computed(
-  () => isNarrowUi.value && panelCollapsed.value && cellPeekOpen.value && !!selectedKey.value,
+  () => isNarrowUi.value
+    && panelCollapsed.value
+    && cellPeekOpen.value
+    && !!selectedKey.value
+    && !mobileOverlayOpen.value
+    && !planningDecisionsShown.value
+    && !turnAnnounceVisible.value
+    && !markerMapPickActive.value,
 )
 
 const legalActions = ref<LegalAction[]>([])
@@ -3280,6 +3295,7 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
     :class="[
       isMyTurn ? `game-viewport--${snapshot?.phase === 'actions' || snapshot?.phase === 'production' ? 'actions' : 'planning'}` : null,
       cellPeek ? 'game-viewport--peek' : null,
+      isNarrowUi && (mobileOverlayOpen || turnAnnounceVisible) ? 'game-viewport--modal' : null,
     ]"
   >
     <div v-if="showLobbyOverlay" class="join-overlay">
@@ -4669,6 +4685,18 @@ button,
    * с кнопкой фазы шторка не закрывает — он поднимается над ней, см.
    * `.mobile-phase-dock--peek`.
    */
+  /*
+   * Пока сверху лежит окно, требующее ответа — объявление хода, окно маркера,
+   * бой, правила, журнал, баг-репорт, — карточка обучения уходит. Иначе на
+   * телефоне получалось четыре слоя разом и ни одного читаемого: ровно то, на
+   * что жаловался живой игрок.
+   *
+   * Окно решений сюда не входит: оно стало шторкой снизу и делит экран с
+   * карточкой, а не накрывает её.
+   */
+  .game-viewport--modal .hud-below-left {
+    display: none;
+  }
   /* Нижний ряд и чат поднимаются над шторкой: кнопка фазы должна оставаться
      нажимаемой, пока игрок смотрит карточку клетки. */
   .game-viewport--peek {

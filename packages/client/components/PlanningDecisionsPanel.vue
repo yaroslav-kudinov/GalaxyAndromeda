@@ -10,6 +10,7 @@ import {
   claimPicksRemaining,
   SELECTABLE_DOCTRINES,
   eligibleClaimCells,
+  hexDistance,
   planningStepFor,
   rechargePicksRemaining,
   SHIP_LABELS,
@@ -51,6 +52,34 @@ const doctrineParticipants = computed(
   () => props.snapshot.participatingPlayerIds?.length
     || props.snapshot.players.filter((player) => !player.eliminated).length,
 )
+
+/**
+ * Клетки, которые игрок уже держит. Нужны, чтобы сказать про клетку захвата
+ * главное: примкнёт она к вашей территории или останется сама по себе.
+ *
+ * Живой игрок выбирал между «производство 4» подальше и «кредиты 2» рядом и
+ * писал: «нужно более подробно описать захват ячеек без связи с основной
+ * землёй». Правило в том, что при постройке считаются фишки только того
+ * связного региона, где вы строите, — оторванная клетка в общий счёт не идёт.
+ * Список из одних координат этого не сообщал никак.
+ */
+const myCells = computed(() =>
+  props.snapshot.cells.filter((cell) => cell.controlOwnerId === props.playerId),
+)
+
+/** Примкнёт ли клетка к уже контролируемой территории (соседство по грани). */
+function joinsMyTerritory(coord: HexCoord): boolean {
+  return myCells.value.some((cell) => hexDistance(cell.coord, coord) === 1)
+}
+
+/** Насколько клетка далека от ближайшей вашей — словами, а не числом. */
+function distanceWord(coord: HexCoord): string {
+  if (!myCells.value.length) return ''
+  const steps = Math.min(...myCells.value.map((cell) => hexDistance(cell.coord, coord)))
+  if (steps <= 1) return t.claimAdjacent
+  if (steps === 2) return t.claimOneAway
+  return t.claimFarAway(steps)
+}
 
 const claimsOwed = computed(() => claimPicksRemaining(props.snapshot, props.playerId))
 const claimCandidates = computed(() => eligibleClaimCells(props.snapshot, props.playerId))
@@ -215,9 +244,15 @@ function cellTokens(coord: HexCoord): string {
               :disabled="busy || (!claimSelected.includes(keyOf(cell.coord)) && claimSelected.length >= claimNeed)"
               @change="toggleClaim(cell.coord)"
             >
-            <span class="pd-coord">({{ cell.coord.q }}, {{ cell.coord.r }})</span>
             <span v-if="cell.isPowerCenter" class="pd-star">★ {{ t.powerCenter }}</span>
             <span class="pd-muted">{{ cellTokens(cell.coord) || t.noTokens }}</span>
+            <span class="pd-where">{{ distanceWord(cell.coord) }}</span>
+            <span
+              class="pd-link"
+              :class="joinsMyTerritory(cell.coord) ? 'pd-link--joins' : 'pd-link--apart'"
+              :title="joinsMyTerritory(cell.coord) ? undefined : t.claimApartHint"
+            >{{ joinsMyTerritory(cell.coord) ? t.claimJoins : t.claimApart }}</span>
+            <span class="pd-coord">{{ cell.coord.q }},{{ cell.coord.r }}</span>
           </label>
         </li>
       </ul>
@@ -289,10 +324,11 @@ function cellTokens(coord: HexCoord): string {
 <style scoped>
 .pd {
   position: absolute;
+  box-sizing: border-box;
   top: calc(var(--hud-header-height, 3rem) + 0.5rem);
   left: 50%;
   transform: translateX(-50%);
-  z-index: 55;
+  z-index: var(--g-z-sheet);
   width: min(92vw, 560px);
   max-height: 70vh;
   overflow-y: auto;
@@ -406,9 +442,37 @@ function cellTokens(coord: HexCoord): string {
 .pd-row--on {
   background: rgba(251, 191, 36, 0.14);
 }
+/* Координаты ушли в конец строки и приглушены: игрок выбирает клетку по тому,
+   что на ней и где она, а не по паре чисел. */
 .pd-coord {
+  margin-left: auto;
   font-variant-numeric: tabular-nums;
-  color: #cbd5e1;
+  font-size: 0.68rem;
+  color: var(--g-text-mute);
+}
+.pd-where {
+  color: var(--g-text-dim);
+  font-size: 0.72rem;
+  white-space: nowrap;
+}
+/* Главный признак выбора: примкнёт клетка к вашей территории или встанет
+   отдельно. Отличается не только цветом — у «отдельно» пунктирная рамка. */
+.pd-link {
+  padding: 0.05rem 0.35rem;
+  border-radius: var(--g-r-pill);
+  font-size: 0.7rem;
+  white-space: nowrap;
+}
+.pd-link--joins {
+  border: 1px solid color-mix(in srgb, var(--g-ok) 55%, transparent);
+  background: var(--g-ok-soft);
+  color: var(--g-ok);
+}
+.pd-link--apart {
+  border: 1px dashed color-mix(in srgb, var(--g-warn) 60%, transparent);
+  background: transparent;
+  color: var(--g-warn);
+  cursor: help;
 }
 .pd-star {
   color: #fcd34d;
@@ -448,5 +512,35 @@ function cellTokens(coord: HexCoord): string {
 .pd-confirm:disabled {
   opacity: 0.45;
   cursor: default;
+}
+
+/*
+ * Телефон: окно решений — шторка снизу, а не карточка во весь экран сверху.
+ * Раньше оно занимало 92% ширины и до 70% высоты, карта под ним не
+ * просматривалась, и выбрать клетку «по месту» было нельзя: игрок видел только
+ * список координат. Теперь половина экрана остаётся картой, а строки списка
+ * подсвечивают клетку на ней.
+ */
+@media (max-width: 900px) {
+  .pd {
+    top: auto;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    width: 100%;
+    max-height: 52dvh;
+    transform: none;
+    border-radius: 14px 14px 0 0;
+    border-bottom: none;
+    padding-bottom: max(0.75rem, env(safe-area-inset-bottom, 0px));
+  }
+  .pd-row {
+    /* Палец, а не курсор: строка должна быть не меньше рекомендованных 44 точек */
+    min-height: 2.5rem;
+    font-size: 0.82rem;
+  }
+  .pd-coord {
+    display: none;
+  }
 }
 </style>

@@ -311,6 +311,14 @@ export const uiStringsRu = {
     claimsTitle: (need: number, total: number) =>
       `Захват: ваши корабли стоят на ${total} ${pluralRu(total, 'клетке', 'клетках', 'клетках')}, занять можно до ${need}. Доступное уже отмечено — снимите отметку, если клетка не нужна. Выбирать можно и щелчком по клетке на карте: подходящие обведены пунктиром.`,
     claimsConfirm: (picked: number, need: number) => `Занять (${picked} из ${need})`,
+    claimAdjacent: 'рядом',
+    claimOneAway: 'через клетку',
+    claimFarAway: (steps: number) =>
+      `через ${steps - 1} ${pluralRu(steps - 1, 'клетку', 'клетки', 'клеток')}`,
+    claimJoins: 'примкнёт к вашим',
+    claimApart: 'встанет отдельно',
+    claimApartHint:
+      'Оторванная клетка не добавит ресурсы к постройке: при постройке считаются фишки только того связного участка, где вы строите.',
     claimsFewer: (picked: number, need: number) => ({
       title: picked ? 'Занять не все клетки?' : 'Ничего не занимать?',
       message: picked
