@@ -93,13 +93,7 @@ import {
   combatPulseHexKey,
 } from '~/utils/combat-map-fx'
 import { useCombatDeathGhosts } from '~/composables/useCombatDeathGhosts'
-import {
-  gameHelpForPhase,
-  legalActionChipIcon,
-  legalActionChipLabel,
-  phaseGuidanceForTurn,
-  type HelpStepIcon,
-} from '~/utils/game-help'
+import { beltStatusForTurn } from '~/utils/game-help'
 
 definePageMeta({ layout: 'immersive' })
 
@@ -134,6 +128,15 @@ function bumpObservationEpoch(): void {
 const saveFile = ref<GalaxySaveFile | null>(null)
 const selectedKey = ref<string | null>(null)
 const panelCollapsed = ref(false)
+/**
+ * Телефон: карточка выбранной клетки приподнимается шторкой на треть экрана.
+ *
+ * Раньше нажатие на клетку на телефоне не давало ничего видимого — карточка
+ * лежала в свёрнутой панели «Игра», и чтобы увидеть, что на клетке, нужно было
+ * отдельно открыть панель во весь экран поверх карты. Основное действие игры
+ * стоило двух лишних шагов и закрывало поле.
+ */
+const cellPeekOpen = ref(false)
 const hudToolsOpen = ref(false)
 const NARROW_UI_MQ = '(max-width: 900px)'
 const isNarrowUi = ref(false)
@@ -148,6 +151,26 @@ function syncNarrowUi() {
     hudToolsOpen.value = false
   }
 }
+/**
+ * Шторка клетки видна только на телефоне, при свёрнутой панели и выбранной
+ * клетке — и только когда экран ничем больше не занят.
+ *
+ * Правило одного слоя. На телефоне одновременно открывались карточка обучения,
+ * объявление хода, окно решений, окно маркера и шторка клетки: четыре слоя, под
+ * которыми карты не видно вовсе. Пока сверху лежит что-то, требующее ответа,
+ * шторка уходит сама и возвращается, когда игрок закрыл верхний слой.
+ */
+const cellPeek = computed(
+  () => isNarrowUi.value
+    && panelCollapsed.value
+    && cellPeekOpen.value
+    && !!selectedKey.value
+    && !mobileOverlayOpen.value
+    && !planningDecisionsShown.value
+    && !turnAnnounceVisible.value
+    && !markerMapPickActive.value,
+)
+
 const legalActions = ref<LegalAction[]>([])
 const tutorialMode = ref(false)
 const serverStatus = ref<'idle' | 'loading' | 'online' | 'offline'>('idle')
@@ -298,7 +321,6 @@ const exportFileName = ref('')
 const markerHint = ref<string | null>(null)
 const phaseHint = ref<string | null>(null)
 const advancingPhase = ref(false)
-const showHelp = ref(true)
 const markerActionOpen = ref(false)
 const markerActionSource = ref<HexCoord | null>(null)
 const markerActionHint = ref<string | null>(null)
@@ -327,30 +349,8 @@ const mobileOverlayOpen = computed(
 /** Кнопку хода на телефоне прячем и под карточкой «Нужно решить»: «Чат» и «Игра» ей не мешают. */
 const mobileDockHidden = computed(() => mobileOverlayOpen.value || (isNarrowUi.value && planningDecisionsShown.value))
 
-const RULES_NEWBIE_TIP_STORAGE_KEY = 'galaxy-rules-newbie-tip-dismissed'
-const showRulesNewbieTip = ref(
-  (() => {
-    if (!import.meta.client) return true
-    try {
-      return localStorage.getItem(RULES_NEWBIE_TIP_STORAGE_KEY) !== '1'
-    } catch {
-      return true
-    }
-  })(),
-)
-
-function dismissRulesNewbieTip() {
-  showRulesNewbieTip.value = false
-  try {
-    localStorage.setItem(RULES_NEWBIE_TIP_STORAGE_KEY, '1')
-  } catch {
-    /* ignore quota / private mode */
-  }
-}
-
 function openRulesHelp() {
   rulesHelpOpen.value = true
-  if (showRulesNewbieTip.value) dismissRulesNewbieTip()
 }
 const battlePreviewSnapshot = ref<import('@galaxy/rules').CombatPreview | null>(null)
 const pendingOrderAfterBattle = ref<MarkerOrderConfirmResult | null>(null)
@@ -552,10 +552,6 @@ const territoryLabelPlayers = computed(() =>
     color: player.color,
   })),
 )
-
-const youBadgeStyle = computed(() => ({
-  '--my-color': myPlayerColor.value,
-}))
 
 const phaseAdvanceBtnStyle = computed(() => ({
   '--player-color': activePlayerColor.value,
@@ -1311,10 +1307,6 @@ const canOpenMovementModal = computed(() => {
   return canExecuteActionMarkerThisTurn(snapshot.value, playerId.value)
 })
 
-const phaseHelp = computed(() =>
-  gameHelpForPhase(snapshot.value?.phase, isMyTurn.value),
-)
-
 const playerColorById = computed(() => {
   const map: Record<string, string> = {}
   for (const p of snapshot.value?.players ?? []) {
@@ -1358,45 +1350,12 @@ const boardSiegeMarks = computed(() => {
   return out
 })
 
-function sidePanelPlayerColor(ownerId: string): string {
-  return playerColorById.value[ownerId] ?? '#64748b'
-}
-
-function sidePanelPlayerName(ownerId: string): string {
-  return playerNameById.value[ownerId] ?? ownerId
-}
-
-function helpStepSymbol(icon: HelpStepIcon): string {
-  const symbols: Record<HelpStepIcon, string> = {
-    wait: '…',
-    event: '✦',
-    click: '⌖',
-    'marker-action': '●',
-    ship: '▲',
-    fight: '⚔',
-    build: '⚙',
-    queue: '☰',
-    limit: '#',
-    pass: '→',
-    tip: 'i',
-  }
-  return symbols[icon] ?? '·'
-}
-
 const currentPhase = computed(() => snapshot.value?.phase)
 
 const myActionMarkerLimit = computed(() =>
   saveFile.value?.game
     ? actionMarkerLimitForPlayer(saveFile.value.game, playerId.value)
     : 3,
-)
-
-const sidePanelActionRemaining = computed(() =>
-  Math.max(0, myActionMarkerLimit.value - myActionMarkerCount.value),
-)
-
-const showActionsControls = computed(
-  () => isMyTurn.value && (currentPhase.value === 'actions' || currentPhase.value === 'production'),
 )
 
 async function onScenarioCoachNext() {
@@ -1759,15 +1718,50 @@ const journalPlayers = computed(() =>
   (snapshot.value?.players ?? []).map((player) => ({ id: player.id, name: player.name, color: player.color })),
 )
 
-const phaseGuidance = computed(() =>
-  phaseGuidanceForTurn(snapshot.value?.phase, isMyTurn.value, {
+/**
+ * Строка пояса «что от вас ждут сейчас». Ошибка и запрет передачи хода важнее
+ * обычной подсказки: раньше они жили отдельной красной строкой, которая на
+ * телефоне печаталась поверх карточки обучения.
+ */
+const beltStatus = computed(() => {
+  // Порядок строгий: сначала то, что мешает играть, потом то, что подсказывает.
+  // Раньше эти четыре канала были четырьмя отдельными строками в боковой панели
+  // и в нижнем ряду, и игрок читал их все сразу либо не видел ни одной.
+  if (loadError.value) return { text: loadError.value, tone: 'error' as const }
+  if (phaseHint.value) return { text: phaseHint.value, tone: 'error' as const }
+  if (markerHint.value) return { text: markerHint.value, tone: 'error' as const }
+  if (markerActionHint.value) return { text: markerActionHint.value, tone: 'error' as const }
+  if (participationHint.value) return { text: participationHint.value, tone: 'warn' as const }
+  if (isMyTurn.value && phaseAdvanceBlockedReason.value) {
+    return { text: phaseAdvanceBlockedReason.value, tone: 'warn' as const }
+  }
+  return beltStatusForTurn(snapshot.value?.phase, isMyTurn.value, {
     actionMarkersPlaced: myActionMarkerCount.value,
     actionMarkersMax: myActionMarkerLimit.value,
     actionMarkerUsedThisTurn: actionMarkerUsedThisTurn.value,
     actionMarkerUnresolved: mustResolveActionMarker.value,
     doctrineOwed: !!snapshot.value && doctrineChoiceOwed(snapshot.value, playerId.value),
-  }),
-)
+    activePlayerName: activePlayerName.value,
+  })
+})
+
+/**
+ * Счётчик маркеров виден только когда участвует в решении: при расстановке и
+ * пока есть неисполненные маркеры. В остальное время маркеры видно на карте.
+ */
+const beltMarkers = computed(() => {
+  if (!isMyTurn.value || !snapshot.value) return null
+  const phase = snapshot.value.phase
+  if (phase === 'planning') {
+    if (!myActionMarkerLimit.value) return null
+    return { placed: myActionMarkerCount.value, limit: myActionMarkerLimit.value, mode: 'planning' as const }
+  }
+  if (phase === 'actions' || phase === 'production') {
+    if (!myActionMarkerCount.value) return null
+    return { placed: myActionMarkerCount.value, limit: myActionMarkerCount.value, mode: 'actions' as const }
+  }
+  return null
+})
 
 const selectedCell = computed(() => {
   if (!selectedKey.value) return null
@@ -1783,8 +1777,6 @@ const canRemoveActionMarkerOnSelected = computed(() => {
   const cell = saveFile.value.game.cells.find((c) => hexKey(c.coord.q, c.coord.r) === key)
   return !!cell && !!actionMarkerOf(saveFile.value.game, cell.coord, playerId.value)
 })
-
-const remainingActionMarkersCount = computed(() => actionMarkers.value.length)
 
 function filterTutorialMarkerKeys(keys: string[]): string[] {
   if (!tutorialMode.value || !tutorialAllowedSourceKeys.value.length) return keys
@@ -2999,6 +2991,9 @@ async function tryLoadFromServer() {
 async function selectCell(q: number, r: number) {
   selectedKey.value = hexKey(q, r)
   markerHint.value = null
+  // Шторка с карточкой клетки — только когда панель свёрнута: если игрок сам
+  // открыл её целиком, подменять содержимое под ним не надо.
+  if (isNarrowUi.value && panelCollapsed.value) cellPeekOpen.value = true
 
   if (buildTokenPick.value.active) {
     buildTokenClickSeq += 1
@@ -3294,7 +3289,15 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
 </script>
 
 <template>
-  <div ref="gameViewportRef" class="game-viewport">
+  <div
+    ref="gameViewportRef"
+    class="game-viewport"
+    :class="[
+      isMyTurn ? `game-viewport--${snapshot?.phase === 'actions' || snapshot?.phase === 'production' ? 'actions' : 'planning'}` : null,
+      cellPeek ? 'game-viewport--peek' : null,
+      isNarrowUi && (mobileOverlayOpen || turnAnnounceVisible) ? 'game-viewport--modal' : null,
+    ]"
+  >
     <div v-if="showLobbyOverlay" class="join-overlay">
       <div class="join-card join-card--lobby">
         <RoomLobbyPanel
@@ -3716,146 +3719,99 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
     </div>
 
     <div class="hud-chrome" :class="{ 'hud-chrome--narrow': isNarrowUi }">
-      <header ref="hudTopRef" class="hud-top" :class="{ 'hud-top--tutorial': !!tutorialCoach }">
-        <div class="hud-top-left">
-          <NuxtLink to="/" class="back-link">← Лобби</NuxtLink>
-          <div v-if="saveFile" class="hud-title" :title="`Комната ${roomId}`">
-            <strong>{{ saveFile.map.name }}</strong>
-          </div>
-          <div
-            v-if="isNarrowUi"
-            class="you-plaque you-plaque--header"
-            :class="{ 'you-plaque--turn': isMyTurn }"
-            :style="youBadgeStyle"
-            :title="`Вы — ${myPlayerName}`"
-            aria-live="polite"
-          >
-            {{ myPlayerName }}
-          </div>
-          <div class="hud-tools" :class="{ 'hud-tools--open': hudToolsOpen }">
-            <button
-              v-if="isNarrowUi"
-              type="button"
-              class="sfx-mute-btn hud-tools-toggle"
-              :aria-expanded="hudToolsOpen"
-              aria-controls="game-hud-tools-extra"
-              title="Ещё действия"
-              @click="hudToolsOpen = !hudToolsOpen"
-            >
-              {{ hudToolsOpen ? 'Скрыть' : 'Ещё' }}
-            </button>
-            <div
-              id="game-hud-tools-extra"
-              class="hud-tools-extra"
-              v-show="!isNarrowUi || hudToolsOpen"
-            >
-              <button
-                v-if="canSurrender"
-                type="button"
-                class="sfx-mute-btn"
-                title="Сдаться"
-                :disabled="!canSurrender"
-                @click="surrenderMatch"
-              >
-                Сдаться
-              </button>
-              <span class="server-pill" :class="serverStatus">
-                {{ serverStatus === 'online' ? 'Сервер' : serverStatus === 'offline' ? 'Offline' : '…' }}
-              </span>
-              <button
-                type="button"
-                class="sfx-mute-btn"
-                :title="sfxMuted ? 'Включить звуки' : 'Выключить звуки'"
-                :aria-label="sfxMuted ? 'Включить звуки' : 'Выключить звуки'"
-                :aria-pressed="sfxMuted"
-                @click="toggleSfxMute"
-              >
-                {{ sfxMuted ? '🔇' : '🔊' }}
-              </button>
-              <SoundtrackPanel placement="hud" />
-              <button
-                type="button"
-                class="bug-report-btn"
-                title="Сообщить о баге"
-                @click="bugReportOpen = true"
-              >
-                Баг
-              </button>
-              <div class="rules-help-wrap">
-                <button
-                  type="button"
-                  class="rules-help-btn"
-                  title="Справка по правилам"
-                  :aria-describedby="showRulesNewbieTip ? 'rules-newbie-tip' : undefined"
-                  @click="openRulesHelp"
-                >
-                  Правила
-                </button>
-                <div
-                  v-if="showRulesNewbieTip"
-                  id="rules-newbie-tip"
-                  class="rules-newbie-tip"
-                  role="status"
-                >
-                  <p class="rules-newbie-tip-text">
-                    Не знаете что делать? Ознакомьтесь с разделом правил!
-                  </p>
-                  <button
-                    type="button"
-                    class="rules-newbie-tip-dismiss"
-                    title="Скрыть подсказку"
-                    aria-label="Скрыть подсказку"
-                    @click.stop="dismissRulesNewbieTip"
-                  >
-                    ×
-                  </button>
-                </div>
-              </div>
-              <button
-                v-if="serverStatus === 'online' && roomBootstrap && roomBootstrap.playerCount < roomBootstrap.maxPlayers"
-                type="button"
-                class="invite-btn"
-                @click="copyInviteLink"
-              >
-                {{ inviteCopied ? 'Ссылка скопирована' : 'Ссылка-приглашение' }}
-              </button>
+      <header ref="hudTopRef" class="hud-top">
+        <GameStatusBelt
+          :class="{ 'tutorial-panel-highlight': tutorialCoach?.highlight === 'phase-panel' }"
+          :phase="snapshot?.phase"
+          :turn-number="snapshot?.turnNumber"
+          :entries="turnQueue"
+          :my-player-id="playerId"
+          :status-text="beltStatus?.text ?? null"
+          :status-tone="beltStatus?.tone ?? 'idle'"
+          :compact="isNarrowUi"
+          :tools-open="hudToolsOpen"
+          @toggle-tools="hudToolsOpen = !hudToolsOpen"
+        >
+          <template #back>
+            <NuxtLink to="/" class="back-link" :title="ui.belt.back" :aria-label="ui.belt.back">
+              ←
+            </NuxtLink>
+          </template>
+
+          <template #tools>
+            <div v-if="saveFile" class="belt-map-name" :title="`Комната ${roomId}`">
+              {{ saveFile.map.name }}
             </div>
-          </div>
-        </div>
-
-        <div v-if="isMyTurn && !isNarrowUi" class="hud-top-center">
-          <button
-            type="button"
-            class="phase-advance-btn phase-advance-btn--hero"
-            :style="phaseAdvanceBtnStyle"
-            :disabled="advancingPhase || !canAdvancePhase"
-            :title="phaseAdvanceBlockedReason ?? undefined"
-            @click="endPhase"
-          >
-            {{ advancingPhase ? '…' : advancePhaseLabel }}
-          </button>
-          <p v-if="phaseHint" class="hud-center-hint err">{{ phaseHint }}</p>
-          <p v-else-if="phaseAdvanceBlockedReason" class="hud-center-hint err">
-            {{ phaseAdvanceBlockedReason }}
-          </p>
-        </div>
-        <div v-else class="hud-top-center hud-top-center--idle" aria-hidden="true" />
-
-        <div class="hud-top-right">
-          <PhasePanel
-            v-if="snapshot"
-            :class="{ 'tutorial-panel-highlight': tutorialCoach?.highlight === 'phase-panel' }"
-            variant="hero"
-            :phase="snapshot.phase"
-            :turn-number="snapshot.turnNumber"
-            :active-player-id="snapshot.activePlayerId"
-            :players="snapshot.players"
-            :is-my-turn="isMyTurn"
-            :prompt="tutorialCoach || isNarrowUi ? undefined : phaseGuidance?.prompt"
-            :count-hint="tutorialCoach || isNarrowUi ? undefined : phaseGuidance?.countHint"
-            :guidance-accent="phaseGuidance?.accent"
-          />
-        </div>
+            <span class="server-pill" :class="serverStatus">
+              {{ serverStatus === 'online' ? 'Сервер' : serverStatus === 'offline' ? 'Нет связи' : '…' }}
+            </span>
+            <button
+              type="button"
+              class="sfx-mute-btn"
+              :title="sfxMuted ? 'Включить звуки' : 'Выключить звуки'"
+              :aria-label="sfxMuted ? 'Включить звуки' : 'Выключить звуки'"
+              :aria-pressed="sfxMuted"
+              @click="toggleSfxMute"
+            >
+              {{ sfxMuted ? '🔇' : '🔊' }}
+            </button>
+            <SoundtrackPanel placement="hud" />
+            <button
+              type="button"
+              class="rules-help-btn"
+              title="Справка по правилам"
+              @click="openRulesHelp"
+            >
+              Правила
+            </button>
+            <button
+              type="button"
+              class="bug-report-btn"
+              title="Сообщить о баге"
+              @click="bugReportOpen = true"
+            >
+              Баг
+            </button>
+            <button
+              v-if="snapshot"
+              type="button"
+              class="rules-help-btn"
+              :title="ui.journal.openHint"
+              @click="journalOpen = true"
+            >
+              {{ ui.journal.open }}
+            </button>
+            <button
+              v-if="serverStatus === 'online' && roomBootstrap && roomBootstrap.playerCount < roomBootstrap.maxPlayers"
+              type="button"
+              class="invite-btn"
+              @click="copyInviteLink"
+            >
+              {{ inviteCopied ? 'Ссылка скопирована' : 'Ссылка-приглашение' }}
+            </button>
+            <!--
+              Экспорт сохранения — единственный способ не потерять партию: комната
+              на сервере живёт полчаса без действий. Раньше он прятался внизу
+              боковой панели, под семью другими блоками.
+            -->
+            <button type="button" class="sfx-mute-btn" title="Скачать сохранение партии" @click="exportGameSave">
+              ↓ Сохранить
+            </button>
+            <label class="sfx-mute-btn file-btn" title="Загрузить сохранение из файла">
+              ↑ Загрузить
+              <input type="file" accept="application/json,.json,.galaxy.json" hidden @change="importGameSave" />
+            </label>
+            <button
+              v-if="canSurrender"
+              type="button"
+              class="sfx-mute-btn sfx-mute-btn--danger"
+              title="Сдаться"
+              @click="surrenderMatch"
+            >
+              Сдаться
+            </button>
+          </template>
+        </GameStatusBelt>
       </header>
 
       <RulesHelpModal :open="rulesHelpOpen" @close="rulesHelpOpen = false" />
@@ -3881,41 +3837,24 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
             :step-count="tutorialCoach.stepCount"
             @next="onScenarioCoachNext"
           />
-          <div v-if="!isNarrowUi" class="you-plaque-slot" aria-live="polite">
-            <div
-              class="you-plaque"
-              :class="{ 'you-plaque--turn': isMyTurn }"
-              :style="youBadgeStyle"
-              :title="`Вы — ${myPlayerName}`"
-            >
-              {{ myPlayerName }}
-            </div>
-          </div>
-        </div>
-        <div
-          v-if="turnQueue.length"
-          class="hud-below-right"
-          :class="{ 'hud-below-right--panel-open': !panelCollapsed && !isNarrowUi }"
-        >
-          <TurnOrderPanel
-            variant="strip"
-            :entries="turnQueue"
-            :my-player-id="playerId"
-          />
         </div>
       </div>
     </div>
 
     <div
-      v-if="isMyTurn && isNarrowUi && !mobileDockHidden"
+      v-if="isMyTurn && !mobileDockHidden"
       class="mobile-phase-dock"
+      :class="{ 'mobile-phase-dock--panel-open': !panelCollapsed && !isNarrowUi }"
       role="region"
       aria-label="Действие фазы"
     >
-      <p v-if="phaseHint" class="mobile-phase-dock__hint hud-center-hint err">{{ phaseHint }}</p>
-      <p v-else-if="phaseAdvanceBlockedReason" class="mobile-phase-dock__hint hud-center-hint err">
-        {{ phaseAdvanceBlockedReason }}
-      </p>
+      <MarkerBudgetGauge
+        v-if="beltMarkers"
+        class="mobile-phase-dock__markers"
+        :placed="beltMarkers.placed"
+        :limit="beltMarkers.limit"
+        :mode="beltMarkers.mode"
+      />
       <button
         type="button"
         class="phase-advance-btn phase-advance-btn--hero phase-advance-btn--dock"
@@ -3932,9 +3871,10 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
       v-show="!mobileOverlayOpen"
       class="hud-right"
       :class="{
-        collapsed: panelCollapsed,
+        collapsed: panelCollapsed && !cellPeek,
         'hud-right--sheet': isNarrowUi,
-        'hud-right--fab': isNarrowUi && panelCollapsed,
+        'hud-right--fab': isNarrowUi && panelCollapsed && !cellPeek,
+        'hud-right--peek': cellPeek,
       }"
     >
       <button
@@ -3945,6 +3885,7 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
         @click="panelCollapsed = true"
       />
       <button
+        v-if="!cellPeek"
         type="button"
         class="panel-toggle"
         :title="panelCollapsed ? 'Развернуть панель' : 'Свернуть панель'"
@@ -3955,49 +3896,27 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
         <template v-if="isNarrowUi">{{ panelCollapsed ? 'Игра' : 'Закрыть' }}</template>
         <template v-else>{{ panelCollapsed ? '«' : '»' }}</template>
       </button>
-      <div v-if="!panelCollapsed" id="game-side-panel" class="panel-inner">
-        <header class="panel-heading-row">
-          <h2 class="panel-heading">Игра</h2>
-          <button
-            v-if="snapshot"
-            type="button"
-            class="journal-open-btn"
-            :title="ui.journal.openHint"
-            @click="journalOpen = true"
-          >
-            {{ ui.journal.open }}
-          </button>
-          <div class="panel-heading-meta">
-            <span
-              class="you-mini"
-              :style="youBadgeStyle"
-              :title="`Вы — ${myPlayerName}`"
-            >
-              <span class="you-mini-swatch" aria-hidden="true" />
-              Вы
-            </span>
-            <span
-              v-if="activePlayerName"
-              class="active-mini"
-              :style="phaseAdvanceBtnStyle"
-              :title="`Активный игрок: ${activePlayerName}`"
-            >
-              <span class="active-player-dot" aria-hidden="true" />
-              {{ activePlayerName }}
-            </span>
-          </div>
-        </header>
-
-        <section v-if="turnQueue.length" class="block turn-order-block">
-          <h3 class="block-label">{{ ui.turnOrder.heading }}</h3>
-          <TurnOrderPanel
-            variant="panel"
-            :entries="turnQueue"
-            :my-player-id="playerId"
+      <!-- Шапка шторки клетки: карта остаётся видна, под рукой — раскрыть и закрыть -->
+      <div v-else class="peek-head">
+        <button type="button" class="peek-expand" @click="panelCollapsed = false; cellPeekOpen = false">
+          Вся панель
+        </button>
+        <button type="button" class="peek-close" aria-label="Закрыть карточку клетки" @click="cellPeekOpen = false">
+          ×
+        </button>
+      </div>
+      <div v-if="cellPeek" class="panel-inner panel-inner--peek">
+        <section class="block block--cell">
+          <CellDetailPanel
+            :cell="selectedCell"
+            :cell-key="selectedKey"
+            :players="snapshot?.players"
+            :can-remove-action-marker="canRemoveActionMarkerOnSelected"
+            @remove-action-marker="removeSelectedActionMarker"
           />
-          <p class="hint turn-order-note">{{ ui.turnOrder.note }}</p>
         </section>
-
+      </div>
+      <div v-else-if="!panelCollapsed" id="game-side-panel" class="panel-inner">
         <section v-if="victoryProgress" class="block victory-block">
           <h3 class="block-label">{{ ui.victory.heading }}</h3>
           <VictoryTrackerPanel :progress="victoryProgress" :my-player-id="playerId" :turns-left="turnsLeft" />
@@ -4027,142 +3946,6 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
           />
         </section>
 
-        <section class="block metrics-block" aria-label="Состояние фазы">
-          <div class="metric-row">
-            <span
-              class="metric-pill metric-pill--action"
-              :title="`Маркеры действия: ваши ${myActionMarkerCount}/${myActionMarkerLimit} (три плюс число центров власти на начало хода), на карте ${actionMarkers.length}`"
-            >
-              <span class="metric-glyph metric-glyph--action" aria-hidden="true" />
-              <span class="metric-value">{{ myActionMarkerCount }}/{{ myActionMarkerLimit }}</span>
-              <span class="metric-sub">осталось {{ sidePanelActionRemaining }}</span>
-            </span>
-          </div>
-
-          <div v-if="showActionsControls" class="status-strip">
-            <span
-              v-if="actionMarkerUsedThisTurn"
-              class="status-chip status-chip--warn"
-              :title="ACTION_MARKER_ALREADY_RESOLVED_MSG"
-            >
-              ● исполнен
-            </span>
-            <span
-              v-else
-              class="status-chip status-chip--action"
-              title="Клик по маркеру на карте — перемещение или постройка. Снять — в карточке клетки."
-            >
-              ● клик по маркеру
-            </span>
-            <span
-              v-if="isMyTurn && (snapshot?.phase === 'actions' || snapshot?.phase === 'production') && remainingActionMarkersCount > 0"
-              class="status-chip"
-              :title="`На карте осталось маркеров действия: ${remainingActionMarkersCount}`"
-            >
-              карта · {{ remainingActionMarkersCount }}
-            </span>
-          </div>
-
-          <p v-if="markerHint" class="err" role="alert">{{ markerHint }}</p>
-          <p v-if="participationHint" class="hint participation-hint">{{ participationHint }}</p>
-          <p v-if="markerActionHint" class="hint">{{ markerActionHint }}</p>
-        </section>
-
-        <section class="block">
-          <h3 class="block-label">Доступно</h3>
-          <ul v-if="legalActions.length" class="action-chips" aria-label="Доступные действия">
-            <li
-              v-for="action in legalActions"
-              :key="action.id"
-              class="action-chip"
-              :class="`action-chip--${legalActionChipIcon(action.type)}`"
-              :title="action.description"
-            >
-              <span class="help-icon" aria-hidden="true">{{ helpStepSymbol(legalActionChipIcon(action.type)) }}</span>
-              <span>{{ legalActionChipLabel(action) }}</span>
-            </li>
-          </ul>
-          <p v-else-if="!isMyTurn" class="hint">Не ваш ход</p>
-          <p v-else class="hint">Нет действий</p>
-        </section>
-
-        <section class="block help-block">
-          <div class="help-head">
-            <h3>{{ phaseHelp.title }}</h3>
-            <button
-              type="button"
-              class="help-toggle"
-              :title="showHelp ? 'Свернуть справку' : 'Развернуть справку'"
-              :aria-expanded="showHelp"
-              @click="showHelp = !showHelp"
-            >
-              {{ showHelp ? '−' : '?' }}
-            </button>
-          </div>
-          <ul v-if="showHelp" class="help-steps">
-            <li
-              v-for="(step, idx) in phaseHelp.steps"
-              :key="idx"
-              class="help-step"
-              :class="`help-step--${step.icon}`"
-              :title="step.detail ?? step.label"
-            >
-              <span
-                class="help-icon"
-                :aria-hidden="true"
-              >{{ helpStepSymbol(step.icon) }}</span>
-              <span class="help-step-label">{{ step.label }}</span>
-            </li>
-          </ul>
-        </section>
-
-        <details class="block marker-details">
-          <summary>
-            <span class="metric-glyph metric-glyph--action" aria-hidden="true" />
-            Действие
-            <span class="marker-count">{{ actionMarkers.length }}</span>
-          </summary>
-          <ul v-if="actionMarkers.length" class="marker-cards">
-            <li
-              v-for="m in actionMarkers"
-              :key="m.id"
-              class="marker-card"
-              :title="`${sidePanelPlayerName(m.ownerId)} · (${m.coord.q}, ${m.coord.r}) · ${m.placedInPhase}`"
-            >
-              <span
-                class="owner-swatch"
-                :style="{ background: sidePanelPlayerColor(m.ownerId) }"
-                aria-hidden="true"
-              />
-              <span class="marker-card-name">{{ sidePanelPlayerName(m.ownerId) }}</span>
-              <span class="marker-card-coord">{{ m.coord.q }},{{ m.coord.r }}</span>
-            </li>
-          </ul>
-          <p v-else class="hint">Пусто</p>
-        </details>
-
-        <section class="block block--file">
-          <h3 class="block-label">Файл</h3>
-          <label class="export-name-field">
-            <span class="export-name-label">Имя</span>
-            <input
-              v-model="exportFileName"
-              type="text"
-              class="export-name-input"
-              autocomplete="off"
-              spellcheck="false"
-              @keydown.enter="exportGameSave"
-            />
-          </label>
-          <div class="btn-row">
-            <button type="button" title="Экспорт сохранения" @click="exportGameSave">↓ Экспорт</button>
-            <label class="file-btn" title="Импорт сохранения">
-              ↑ Импорт
-              <input type="file" accept="application/json,.json,.galaxy.json" hidden @change="importGameSave" />
-            </label>
-          </div>
-          <p v-if="loadError" class="err" role="alert">{{ loadError }}</p>
-        </section>
       </div>
     </aside>
   </div>
@@ -4187,6 +3970,40 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
   background-position: center;
   background-repeat: no-repeat;
 }
+/*
+ * Рамка экрана по фазе. Тестировщик прошёл обучение и всё равно не понял, что
+ * ход делится на планирование и действия: экраны выглядели одинаково, а плашку
+ * в углу он не замечал. Рамка работает боковым зрением — её не читают, её
+ * видят. Цвета те же, что у плашки фазы: синий — планирование, янтарный —
+ * действия. Рамка появляется только на своём ходу: когда ходит соперник,
+ * признак фазы ничего не меняет в поведении игрока.
+ */
+.game-viewport::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: var(--g-z-board-over);
+  border: 2px solid transparent;
+  transition: border-color 0.35s ease, box-shadow 0.35s ease;
+  pointer-events: none;
+}
+
+.game-viewport--planning::after {
+  border-color: color-mix(in srgb, var(--g-accent) 45%, transparent);
+  box-shadow: inset 0 0 22px color-mix(in srgb, var(--g-accent) 18%, transparent);
+}
+
+.game-viewport--actions::after {
+  border-color: color-mix(in srgb, var(--g-warn) 45%, transparent);
+  box-shadow: inset 0 0 22px color-mix(in srgb, var(--g-warn) 16%, transparent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .game-viewport::after {
+    transition: none;
+  }
+}
+
 .tutorial-panel-highlight {
   outline: 2px solid rgba(56, 189, 248, 0.9);
   outline-offset: 3px;
@@ -4311,90 +4128,35 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
   align-items: stretch;
   pointer-events: none;
 }
+/* Оболочка пояса: вид задаёт сам пояс, здесь только место под измерение высоты. */
 .hud-top {
   position: relative;
   box-sizing: border-box;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
-  align-items: center;
-  gap: 0.4rem 0.75rem;
-  min-height: 3.25rem;
-  padding: 0.4rem 0.75rem;
-  border-bottom: 1px solid rgba(71, 85, 105, 0.45);
-  background: rgba(15, 23, 42, 0.92);
-  backdrop-filter: blur(10px);
   box-shadow: 0 8px 24px rgba(2, 6, 23, 0.35);
 }
-.hud-top-left,
-.hud-top-center,
-.hud-top-right {
+/*
+ * Кнопка фазы и счётчик маркеров — единственный экземпляр на оба экрана.
+ * Раньше кнопка была в разметке трижды (шапка, нижний ряд телефона, боковая
+ * панель), и три копии могли разойтись в состоянии. Внизу по центру она удобна
+ * и на телефоне (зона большого пальца), и на ПК (рядом с картой, куда смотрят).
+ */
+.mobile-phase-dock {
+  position: absolute;
+  left: 50%;
+  bottom: 1.15rem;
+  z-index: var(--g-z-dock);
+  display: flex;
+  align-items: center;
+  gap: var(--g-s-3);
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+.mobile-phase-dock > * {
   pointer-events: auto;
 }
-.hud-top-left {
-  display: flex;
-  align-items: center;
-  gap: 0.45rem 0.55rem;
-  flex-wrap: wrap;
-  justify-self: start;
-  grid-column: 1;
-  min-width: 0;
-  z-index: 1;
-}
-.hud-top-center {
-  position: static;
-  transform: none;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 0.2rem;
-  justify-self: center;
-  grid-column: 2;
-  max-width: min(26rem, 32vw);
-  z-index: 2;
-}
-.hud-top-center--idle {
-  pointer-events: none;
-  min-width: 0;
-  width: 0;
-  overflow: hidden;
-}
-.hud-top-right {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  flex-wrap: nowrap;
-  gap: 0.4rem;
-  justify-self: end;
-  grid-column: 3;
-  min-width: 0;
-  z-index: 1;
-}
-.hud-top-right :deep(.phase-panel--hero) {
-  flex: 1 1 auto;
-  justify-content: flex-end;
-  max-width: 100%;
-  min-width: 0;
-}
-.hud-tools {
-  display: flex;
-  align-items: center;
-  flex-wrap: nowrap;
-  gap: 0.28rem;
-  flex: 0 1 auto;
-  min-width: 0;
-}
-.hud-tools-extra {
-  display: flex;
-  align-items: center;
-  flex-wrap: nowrap;
-  gap: 0.28rem;
-  min-width: 0;
-}
-.hud-tools-toggle {
-  flex-shrink: 0;
-}
-.mobile-phase-dock {
-  display: none;
+/* Открытая боковая панель сдвигает видимый центр карты — кнопка едет за ним */
+.mobile-phase-dock--panel-open {
+  transform: translateX(calc(-50% - var(--hud-panel-width) / 2));
 }
 .panel-sheet-backdrop {
   display: none;
@@ -4415,27 +4177,6 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
   max-width: min(24rem, calc(100vw - 22rem));
   /* Колонка не должна ловить клики по карте; контролы включают захват сами */
   pointer-events: none;
-}
-.hud-below-right {
-  display: flex;
-  justify-content: flex-end;
-  /* Справа стоит боковая панель: свёрнутая — полоска в 2rem, развёрнутая — 320px */
-  margin-right: 2rem;
-  max-width: min(28rem, 45vw);
-  /* Колонка пропускает клики к карте; подсказку ловят сами фишки очереди */
-  pointer-events: none;
-}
-.hud-below-right--panel-open {
-  margin-right: calc(var(--hud-panel-width) + 0.35rem);
-}
-.turn-order-note {
-  margin: 0.35rem 0 0;
-}
-.hud-center-hint {
-  margin: 0;
-  font-size: 0.78rem;
-  text-align: center;
-  max-width: 100%;
 }
 .map-pick-banner {
   position: absolute;
@@ -4533,86 +4274,6 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
   border-color: rgba(147, 197, 253, 0.35);
   background: rgba(30, 41, 59, 0.65);
 }
-.you-plaque-slot {
-  align-self: flex-start;
-  padding: 0;
-  pointer-events: auto;
-}
-.you-plaque {
-  display: inline-block;
-  max-width: min(280px, 52vw);
-  padding: 0.45rem 1rem 0.4rem;
-  border-radius: 10px;
-  font-family: Orbitron, "Segoe UI", "Trebuchet MS", sans-serif;
-  font-size: 1.05rem;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  line-height: 1.2;
-  color: #fff;
-  text-shadow:
-    0 1px 0 rgba(15, 23, 42, 0.55),
-    0 2px 8px rgba(15, 23, 42, 0.35);
-  background: var(--my-color, #3b82f6);
-  border: 2px solid color-mix(in srgb, var(--my-color, #3b82f6) 35%, #fff);
-  box-shadow:
-    0 2px 0 color-mix(in srgb, var(--my-color, #3b82f6) 35%, #0f172a),
-    0 8px 20px rgba(0, 0, 0, 0.38);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.you-plaque--turn {
-  outline: 2px solid #fff;
-  outline-offset: 2px;
-}
-.you-plaque--header {
-  max-width: min(7.5rem, 28vw);
-  padding: 0.22rem 0.55rem 0.2rem;
-  font-size: 0.72rem;
-  letter-spacing: 0.04em;
-  border-radius: 8px;
-  flex-shrink: 1;
-  min-width: 0;
-}
-.panel-heading-meta {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-  min-width: 0;
-}
-.you-mini {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.3rem;
-  padding: 0.15rem 0.45rem 0.15rem 0.25rem;
-  border-radius: 999px;
-  font-size: 0.68rem;
-  font-weight: 800;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: #f8fafc;
-  background: color-mix(in srgb, var(--my-color, #3b82f6) 28%, rgba(15, 23, 42, 0.9));
-  border: 1px solid color-mix(in srgb, var(--my-color, #3b82f6) 70%, #fff);
-}
-.you-mini-swatch {
-  width: 0.55rem;
-  height: 0.55rem;
-  border-radius: 999px;
-  background: var(--my-color, #3b82f6);
-  box-shadow: 0 0 0 1px #0f172a;
-}
-.hud-title {
-  display: flex;
-  flex-direction: column;
-  gap: 0.1rem;
-  min-width: 0;
-}
-.hud-title strong {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 0.95rem;
-}
 .server-pill {
   font-size: 0.72rem;
   padding: 0.2rem 0.5rem;
@@ -4658,61 +4319,6 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
   overflow-y: auto;
   padding: 0.65rem 0.7rem 0.85rem;
 }
-.panel-heading-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
-  margin-bottom: 0.65rem;
-}
-.journal-open-btn {
-  margin-left: 0.5rem;
-  padding: 0.15rem 0.55rem;
-  border-radius: 999px;
-  border: 1px solid #475569;
-  background: rgba(30, 41, 59, 0.8);
-  color: #cbd5e1;
-  font-size: 0.75rem;
-  cursor: pointer;
-}
-.journal-open-btn:hover {
-  border-color: #93c5fd;
-  color: #e2e8f0;
-}
-.panel-heading {
-  margin: 0;
-  font-size: 0.95rem;
-  letter-spacing: 0.01em;
-}
-.active-mini {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.3rem;
-  max-width: 9rem;
-  padding: 0.18rem 0.45rem;
-  border-radius: 999px;
-  font-size: 0.7rem;
-  font-weight: 700;
-  color: #fff;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  border: 1px solid color-mix(in srgb, var(--player-color, #3b82f6) 55%, #fff);
-  background: linear-gradient(
-    180deg,
-    color-mix(in srgb, var(--player-color, #3b82f6) 78%, #fff),
-    var(--player-color, #3b82f6)
-  );
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
-}
-.active-player-dot {
-  width: 0.45rem;
-  height: 0.45rem;
-  border-radius: 50%;
-  background: #fff;
-  box-shadow: 0 0 5px rgba(255, 255, 255, 0.75);
-  flex-shrink: 0;
-}
 .block {
   margin-bottom: 0.75rem;
   padding-bottom: 0.65rem;
@@ -4729,159 +4335,6 @@ watch([isMyTurn, () => snapshot.value?.phase, serverStatus], () => {
 }
 .block--cell {
   padding-bottom: 0.55rem;
-}
-.block--file {
-  border-bottom: none;
-  margin-bottom: 0;
-  padding-bottom: 0;
-}
-.metrics-block {
-  display: flex;
-  flex-direction: column;
-  gap: 0.4rem;
-}
-.metric-row {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 0.35rem;
-}
-.metric-pill {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  grid-template-rows: auto auto;
-  column-gap: 0.35rem;
-  row-gap: 0.05rem;
-  align-items: center;
-  padding: 0.4rem 0.45rem;
-  border-radius: 8px;
-  border: 1px solid rgba(71, 85, 105, 0.7);
-  background: rgba(15, 23, 42, 0.55);
-  min-width: 0;
-}
-.metric-pill .metric-glyph {
-  grid-row: 1 / span 2;
-}
-.metric-pill--action {
-  border-color: rgba(250, 204, 21, 0.4);
-  background: rgba(66, 32, 6, 0.35);
-}
-.metric-glyph {
-  width: 0.55rem;
-  height: 0.55rem;
-  display: inline-block;
-  vertical-align: middle;
-}
-.metric-glyph--action {
-  border-radius: 50%;
-  background: #facc15;
-  box-shadow: 0 0 0 2px rgba(250, 204, 21, 0.3);
-}
-.metric-value {
-  grid-column: 2;
-  font-size: 0.92rem;
-  font-weight: 800;
-  color: #f8fafc;
-  font-variant-numeric: tabular-nums;
-  line-height: 1.2;
-}
-.metric-sub {
-  grid-column: 2;
-}
-.metric-pill--action .metric-value {
-  color: #fef08a;
-}
-.metric-pill .metric-sub {
-  font-size: 0.66rem;
-  color: #94a3b8;
-}
-.status-strip {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.3rem;
-}
-.status-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.25rem;
-  padding: 0.2rem 0.45rem;
-  border-radius: 999px;
-  border: 1px solid rgba(100, 116, 139, 0.45);
-  background: rgba(30, 41, 59, 0.7);
-  font-size: 0.68rem;
-  font-weight: 600;
-  color: #cbd5e1;
-}
-.status-chip--action {
-  border-color: rgba(250, 204, 21, 0.45);
-  color: #fef08a;
-  background: rgba(113, 63, 18, 0.4);
-}
-.status-chip--warn {
-  border-color: rgba(251, 191, 36, 0.55);
-  color: #fcd34d;
-  background: rgba(120, 53, 15, 0.45);
-}
-.action-chips {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.3rem;
-}
-.action-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.3rem;
-  padding: 0.28rem 0.5rem;
-  border-radius: 7px;
-  border: 1px solid rgba(71, 85, 105, 0.75);
-  background: rgba(15, 23, 42, 0.7);
-  font-size: 0.72rem;
-  font-weight: 600;
-  color: #e2e8f0;
-}
-.action-chip--marker-action,
-.action-chip--fight {
-  border-color: rgba(250, 204, 21, 0.4);
-}
-.action-chip--build {
-  border-color: rgba(244, 114, 182, 0.4);
-}
-.action-chip--event {
-  border-color: rgba(167, 139, 250, 0.4);
-}
-.action-chip--pass {
-  border-color: rgba(56, 189, 248, 0.4);
-}
-.btn-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.45rem;
-}
-.export-name-field {
-  display: flex;
-  flex-direction: column;
-  gap: 0.2rem;
-  margin-bottom: 0.4rem;
-}
-.export-name-label {
-  font-size: 0.68rem;
-  color: #94a3b8;
-}
-.export-name-input {
-  width: 100%;
-  box-sizing: border-box;
-  padding: 0.3rem 0.45rem;
-  border-radius: 6px;
-  border: 1px solid #475569;
-  background: #1e293b;
-  color: #f8fafc;
-  font-size: 0.78rem;
-}
-.export-name-input:focus {
-  outline: none;
-  border-color: #64748b;
 }
 button,
 .file-btn {
@@ -4906,167 +4359,8 @@ button,
   font-size: 0.76rem;
   color: #f87171;
 }
-.marker-details summary {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-  color: #cbd5e1;
-  font-size: 0.76rem;
-  font-weight: 600;
-  cursor: pointer;
-  user-select: none;
-  list-style: none;
-}
-.marker-details summary::-webkit-details-marker {
-  display: none;
-}
 .marker-details[open] summary {
   margin-bottom: 0.4rem;
-}
-.marker-count {
-  margin-left: auto;
-  min-width: 1.25rem;
-  padding: 0.05rem 0.35rem;
-  border-radius: 999px;
-  background: rgba(51, 65, 85, 0.85);
-  font-size: 0.68rem;
-  font-weight: 700;
-  text-align: center;
-  font-variant-numeric: tabular-nums;
-  color: #e2e8f0;
-}
-.marker-cards {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 0.3rem;
-}
-.marker-card {
-  display: grid;
-  grid-template-columns: auto 1fr auto;
-  align-items: center;
-  gap: 0.4rem;
-  padding: 0.3rem 0.4rem;
-  border-radius: 7px;
-  border: 1px solid rgba(71, 85, 105, 0.55);
-  background: rgba(15, 23, 42, 0.6);
-  font-size: 0.72rem;
-}
-.marker-card-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: #e2e8f0;
-  font-weight: 600;
-}
-.marker-card-coord {
-  font-variant-numeric: tabular-nums;
-  color: #94a3b8;
-  font-weight: 600;
-}
-.owner-swatch {
-  display: inline-block;
-  width: 0.6rem;
-  height: 0.6rem;
-  border-radius: 2px;
-  border: 1px solid rgba(0, 0, 0, 0.25);
-  flex-shrink: 0;
-}
-.help-block {
-  background: rgba(15, 23, 42, 0.5);
-  border-radius: 8px;
-  border: 1px solid rgba(51, 65, 85, 0.85);
-  padding: 0.45rem 0.5rem;
-  margin-bottom: 0.65rem;
-}
-.help-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
-}
-.help-head h3 {
-  margin: 0;
-  text-transform: none;
-  letter-spacing: 0;
-  font-size: 0.8rem;
-  color: #e2e8f0;
-}
-.help-toggle {
-  padding: 0.12rem 0.4rem;
-  font-size: 0.85rem;
-  line-height: 1;
-}
-.help-steps {
-  list-style: none;
-  margin: 0.4rem 0 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 0.28rem;
-}
-.help-step {
-  display: grid;
-  grid-template-columns: 1.35rem 1fr;
-  gap: 0.4rem;
-  align-items: start;
-  font-size: 0.74rem;
-  line-height: 1.3;
-  color: #cbd5e1;
-}
-.help-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 1.25rem;
-  height: 1.25rem;
-  border-radius: 5px;
-  background: rgba(51, 65, 85, 0.85);
-  border: 1px solid rgba(100, 116, 139, 0.45);
-  font-size: 0.68rem;
-  font-weight: 800;
-  color: #e2e8f0;
-  flex-shrink: 0;
-}
-.help-step--marker-action .help-icon,
-.action-chip--marker-action .help-icon {
-  color: #facc15;
-  border-color: rgba(250, 204, 21, 0.4);
-  background: rgba(113, 63, 18, 0.45);
-}
-.help-step--build .help-icon,
-.action-chip--build .help-icon {
-  color: #f472b6;
-  border-color: rgba(244, 114, 182, 0.4);
-  background: rgba(131, 24, 67, 0.4);
-}
-.help-step--fight .help-icon,
-.action-chip--fight .help-icon {
-  color: #fca5a5;
-  border-color: rgba(248, 113, 113, 0.4);
-  background: rgba(127, 29, 29, 0.4);
-}
-.help-step--event .help-icon,
-.action-chip--event .help-icon {
-  color: #c4b5fd;
-  border-color: rgba(167, 139, 250, 0.4);
-  background: rgba(76, 29, 149, 0.35);
-}
-.help-step--pass .help-icon,
-.action-chip--pass .help-icon {
-  color: #7dd3fc;
-  border-color: rgba(56, 189, 248, 0.4);
-  background: rgba(12, 74, 110, 0.45);
-}
-.help-step--ship .help-icon {
-  color: #86efac;
-  border-color: rgba(74, 222, 128, 0.35);
-  background: rgba(20, 83, 45, 0.4);
-}
-.help-step-label {
-  padding-top: 0.1rem;
 }
 .phase-advance-btn {
   display: block;
@@ -5104,6 +4398,28 @@ button,
   line-height: 1.2;
   text-align: center;
 }
+/*
+ * Второстепенная кнопка той же формы: контур вместо заливки, без пульса.
+ * Нужна там, где рядом с кнопкой фазы живёт ещё одно важное действие —
+ * например выход с полигона после пройденного обучения. Залитых кнопок на
+ * экране должно оставаться не больше одной, иначе игрок жмёт не ту и не
+ * понимает, почему ничего не произошло.
+ */
+.phase-advance-btn--secondary {
+  border-color: color-mix(in srgb, var(--player-color, #3b82f6) 55%, transparent);
+  background: var(--g-surface-1);
+  color: var(--g-text-strong);
+  font-weight: 650;
+  text-shadow: none;
+  animation: none;
+  box-shadow: var(--g-shadow-1);
+}
+
+.phase-advance-btn--secondary:hover:not(:disabled) {
+  border-color: var(--player-color, var(--g-accent));
+  background: var(--g-surface-2);
+}
+
 .phase-advance-btn:hover:not(:disabled) {
   filter: brightness(1.06);
 }
@@ -5111,9 +4427,6 @@ button,
   animation: none;
   opacity: 0.55;
   cursor: wait;
-}
-.active-mini .active-player-dot {
-  animation: active-player-dot 1.25s ease-in-out infinite;
 }
 @keyframes active-player-dot {
   0%,
@@ -5298,77 +4611,16 @@ button,
   background: #9a3412;
 }
 
-.rules-help-wrap {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-}
 
 .rules-help-btn:hover {
   border-color: #94a3b8;
   background: #334155;
 }
 
-.rules-newbie-tip {
-  --tip-font: 'Manrope', 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
-  position: absolute;
-  top: calc(100% + 0.55rem);
-  right: 0;
-  z-index: 40;
-  display: flex;
-  align-items: flex-start;
-  gap: 0.35rem;
-  width: max-content;
-  max-width: min(18rem, 70vw);
-  padding: 0.55rem 0.6rem 0.55rem 0.7rem;
-  border-radius: 10px;
-  border: 1px solid #64748b;
-  background: #0f172a;
-  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45);
-  color: #e8eef7;
-  font-family: var(--tip-font);
-  -webkit-font-smoothing: antialiased;
-}
 
-.rules-newbie-tip::before {
-  content: '';
-  position: absolute;
-  top: -6px;
-  right: 1.1rem;
-  width: 10px;
-  height: 10px;
-  border-left: 1px solid #64748b;
-  border-top: 1px solid #64748b;
-  background: #0f172a;
-  transform: rotate(45deg);
-}
 
-.rules-newbie-tip-text {
-  margin: 0;
-  font-size: 0.82rem;
-  font-weight: 600;
-  line-height: 1.4;
-  letter-spacing: 0.01em;
-}
 
-.rules-newbie-tip-dismiss {
-  flex: 0 0 auto;
-  width: 1.35rem;
-  height: 1.35rem;
-  margin-top: -0.1rem;
-  border: none;
-  border-radius: 6px;
-  background: transparent;
-  color: #94a3b8;
-  font-size: 1.1rem;
-  line-height: 1;
-  cursor: pointer;
-}
 
-.rules-newbie-tip-dismiss:hover {
-  background: #1e293b;
-  color: #f1f5f9;
-}
 
 @media (max-width: 900px) {
   .game-viewport {
@@ -5376,73 +4628,10 @@ button,
     /* Один нижний ряд FAB: Игра | фаза | Чат — без второго «этажа» под home indicator */
     --mobile-fab-bottom: max(0.55rem, env(safe-area-inset-bottom, 0px));
   }
-  .you-plaque {
-    font-size: 0.92rem;
-    padding: 0.35rem 0.75rem 0.3rem;
-  }
-  .hud-chrome--narrow .hud-top {
-    min-height: 3.1rem;
-    grid-template-columns: minmax(0, 1fr) auto;
-    grid-template-rows: auto;
-    gap: 0.35rem 0.5rem;
-    padding: 0.35rem 0.55rem;
-  }
-  .hud-top-left {
-    grid-column: 1;
-    gap: 0.3rem 0.4rem;
-  }
-  .hud-top-center,
-  .hud-top-center--idle {
-    display: none;
-  }
-  .hud-top-right {
-    grid-column: 2;
-    justify-content: flex-end;
-    max-width: min(52vw, 14rem);
-  }
-  .hud-below-right {
-    margin-right: 0;
-    max-width: 60vw;
-  }
-  .hud-top-right :deep(.phase-panel--hero) {
-    justify-content: flex-end;
-    max-width: 100%;
-    flex-wrap: wrap;
-    gap: 0.25rem;
-  }
-  .hud-top-right :deep(.phase-guidance),
-  .hud-top-right :deep(.active-player-badge:not(.active-player-badge--you)) {
-    display: none;
-  }
-  .hud-title {
-    max-width: min(38vw, 9.5rem);
-  }
-  .hud-tools {
-    flex-wrap: nowrap;
-    width: auto;
-    position: relative;
-  }
-  .hud-tools-extra {
-    position: absolute;
-    top: calc(100% + 0.35rem);
-    left: 0;
-    z-index: 40;
-    flex-wrap: wrap;
-    width: min(92vw, 18rem);
-    padding: 0.45rem;
-    border-radius: 10px;
-    border: 1px solid rgba(71, 85, 105, 0.85);
-    background: rgba(15, 23, 42, 0.96);
-    box-shadow: 0 10px 28px rgba(2, 6, 23, 0.5);
-  }
-  .hud-tools-extra[hidden] {
-    display: none !important;
-  }
   .sfx-mute-btn,
   .bug-report-btn,
   .rules-help-btn,
-  .invite-btn,
-  .hud-tools-toggle {
+  .invite-btn {
     min-height: 2.35rem;
     padding: 0.35rem 0.65rem;
     font-size: 0.82rem;
@@ -5452,31 +4641,15 @@ button,
   }
   /* Нижний ряд: Чат (слева) | завершение фазы (центр) | Игра (справа) */
   .mobile-phase-dock {
-    display: flex;
-    position: absolute;
-    left: 50%;
-    right: auto;
     bottom: var(--mobile-fab-bottom);
-    z-index: 48;
     flex-direction: column;
-    align-items: center;
     gap: 0.25rem;
     width: auto;
     max-width: min(12.5rem, calc(100vw - 9.25rem));
-    transform: translateX(-50%);
-    pointer-events: none;
   }
-  .mobile-phase-dock > * {
-    pointer-events: auto;
-  }
-  .mobile-phase-dock__hint {
+  /* Счётчик маркеров над кнопкой: решение и его цена рядом */
+  .mobile-phase-dock__markers {
     order: -1;
-    padding: 0.2rem 0.45rem;
-    /* Как у кнопки под ней: крупный шрифт телефона не вытягивает подсказку в столбик. */
-    font-size: min(0.78rem, 13px);
-    border-radius: 8px;
-    background: rgba(15, 23, 42, 0.92);
-    box-shadow: 0 4px 14px rgba(2, 6, 23, 0.4);
   }
   .phase-advance-btn--dock {
     width: auto;
@@ -5506,6 +4679,67 @@ button,
     z-index: 56;
     padding-bottom: max(0.25rem, env(safe-area-inset-bottom, 0px));
     transition: none;
+  }
+  /*
+   * Шторка клетки: треть экрана снизу, карта над ней остаётся видна. Нижний ряд
+   * с кнопкой фазы шторка не закрывает — он поднимается над ней, см.
+   * `.mobile-phase-dock--peek`.
+   */
+  /*
+   * Пока сверху лежит окно, требующее ответа — объявление хода, окно маркера,
+   * бой, правила, журнал, баг-репорт, — карточка обучения уходит. Иначе на
+   * телефоне получалось четыре слоя разом и ни одного читаемого: ровно то, на
+   * что жаловался живой игрок.
+   *
+   * Окно решений сюда не входит: оно стало шторкой снизу и делит экран с
+   * карточкой, а не накрывает её.
+   */
+  .game-viewport--modal .hud-below-left {
+    display: none;
+  }
+  /* Нижний ряд и чат поднимаются над шторкой: кнопка фазы должна оставаться
+     нажимаемой, пока игрок смотрит карточку клетки. */
+  .game-viewport--peek {
+    --mobile-fab-bottom: calc(34dvh + 0.45rem);
+  }
+  .hud-right--peek {
+    max-height: 34dvh;
+    z-index: var(--g-z-sheet);
+  }
+  .hud-right--peek .panel-inner--peek {
+    max-height: calc(34dvh - 2.6rem);
+    padding: 0 0.75rem 0.5rem;
+    overflow-y: auto;
+    pointer-events: auto;
+  }
+  .peek-head {
+    display: flex;
+    align-items: center;
+    gap: var(--g-s-2);
+    padding: 0.35rem 0.6rem 0.3rem;
+    border-bottom: 1px solid var(--g-border);
+    pointer-events: auto;
+  }
+  .peek-expand {
+    flex: 1 1 auto;
+    min-height: 2.2rem;
+    border: 1px solid var(--g-border-strong);
+    border-radius: var(--g-r-pill);
+    background: var(--g-surface-1);
+    color: var(--g-text);
+    font-size: var(--g-text-sm);
+    font-weight: 600;
+  }
+  .peek-close {
+    flex: 0 0 auto;
+    width: 2.2rem;
+    min-height: 2.2rem;
+    border: 1px solid var(--g-border-strong);
+    border-radius: var(--g-r-pill);
+    background: var(--g-surface-1);
+    color: var(--g-text);
+    font-size: 1.1rem;
+    line-height: 1;
   }
   /* Свёрнутая панель = только FAB справа в одном ряду с чатом и фазой */
   .hud-right--sheet.collapsed,

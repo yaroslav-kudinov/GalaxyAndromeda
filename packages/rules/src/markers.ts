@@ -30,7 +30,8 @@ export function actionMarkerAdvanceBlockMessage(
   if (!mustResolveActionMarkerBeforeAdvance(game, ownerId)) return null
   const n = countActionMarkersForPlayer(game, ownerId)
   if (n <= 1) return ACTION_MARKER_MUST_RESOLVE_BEFORE_ADVANCE_MSG
-  return `Осталось маркеров действия: ${n}. Исполните один или снимите все, чтобы передать ход`
+  // Число маркеров игрок видит значком в интерфейсе, в тексте оно лишнее.
+  return `Осталось ${n}: исполните маркер или снимите все`
 }
 
 export const PRODUCTION_MARKER_ALREADY_RESOLVED_MSG =
@@ -59,7 +60,7 @@ export function productionMarkerAdvanceBlockMessage(
   if (!mustResolveProductionMarkerBeforeAdvance(game, ownerId)) return null
   const n = countProductionMarkersForPlayer(game, ownerId)
   if (n <= 1) return PRODUCTION_MARKER_MUST_RESOLVE_BEFORE_ADVANCE_MSG
-  return `Осталось маркеров производства: ${n}. Исполните один или снимите все, чтобы передать ход`
+  return `Осталось ${n}: исполните маркер производства или снимите все`
 }
 
 export function hasResolvedActionMarkerThisTurn(game: GameSnapshot): boolean {

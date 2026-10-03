@@ -8,8 +8,14 @@ const props = withDefaults(
     entries: TurnQueueEntry[]
     /** Локальный игрок — его строка помечена «вы» */
     myPlayerId?: string | null
-    /** `strip` — компактная полоса над картой, `panel` — список в боковой панели */
-    variant?: 'strip' | 'panel'
+    /**
+     * `strip` — компактная полоса над картой, `panel` — список в боковой панели,
+     * `dots` — очередь одними фишками для пояса состояния: порядок задаётся
+     * положением, игрок — цветом, «ходит сейчас» — размером и пульсом, «уже
+     * сходил» — пустой заливкой. Ни один из признаков не держится на одном
+     * только цвете.
+     */
+    variant?: 'strip' | 'panel' | 'dots'
   }>(),
   {
     myPlayerId: null,
@@ -35,7 +41,7 @@ function entryTitle(entry: TurnQueueEntry): string {
   <ol
     v-if="entries.length"
     class="turn-order"
-    :class="variant === 'strip' ? 'turn-order--strip' : 'turn-order--panel'"
+    :class="`turn-order--${variant}`"
     :aria-label="t.heading"
   >
     <li
@@ -51,9 +57,9 @@ function entryTitle(entry: TurnQueueEntry): string {
       :title="entryTitle(entry)"
       :aria-current="entry.isActive ? 'true' : undefined"
     >
-      <span class="turn-order-seat" aria-hidden="true">{{ entry.position }}</span>
-      <span class="turn-order-name">{{ entry.name }}</span>
-      <span v-if="entry.playerId === myPlayerId" class="turn-order-you">{{ t.you }}</span>
+      <span class="turn-order-seat" aria-hidden="true">{{ variant === 'dots' ? '' : entry.position }}</span>
+      <span v-if="variant !== 'dots'" class="turn-order-name">{{ entry.name }}</span>
+      <span v-if="variant !== 'dots' && entry.playerId === myPlayerId" class="turn-order-you">{{ t.you }}</span>
       <span v-if="variant === 'panel'" class="turn-order-status">{{ statusText(entry) }}</span>
       <span class="turn-order-sr">{{ entryTitle(entry) }}</span>
     </li>
@@ -181,6 +187,67 @@ function entryTitle(entry: TurnQueueEntry): string {
 
 .turn-order--panel .turn-order-item--active .turn-order-status {
   color: var(--g-text);
+}
+
+/* --- Фишки для пояса состояния -------------------------------------------- */
+.turn-order--dots {
+  align-items: center;
+  gap: 0.2rem;
+}
+
+.turn-order--dots .turn-order-item {
+  padding: 0;
+  border: none;
+  background: none;
+  pointer-events: auto;
+}
+
+.turn-order--dots .turn-order-seat {
+  width: 0.62rem;
+  height: 0.62rem;
+  border-width: 1.5px;
+  /* «Уже сходил» — пустая фишка. Признак формы, а не оттенка. */
+  background: transparent;
+  transition: width 0.18s ease, height 0.18s ease;
+}
+
+.turn-order--dots .turn-order-item:not(.turn-order-item--moved) .turn-order-seat {
+  background: var(--player-color, #64748b);
+}
+
+/* Ходит сейчас: крупнее остальных и с пульсом — размер считывается первым */
+.turn-order--dots .turn-order-item--active .turn-order-seat {
+  width: 1rem;
+  height: 1rem;
+  background: var(--player-color, var(--g-accent));
+  animation: turn-order-dot-pulse 1.3s ease-in-out infinite;
+}
+
+/* Своя фишка всегда обведена светлым кольцом. Кольцо делается обводкой, а не
+   тенью: тень занята пульсом, и на своём ходу нужны оба признака сразу. */
+.turn-order--dots .turn-order-item--you .turn-order-seat {
+  outline: 1.5px solid var(--g-text-strong);
+  outline-offset: 1.5px;
+}
+
+.turn-order--dots .turn-order-item--moved {
+  opacity: 1;
+}
+
+@keyframes turn-order-dot-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--player-color, #3b82f6) 50%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 5px color-mix(in srgb, var(--player-color, #3b82f6) 0%, transparent);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .turn-order--dots .turn-order-item--active .turn-order-seat {
+    animation: none;
+  }
 }
 
 @media (max-width: 900px) {
